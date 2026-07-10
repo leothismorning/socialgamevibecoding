@@ -128,8 +128,28 @@ export default function App() {
     return <LoadingScreen />;
   }
 
+  if (archiveState) {
+    return (
+      <Shell
+        error={error}
+        isBusy={isBusy}
+        onRefresh={() => openArchive(archiveState.experiment!.id)}
+        onLeave={() => {
+          setArchiveState(null);
+          leaveIdentity();
+        }}
+      >
+        <EndedArchive
+          state={archiveState}
+          role={role}
+          onBack={() => setArchiveState(null)}
+        />
+      </Shell>
+    );
+  }
+
   if (!role) {
-    return <RoleGate onChoose={chooseRole} />;
+    return <RoleGate state={state} onChoose={chooseRole} onViewArchive={openArchive} />;
   }
 
   if (role === 'creator' && (!state.experiment || showCreatorSetup)) {
@@ -147,19 +167,6 @@ export default function App() {
             })
           }
           isBusy={isBusy}
-        />
-      </Shell>
-    );
-  }
-
-  if (archiveState) {
-    return (
-      <Shell error={error} isBusy={isBusy} onRefresh={() => openArchive(archiveState.experiment!.id)} onLeave={leaveIdentity}>
-        <EndedArchive
-          state={archiveState}
-          role={role}
-          onBack={() => setArchiveState(null)}
-          onViewArchive={openArchive}
         />
       </Shell>
     );
@@ -198,7 +205,6 @@ export default function App() {
         tieRankScores={tieRankScores}
         onRun={run}
         onNewExperiment={() => setShowCreatorSetup(true)}
-        onViewArchive={openArchive}
       />
     </Shell>
   );
@@ -422,11 +428,20 @@ function DebugLogRow({ log }: { log: ClientDebugEntry }) {
   );
 }
 
-function RoleGate({ onChoose }: { onChoose: (role: Role) => void }) {
+function RoleGate({
+  state,
+  onChoose,
+  onViewArchive,
+}: {
+  state: StudyState;
+  onChoose: (role: Role) => void;
+  onViewArchive: (experimentId: string) => void;
+}) {
   return (
     <div className="min-h-screen bg-[#f7f9ff] grid place-items-center p-8 relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,.45),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(167,139,250,.38),transparent_32%)]" />
-      <section className="relative w-full max-w-5xl rounded-[3rem] bg-white/70 backdrop-blur-2xl border border-white p-10 shadow-2xl shadow-blue-200/60">
+      <div className="relative w-full max-w-5xl space-y-7">
+      <section className="rounded-[3rem] bg-white/70 backdrop-blur-2xl border border-white p-10 shadow-2xl shadow-blue-200/60">
         <div className="text-center mb-10">
           <div className="inline-grid place-items-center h-16 w-16 rounded-3xl bg-gradient-to-br from-sky-400 to-violet-600 text-3xl shadow-xl shadow-violet-200 mb-5">
             ✨
@@ -465,6 +480,8 @@ function RoleGate({ onChoose }: { onChoose: (role: Role) => void }) {
           </button>
         </div>
       </section>
+      <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
+      </div>
     </div>
   );
 }
@@ -693,7 +710,6 @@ function StudyRoom({
   tieRankScores,
   onRun,
   onNewExperiment,
-  onViewArchive,
 }: {
   state: StudyState;
   role: Role;
@@ -703,7 +719,6 @@ function StudyRoom({
   tieRankScores: number[];
   onRun: (action: () => Promise<StudyState>) => void;
   onNewExperiment: () => void;
-  onViewArchive: (experimentId: string) => void;
 }) {
   if (!state.experiment) {
     return (
@@ -729,7 +744,6 @@ function StudyRoom({
         state={state}
         role={role}
         onNewExperiment={onNewExperiment}
-        onViewArchive={onViewArchive}
       />
     );
   }
@@ -836,7 +850,6 @@ function StudyRoom({
         />
         <VersionTimeline state={state} />
       </div>
-      <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
     </div>
   );
 }
@@ -1458,13 +1471,11 @@ function EndedArchive({
   role,
   onNewExperiment,
   onBack,
-  onViewArchive,
 }: {
   state: StudyState;
-  role: Role;
+  role: Role | null;
   onNewExperiment?: () => void;
   onBack?: () => void;
-  onViewArchive: (experimentId: string) => void;
 }) {
   const experiment = state.experiment!;
   const [selectedVersionId, setSelectedVersionId] = React.useState(
@@ -1506,7 +1517,7 @@ function EndedArchive({
                   onClick={onBack}
                   className="flex h-11 items-center gap-2 rounded-2xl bg-white/10 px-4 text-xs font-black text-white hover:bg-white/20"
                 >
-                  <Undo2 className="h-4 w-4" /> Back to current experiment
+                  <Undo2 className="h-4 w-4" /> Back to start page
                 </button>
               )}
               {role === 'creator' && onNewExperiment && (
@@ -1624,7 +1635,6 @@ function EndedArchive({
           </div>
         </section>
       </div>
-      <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
     </div>
   );
 }
@@ -1637,12 +1647,12 @@ function ExperimentHistoryPanel({
   onViewArchive: (experimentId: string) => void;
 }) {
   const archives = state.experimentHistory.filter(
-    (experiment) => !experiment.is_active && experiment.id !== state.experiment?.id,
+    (experiment) => !experiment.is_active || experiment.phase === 'ended',
   );
   if (archives.length === 0) return null;
 
   return (
-    <Card title="Historical experiments" icon={<Clock3 />} badge={`${archives.length} archived`}>
+    <Card title="Historical experiments" icon={<Clock3 />} badge={`${archives.length} records`}>
       <p className="mb-4 text-xs leading-6 text-slate-500">
         Previous experiments remain read-only. Their comments, investments, candidate drafts, AI conversations, votes, and final versions are preserved.
       </p>
