@@ -54,6 +54,7 @@ const phaseLabels: Record<StudyPhase, { title: string; subtitle: string; tone: s
   developing: { title: 'Developing', subtitle: 'Top three ideas are being fused', tone: 'bg-violet-100 text-violet-600' },
   previewing: { title: 'Previewing', subtitle: 'Try the new version before next round', tone: 'bg-blue-100 text-blue-600' },
   ending_vote: { title: 'End Vote', subtitle: 'Participants decide whether the project should end', tone: 'bg-rose-100 text-rose-600' },
+  aborted: { title: 'Stopped', subtitle: 'Creator stopped this experiment', tone: 'bg-rose-100 text-rose-700' },
   ended: { title: 'Ended', subtitle: 'Study session completed', tone: 'bg-slate-900 text-white' },
 };
 
@@ -205,6 +206,13 @@ export default function App() {
         tieRankScores={tieRankScores}
         onRun={run}
         onNewExperiment={() => setShowCreatorSetup(true)}
+        onAbortExperiment={() =>
+          run(async () => {
+            const next = await studyApi.abortExperiment();
+            setShowCreatorSetup(true);
+            return next;
+          })
+        }
       />
     </Shell>
   );
@@ -710,6 +718,7 @@ function StudyRoom({
   tieRankScores,
   onRun,
   onNewExperiment,
+  onAbortExperiment,
 }: {
   state: StudyState;
   role: Role;
@@ -719,6 +728,7 @@ function StudyRoom({
   tieRankScores: number[];
   onRun: (action: () => Promise<StudyState>) => void;
   onNewExperiment: () => void;
+  onAbortExperiment: () => void;
 }) {
   if (!state.experiment) {
     return (
@@ -738,7 +748,7 @@ function StudyRoom({
   const joinedParticipants = state.participants.filter((participant) => participant.joined_at);
   const me = state.participants.find((participant) => participant.code === participantCode);
 
-  if (experiment.phase === 'ended') {
+  if (experiment.phase === 'ended' || experiment.phase === 'aborted') {
     return (
       <EndedArchive
         state={state}
@@ -805,7 +815,7 @@ function StudyRoom({
             tiedComments={tiedComments}
             tieRankScores={tieRankScores}
             onRun={onRun}
-            onNewExperiment={onNewExperiment}
+            onAbortExperiment={onAbortExperiment}
           />
           {experiment.phase === 'developing' && state.currentDraft && (
             <DevelopmentChatPanel
@@ -888,7 +898,7 @@ function CreatorControls({
   tiedComments,
   tieRankScores,
   onRun,
-  onNewExperiment,
+  onAbortExperiment,
 }: {
   role: Role;
   phase: StudyPhase;
@@ -901,9 +911,10 @@ function CreatorControls({
   tiedComments: StudyComment[];
   tieRankScores: number[];
   onRun: (action: () => Promise<StudyState>) => void;
-  onNewExperiment: () => void;
+  onAbortExperiment: () => void;
 }) {
   const [tieChoices, setTieChoices] = React.useState<number[]>([]);
+  const [confirmingAbort, setConfirmingAbort] = React.useState(false);
 
   React.useEffect(() => {
     const used = new Set<number>();
@@ -1107,13 +1118,43 @@ function CreatorControls({
           <p className="whitespace-pre-wrap text-xs leading-6 text-slate-600">{fusionPlan.content}</p>
         </div>
       )}
-      <button
-        type="button"
-        onClick={onNewExperiment}
-        className="mt-5 w-full h-11 rounded-2xl bg-slate-100 text-slate-500 text-xs font-black hover:bg-slate-200 transition"
-      >
-        Archive & start another experiment
-      </button>
+      {confirmingAbort ? (
+        <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+          <p className="text-xs font-black text-rose-700">Stop the current experiment?</p>
+          <p className="mt-1 text-[11px] leading-5 text-rose-600">
+            The game will stop immediately. Existing data will remain available in Historical experiments.
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={() => setConfirmingAbort(false)}
+              className="h-10 rounded-xl border border-slate-200 bg-white text-xs font-black text-slate-500 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={onAbortExperiment}
+              className="flex h-10 items-center justify-center gap-2 rounded-xl bg-rose-600 text-xs font-black text-white disabled:opacity-50"
+            >
+              {isBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Flag className="h-4 w-4" />}
+              Confirm stop
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          disabled={isBusy}
+          onClick={() => setConfirmingAbort(true)}
+          className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 text-xs font-black text-rose-600 transition hover:bg-rose-100 disabled:opacity-50"
+        >
+          <Flag className="h-4 w-4" />
+          Stop current experiment
+        </button>
+      )}
     </Card>
   );
 }
@@ -1478,6 +1519,7 @@ function EndedArchive({
   onBack?: () => void;
 }) {
   const experiment = state.experiment!;
+  const isAborted = experiment.phase === 'aborted';
   const [selectedVersionId, setSelectedVersionId] = React.useState(
     experiment.current_version_id || state.versions[state.versions.length - 1]?.id,
   );
@@ -1502,11 +1544,14 @@ function EndedArchive({
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-black">
-              <BadgeCheck className="h-4 w-4" /> {onBack ? 'Historical experiment archive' : 'Project completed'}
+              {isAborted ? <Flag className="h-4 w-4" /> : <BadgeCheck className="h-4 w-4" />}{' '}
+              {onBack ? 'Historical experiment archive' : isAborted ? 'Project stopped' : 'Project completed'}
             </div>
             <h2 className="text-4xl font-black">{experiment.title}</h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-blue-100">
-              The interactive experiment has ended. Everyone can review each round, its adopted ideas, fusion plan, and the final result.
+              {isAborted
+                ? 'Creator stopped this experiment. The game is closed, but everyone can still review its saved rounds, ideas, AI conversations, and latest project version.'
+                : 'The interactive experiment has ended. Everyone can review each round, its adopted ideas, fusion plan, and the final result.'}
             </p>
           </div>
           <div className="space-y-4">
@@ -1533,7 +1578,10 @@ function EndedArchive({
             <div className="grid grid-cols-3 gap-3 text-center">
               <ArchiveStat label="Rounds" value={experiment.current_round} />
               <ArchiveStat label="Versions" value={state.versions.length} />
-              <ArchiveStat label="End votes" value={`${state.endVoteSummary.yes}/${state.endVoteSummary.eligible}`} />
+              <ArchiveStat
+                label={isAborted ? 'Status' : 'End votes'}
+                value={isAborted ? 'Stopped' : `${state.endVoteSummary.yes}/${state.endVoteSummary.eligible}`}
+              />
             </div>
           </div>
         </div>
@@ -1560,7 +1608,7 @@ function EndedArchive({
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-black text-blue-950">{index === 0 ? 'Initial project' : version.title}</p>
                     <span className="rounded-xl bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-600">
-                      {isFinal ? 'FINAL' : `R${version.round_number}`}
+                      {isFinal ? (isAborted ? 'LATEST' : 'FINAL') : `R${version.round_number}`}
                     </span>
                   </div>
                   <p className="mt-2 text-[11px] leading-5 text-slate-500">
@@ -1579,7 +1627,11 @@ function EndedArchive({
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-[11px] font-black uppercase tracking-widest text-violet-500">
-                  {selectedVersion?.id === experiment.current_version_id ? 'Final project result' : 'Historical project version'}
+                  {selectedVersion?.id === experiment.current_version_id
+                    ? isAborted
+                      ? 'Latest saved project version'
+                      : 'Final project result'
+                    : 'Historical project version'}
                 </p>
                 <h3 className="mt-1 text-xl font-black text-blue-950">{selectedVersion?.title}</h3>
               </div>
@@ -1647,7 +1699,7 @@ function ExperimentHistoryPanel({
   onViewArchive: (experimentId: string) => void;
 }) {
   const archives = state.experimentHistory.filter(
-    (experiment) => !experiment.is_active || experiment.phase === 'ended',
+    (experiment) => !experiment.is_active || experiment.phase === 'ended' || experiment.phase === 'aborted',
   );
   if (archives.length === 0) return null;
 

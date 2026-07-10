@@ -76,6 +76,7 @@ export const studyApi = {
   join: (participantCode: string) => requestStudy('join', { participantCode }),
   setPhase: (phase: StudyPhase) => requestStudy('phase', { phase }),
   rollbackPhase: () => requestStudy('rollback-phase', {}),
+  abortExperiment: () => requestStudy('abort-experiment', {}),
   comment: (participantCode: string, content: string) => requestStudy('comments', { participantCode, content }),
   invest: (actorType: 'participant' | 'creator', participantCode: string, commentId: number, amount: number) =>
     requestStudy('investments', { actorType, participantCode, commentId, amount }),

@@ -10,6 +10,7 @@ export type StudyPhase =
   | 'developing'
   | 'previewing'
   | 'ending_vote'
+  | 'aborted'
   | 'ended';
 
 export type StudyState = {
@@ -586,7 +587,7 @@ export function setPhase(toPhase: StudyPhase) {
   const experiment = activeExperiment();
   if (!experiment) throw new Error('Create the experiment before changing phases.');
 
-  const valid: StudyPhase[] = ['setup', 'experience', 'commenting', 'investing', 'developing', 'previewing', 'ending_vote', 'ended'];
+  const valid: StudyPhase[] = ['setup', 'experience', 'commenting', 'investing', 'developing', 'previewing', 'ending_vote', 'aborted', 'ended'];
   if (!valid.includes(toPhase)) throw new Error('Invalid phase.');
 
   const fromPhase = experiment.phase;
@@ -596,6 +597,18 @@ export function setPhase(toPhase: StudyPhase) {
 
   db.prepare(`UPDATE experiments SET phase = ?, updated_at = ? WHERE id = ?`).run(toPhase, now(), experiment.id);
   logPhase(experiment.id, experiment.current_round, fromPhase, toPhase);
+  return getStudyState();
+}
+
+export function abortExperiment() {
+  const experiment = activeExperiment();
+  if (!experiment) throw new Error('There is no active experiment to stop.');
+  if (experiment.phase === 'ended') throw new Error('This experiment has already ended.');
+  if (experiment.phase === 'aborted') return getStudyState();
+
+  const stoppedAt = now();
+  db.prepare(`UPDATE experiments SET phase = 'aborted', updated_at = ? WHERE id = ?`).run(stoppedAt, experiment.id);
+  logPhase(experiment.id, experiment.current_round, experiment.phase, 'aborted');
   return getStudyState();
 }
 

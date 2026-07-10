@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import {
   addComment,
+  abortExperiment,
   createExperiment,
   getStudyState,
   investCoins,
@@ -121,6 +122,14 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
   app.post('/api/study/rollback-phase', (_req, res) => {
     try {
       res.json(rollbackPhase());
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/study/abort-experiment', (_req, res) => {
+    try {
+      res.json(abortExperiment());
     } catch (error) {
       sendError(res, error);
     }

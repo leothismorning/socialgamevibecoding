@@ -78,6 +78,7 @@ export type StudyPhase =
   | 'developing'
   | 'previewing'
   | 'ending_vote'
+  | 'aborted'
   | 'ended';
 
 export interface StudyExperiment {
