@@ -106,6 +106,13 @@ export interface StudyParticipant {
   last_seen_at?: string | null;
 }
 
+export interface StudyExperimentHistoryItem extends StudyExperiment {
+  is_active: boolean;
+  version_count: number;
+  comment_count: number;
+  participant_count: number;
+}
+
 export interface StudyVersion {
   id: number;
   experiment_id: string;
@@ -263,4 +270,5 @@ export interface StudyState {
   developmentDrafts: StudyDevelopmentDraft[];
   developmentMessages: StudyDevelopmentMessage[];
   currentDraft: StudyDevelopmentDraft | null;
+  experimentHistory: StudyExperimentHistoryItem[];
 }

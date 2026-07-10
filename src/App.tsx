@@ -68,6 +68,7 @@ export default function App() {
   const [tiedComments, setTiedComments] = React.useState<StudyComment[]>([]);
   const [tieRankScores, setTieRankScores] = React.useState<number[]>([]);
   const [showCreatorSetup, setShowCreatorSetup] = React.useState(false);
+  const [archiveState, setArchiveState] = React.useState<StudyState | null>(null);
 
   const load = React.useCallback(async () => {
     try {
@@ -111,6 +112,18 @@ export default function App() {
     localStorage.removeItem('participant-code');
   };
 
+  const openArchive = async (experimentId: string) => {
+    setIsBusy(true);
+    setError(null);
+    try {
+      setArchiveState(await studyApi.archive(experimentId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load experiment archive.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   if (!state) {
     return <LoadingScreen />;
   }
@@ -129,6 +142,7 @@ export default function App() {
             run(async () => {
               const next = await studyApi.createExperiment(input);
               setShowCreatorSetup(false);
+              setArchiveState(null);
               return next;
             })
           }
@@ -138,7 +152,24 @@ export default function App() {
     );
   }
 
-  if (role === 'participant' && !participantCode) {
+  if (archiveState) {
+    return (
+      <Shell error={error} isBusy={isBusy} onRefresh={() => openArchive(archiveState.experiment!.id)} onLeave={leaveIdentity}>
+        <EndedArchive
+          state={archiveState}
+          role={role}
+          onBack={() => setArchiveState(null)}
+          onViewArchive={openArchive}
+        />
+      </Shell>
+    );
+  }
+
+  const hasJoinedActiveExperiment = state.participants.some(
+    (participant) => participant.code === participantCode && Boolean(participant.joined_at),
+  );
+
+  if (role === 'participant' && (!participantCode || !hasJoinedActiveExperiment)) {
     return (
       <Shell error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
         <ParticipantGate
@@ -167,6 +198,7 @@ export default function App() {
         tieRankScores={tieRankScores}
         onRun={run}
         onNewExperiment={() => setShowCreatorSetup(true)}
+        onViewArchive={openArchive}
       />
     </Shell>
   );
@@ -493,13 +525,13 @@ function CreatorSetup({
     <section className="max-w-6xl mx-auto grid lg:grid-cols-[.85fr_1.15fr] gap-7">
       <div className="rounded-[2.5rem] bg-white/75 backdrop-blur border border-white p-8 shadow-xl shadow-blue-100">
         <p className="text-xs font-black uppercase tracking-[0.3em] text-violet-500 mb-4">Creator setup</p>
-        <h2 className="text-3xl font-black mb-4">上传或创建第一个项目</h2>
+        <h2 className="text-3xl font-black mb-4">{existingExperimentTitle ? '开启新的实验项目' : '上传或创建第一个项目'}</h2>
         <p className="text-sm text-slate-500 leading-7">
           你可以上传已有 HTML 项目，也可以用“快速创建”调用 DeepSeek，像 AI Studio 一样根据描述生成一个在线网页。
         </p>
         {existingExperimentTitle && (
           <div className="mt-6 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
-            当前已有实验「{existingExperimentTitle}」。提交这个表单会重置本地实验数据并创建新实验。
+            当前实验「{existingExperimentTitle}」会完整保存在历史实验中。新实验使用独立参与者、金币、评论和版本数据。
           </div>
         )}
         <div className="mt-8 grid grid-cols-2 gap-3 text-center">
@@ -606,7 +638,7 @@ function CreatorSetup({
             className="flex-1 h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isBusy ? <RefreshCw className="h-5 w-5 animate-spin" /> : <Play className="h-5 w-5 fill-white" />}
-            {existingExperimentTitle ? 'Reset & create experiment' : 'Create experiment'}
+            {existingExperimentTitle ? 'Archive current & start new experiment' : 'Create experiment'}
           </button>
         </div>
       </form>
@@ -661,6 +693,7 @@ function StudyRoom({
   tieRankScores,
   onRun,
   onNewExperiment,
+  onViewArchive,
 }: {
   state: StudyState;
   role: Role;
@@ -670,6 +703,7 @@ function StudyRoom({
   tieRankScores: number[];
   onRun: (action: () => Promise<StudyState>) => void;
   onNewExperiment: () => void;
+  onViewArchive: (experimentId: string) => void;
 }) {
   if (!state.experiment) {
     return (
@@ -690,7 +724,14 @@ function StudyRoom({
   const me = state.participants.find((participant) => participant.code === participantCode);
 
   if (experiment.phase === 'ended') {
-    return <EndedArchive state={state} />;
+    return (
+      <EndedArchive
+        state={state}
+        role={role}
+        onNewExperiment={onNewExperiment}
+        onViewArchive={onViewArchive}
+      />
+    );
   }
 
   return (
@@ -795,6 +836,7 @@ function StudyRoom({
         />
         <VersionTimeline state={state} />
       </div>
+      <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
     </div>
   );
 }
@@ -1057,7 +1099,7 @@ function CreatorControls({
         onClick={onNewExperiment}
         className="mt-5 w-full h-11 rounded-2xl bg-slate-100 text-slate-500 text-xs font-black hover:bg-slate-200 transition"
       >
-        Create / reset experiment
+        Archive & start another experiment
       </button>
     </Card>
   );
@@ -1411,7 +1453,19 @@ function EndVotePanel({
   );
 }
 
-function EndedArchive({ state }: { state: StudyState }) {
+function EndedArchive({
+  state,
+  role,
+  onNewExperiment,
+  onBack,
+  onViewArchive,
+}: {
+  state: StudyState;
+  role: Role;
+  onNewExperiment?: () => void;
+  onBack?: () => void;
+  onViewArchive: (experimentId: string) => void;
+}) {
   const experiment = state.experiment!;
   const [selectedVersionId, setSelectedVersionId] = React.useState(
     experiment.current_version_id || state.versions[state.versions.length - 1]?.id,
@@ -1437,17 +1491,39 @@ function EndedArchive({ state }: { state: StudyState }) {
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-black">
-              <BadgeCheck className="h-4 w-4" /> Project completed
+              <BadgeCheck className="h-4 w-4" /> {onBack ? 'Historical experiment archive' : 'Project completed'}
             </div>
             <h2 className="text-4xl font-black">{experiment.title}</h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-blue-100">
               The interactive experiment has ended. Everyone can review each round, its adopted ideas, fusion plan, and the final result.
             </p>
           </div>
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <ArchiveStat label="Rounds" value={experiment.current_round} />
-            <ArchiveStat label="Versions" value={state.versions.length} />
-            <ArchiveStat label="End votes" value={`${state.endVoteSummary.yes}/${state.endVoteSummary.eligible}`} />
+          <div className="space-y-4">
+            <div className="flex flex-wrap justify-end gap-2">
+              {onBack && (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="flex h-11 items-center gap-2 rounded-2xl bg-white/10 px-4 text-xs font-black text-white hover:bg-white/20"
+                >
+                  <Undo2 className="h-4 w-4" /> Back to current experiment
+                </button>
+              )}
+              {role === 'creator' && onNewExperiment && (
+                <button
+                  type="button"
+                  onClick={onNewExperiment}
+                  className="flex h-11 items-center gap-2 rounded-2xl bg-white px-5 text-xs font-black text-blue-950 shadow-lg"
+                >
+                  <Play className="h-4 w-4" /> Start new experiment
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <ArchiveStat label="Rounds" value={experiment.current_round} />
+              <ArchiveStat label="Versions" value={state.versions.length} />
+              <ArchiveStat label="End votes" value={`${state.endVoteSummary.yes}/${state.endVoteSummary.eligible}`} />
+            </div>
           </div>
         </div>
       </section>
@@ -1548,6 +1624,65 @@ function EndedArchive({ state }: { state: StudyState }) {
           </div>
         </section>
       </div>
+      <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
+    </div>
+  );
+}
+
+function ExperimentHistoryPanel({
+  state,
+  onViewArchive,
+}: {
+  state: StudyState;
+  onViewArchive: (experimentId: string) => void;
+}) {
+  const archives = state.experimentHistory.filter(
+    (experiment) => !experiment.is_active && experiment.id !== state.experiment?.id,
+  );
+  if (archives.length === 0) return null;
+
+  return (
+    <Card title="Historical experiments" icon={<Clock3 />} badge={`${archives.length} archived`}>
+      <p className="mb-4 text-xs leading-6 text-slate-500">
+        Previous experiments remain read-only. Their comments, investments, candidate drafts, AI conversations, votes, and final versions are preserved.
+      </p>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {archives.map((experiment) => (
+          <button
+            key={experiment.id}
+            type="button"
+            onClick={() => onViewArchive(experiment.id)}
+            className="rounded-2xl border border-blue-100 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-lg hover:shadow-violet-100"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-blue-950">{experiment.title}</p>
+                <p className="mt-1 text-[11px] text-slate-400">{new Date(experiment.created_at).toLocaleString()}</p>
+              </div>
+              <span className="rounded-xl bg-slate-100 px-2 py-1 text-[10px] font-black uppercase text-slate-500">
+                {experiment.phase}
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <ArchiveMiniStat label="Rounds" value={experiment.current_round} />
+              <ArchiveMiniStat label="Versions" value={experiment.version_count} />
+              <ArchiveMiniStat label="People" value={experiment.participant_count} />
+            </div>
+            <p className="mt-4 flex items-center justify-end gap-1 text-xs font-black text-violet-600">
+              View archive <ArrowRight className="h-3.5 w-3.5" />
+            </p>
+          </button>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function ArchiveMiniStat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-xl bg-blue-50/70 px-2 py-2">
+      <p className="text-sm font-black text-blue-700">{value}</p>
+      <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
     </div>
   );
 }

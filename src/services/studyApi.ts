@@ -64,6 +64,7 @@ async function requestStudy(path: string, body?: unknown): Promise<StudyState> {
 
 export const studyApi = {
   state: () => requestStudy('state'),
+  archive: (experimentId: string) => requestStudy(`archive/${encodeURIComponent(experimentId)}`),
   createExperiment: (input: {
     title: string;
     brief: string;

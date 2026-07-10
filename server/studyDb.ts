@@ -31,6 +31,7 @@ export type StudyState = {
   developmentDrafts: any[];
   developmentMessages: any[];
   currentDraft: any | null;
+  experimentHistory: any[];
   endVoteSummary: {
     eligible: number;
     yes: number;
@@ -214,6 +215,22 @@ db.exec(`
     draft_id INTEGER,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS experiment_participant_snapshots (
+    experiment_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    coins INTEGER NOT NULL DEFAULT 0,
+    joined_at TEXT,
+    last_seen_at TEXT,
+    PRIMARY KEY(experiment_id, code)
+  );
 `);
 
 const investmentColumns = db.prepare(`PRAGMA table_info(investments)`).all() as Array<{ name: string }>;
@@ -247,8 +264,64 @@ const seedParticipants = db.transaction(() => {
 
 seedParticipants();
 
-function activeExperiment() {
-  return db.prepare(`SELECT * FROM experiments WHERE id = 'main'`).get() as any | undefined;
+function getActiveExperimentId() {
+  const stored = db.prepare(`SELECT value FROM app_meta WHERE key = 'active_experiment_id'`).get() as any;
+  if (stored?.value) return String(stored.value);
+
+  const latest = db.prepare(`SELECT id FROM experiments ORDER BY created_at DESC LIMIT 1`).get() as any;
+  if (latest?.id) {
+    db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES ('active_experiment_id', ?)`).run(latest.id);
+    return String(latest.id);
+  }
+  return null;
+}
+
+function setActiveExperimentId(experimentId: string) {
+  db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES ('active_experiment_id', ?)`).run(experimentId);
+}
+
+function activeExperiment(experimentId?: string) {
+  const id = experimentId || getActiveExperimentId();
+  if (!id) return undefined;
+  return db.prepare(`SELECT * FROM experiments WHERE id = ?`).get(id) as any | undefined;
+}
+
+function snapshotParticipants(experimentId: string) {
+  db.prepare(`DELETE FROM experiment_participant_snapshots WHERE experiment_id = ?`).run(experimentId);
+  db.prepare(`
+    INSERT INTO experiment_participant_snapshots
+      (experiment_id, code, name, role, coins, joined_at, last_seen_at)
+    SELECT ?, code, name, role, coins, joined_at, last_seen_at FROM participants
+  `).run(experimentId);
+}
+
+function experimentHistory(activeId: string | null) {
+  const experiments = db.prepare(`SELECT * FROM experiments ORDER BY created_at DESC`).all() as any[];
+  const globalJoined = Number(
+    (db.prepare(`SELECT COUNT(*) AS count FROM participants WHERE joined_at IS NOT NULL`).get() as any)?.count || 0,
+  );
+  return experiments.map((experiment) => {
+    const versionCount = Number(
+      (db.prepare(`SELECT COUNT(*) AS count FROM versions WHERE experiment_id = ?`).get(experiment.id) as any)?.count || 0,
+    );
+    const commentCount = Number(
+      (db.prepare(`SELECT COUNT(*) AS count FROM comments WHERE experiment_id = ?`).get(experiment.id) as any)?.count || 0,
+    );
+    const archivedJoined = Number(
+      (
+        db
+          .prepare(`SELECT COUNT(*) AS count FROM experiment_participant_snapshots WHERE experiment_id = ? AND joined_at IS NOT NULL`)
+          .get(experiment.id) as any
+      )?.count || 0,
+    );
+    return {
+      ...experiment,
+      is_active: experiment.id === activeId,
+      version_count: versionCount,
+      comment_count: commentCount,
+      participant_count: experiment.id === activeId ? globalJoined : archivedJoined,
+    };
+  });
 }
 
 function ensureRound(experimentId: string, roundNumber: number) {
@@ -308,9 +381,18 @@ function allocateRoundBudgets(experimentId: string, roundNumber: number) {
   tx();
 }
 
-export function getStudyState(): StudyState {
-  const experiment = activeExperiment() || null;
-  const participants = db.prepare(`SELECT * FROM participants ORDER BY code ASC`).all();
+export function getStudyState(experimentId?: string): StudyState {
+  const activeId = getActiveExperimentId();
+  const experiment = activeExperiment(experimentId) || null;
+  const archivedParticipants = experiment && experiment.id !== activeId
+    ? db
+        .prepare(`SELECT code, name, role, coins, joined_at, last_seen_at FROM experiment_participant_snapshots WHERE experiment_id = ? ORDER BY code ASC`)
+        .all(experiment.id)
+    : [];
+  const participants = archivedParticipants.length > 0
+    ? archivedParticipants
+    : db.prepare(`SELECT * FROM participants ORDER BY code ASC`).all();
+  const history = experimentHistory(activeId);
   if (!experiment) {
     return {
       experiment: null,
@@ -331,6 +413,7 @@ export function getStudyState(): StudyState {
       developmentDrafts: [],
       developmentMessages: [],
       currentDraft: null,
+      experimentHistory: history,
       endVoteSummary: { eligible: 0, yes: 0, no: 0, pending: 0, requiredYes: 0 },
     };
   }
@@ -406,9 +489,7 @@ export function getStudyState(): StudyState {
   const currentDraft = currentDevelopmentSession?.current_draft_id
     ? developmentDrafts.find((draft) => draft.id === currentDevelopmentSession.current_draft_id) || null
     : null;
-  const eligible = Number(
-    (db.prepare(`SELECT COUNT(*) AS count FROM participants WHERE joined_at IS NOT NULL`).get() as any)?.count || 0,
-  );
+  const eligible = participants.filter((participant: any) => participant.joined_at).length;
   const yes = endVotes.filter((vote) => Number(vote.vote) === 1).length;
   const no = endVotes.filter((vote) => Number(vote.vote) === 0).length;
   const endVoteSummary = {
@@ -439,6 +520,7 @@ export function getStudyState(): StudyState {
     developmentDrafts,
     developmentMessages,
     currentDraft,
+    experimentHistory: history,
   };
 }
 
@@ -453,39 +535,35 @@ export function createExperiment(input: {
   const title = input.title.trim() || 'Dream Island';
   const created = now();
   const maxRounds = Math.min(Math.max(Number(input.maxRounds || 4), 3), 4);
+  const experimentId = `exp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const previousExperiment = activeExperiment();
 
   const tx = db.transaction(() => {
-    db.prepare(`DELETE FROM experiments WHERE id = 'main'`).run();
-    db.prepare(`DELETE FROM rounds WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM versions WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM comments WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM investments WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM coin_events WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM phase_events WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM selected_ideas WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM fusion_plans WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM end_votes WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM development_messages WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM development_drafts WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM development_sessions WHERE experiment_id = 'main'`).run();
-    db.prepare(`DELETE FROM version_sources`).run();
+    if (previousExperiment) {
+      snapshotParticipants(previousExperiment.id);
+    }
     db.prepare(`UPDATE participants SET coins = 0, joined_at = NULL, last_seen_at = NULL`).run();
 
     db.prepare(`
       INSERT INTO experiments (id, title, brief, creator_name, creator_coins, phase, current_round, max_rounds, created_at, updated_at)
-      VALUES ('main', ?, ?, ?, 0, 'experience', 1, ?, ?, ?)
-    `).run(title, input.brief.trim(), input.creatorName.trim() || 'Creator', maxRounds, created, created);
+      VALUES (?, ?, ?, ?, 0, 'experience', 1, ?, ?, ?)
+    `).run(experimentId, title, input.brief.trim(), input.creatorName.trim() || 'Creator', maxRounds, created, created);
 
-    ensureRound('main', 1);
+    ensureRound(experimentId, 1);
     const version = db
       .prepare(`
         INSERT INTO versions (experiment_id, round_number, title, code, prompt, created_at)
-        VALUES ('main', 1, ?, ?, ?, ?)
+        VALUES (?, 1, ?, ?, ?, ?)
       `)
-      .run('Initial Version', input.initialCode, input.initialPrompt || input.brief || title, created);
+      .run(experimentId, 'Initial Version', input.initialCode, input.initialPrompt || input.brief || title, created);
 
-    db.prepare(`UPDATE experiments SET current_version_id = ?, updated_at = ? WHERE id = 'main'`).run(Number(version.lastInsertRowid), created);
-    logPhase('main', 1, 'setup', 'experience');
+    db.prepare(`UPDATE experiments SET current_version_id = ?, updated_at = ? WHERE id = ?`).run(
+      Number(version.lastInsertRowid),
+      created,
+      experimentId,
+    );
+    setActiveExperimentId(experimentId);
+    logPhase(experimentId, 1, 'setup', 'experience');
   });
 
   tx();

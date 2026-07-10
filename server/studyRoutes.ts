@@ -54,6 +54,15 @@ export function registerStudyRoutes(app: Express) {
     res.json(getStudyState());
   });
 
+  app.get('/api/study/archive/:experimentId', (req, res) => {
+    const state = getStudyState(String(req.params.experimentId || ''));
+    if (!state.experiment) {
+      res.status(404).json({ error: 'Experiment archive was not found.' });
+      return;
+    }
+    res.json(state);
+  });
+
   app.post('/api/study/experiment', async (req: Request, res: Response) => {
     try {
       const { title = 'Dream Island', brief = '', creatorName = 'Creator', initialPrompt = '', initialCode = '', maxRounds = 4 } =
