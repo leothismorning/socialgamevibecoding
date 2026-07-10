@@ -1,0 +1,90 @@
+import { StudyPhase, StudyState } from '../types';
+import { addClientDebug } from './debugClient';
+
+async function requestStudy(path: string, body?: unknown): Promise<StudyState> {
+  const url = `/api/study/${path}`;
+  const method = body ? 'POST' : 'GET';
+  const startedAt = performance.now();
+
+  addClientDebug({
+    phase: 'request',
+    title: `${method} ${url}`,
+    detail: {
+      bodyKeys: body && typeof body === 'object' ? Object.keys(body) : [],
+      bodySize: body ? JSON.stringify(body).length : 0,
+    },
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (error: any) {
+    addClientDebug({
+      source: 'error',
+      phase: 'error',
+      title: `${method} ${url} network failed`,
+      durationMs: Math.round(performance.now() - startedAt),
+      detail: {
+        message: error?.message,
+        name: error?.name,
+      },
+    });
+    throw error;
+  }
+
+  const data = await response.json().catch(() => null);
+  addClientDebug({
+    source: response.ok ? 'client' : 'error',
+    phase: response.ok ? 'response' : 'error',
+    title: `${method} ${url} -> ${response.status}`,
+    durationMs: Math.round(performance.now() - startedAt),
+    detail: {
+      status: response.status,
+      ok: response.ok,
+      error: data?.error,
+      tiedComments: data?.tiedComments?.length,
+      rankScores: data?.rankScores,
+      experimentPhase: data?.experiment?.phase,
+      currentRound: data?.experiment?.current_round,
+    },
+  });
+
+  if (!response.ok) {
+    const error = new Error(data?.error || `Study API failed: ${response.status}`);
+    (error as any).tiedComments = data?.tiedComments;
+    (error as any).rankScores = data?.rankScores;
+    throw error;
+  }
+  return data;
+}
+
+export const studyApi = {
+  state: () => requestStudy('state'),
+  createExperiment: (input: {
+    title: string;
+    brief: string;
+    creatorName: string;
+    initialPrompt: string;
+    initialCode: string;
+    maxRounds: number;
+  }) => requestStudy('experiment', input),
+  join: (participantCode: string) => requestStudy('join', { participantCode }),
+  setPhase: (phase: StudyPhase) => requestStudy('phase', { phase }),
+  rollbackPhase: () => requestStudy('rollback-phase', {}),
+  comment: (participantCode: string, content: string) => requestStudy('comments', { participantCode, content }),
+  invest: (actorType: 'participant' | 'creator', participantCode: string, commentId: number, amount: number) =>
+    requestStudy('investments', { actorType, participantCode, commentId, amount }),
+  selectTopIdeas: (commentIds?: number[]) => requestStudy('select-top-ideas', commentIds ? { commentIds } : {}),
+  generateFusionPlan: () => requestStudy('generate-fusion-plan', {}),
+  createInitialDraft: () => requestStudy('development/initial', {}),
+  debugDraft: (message: string) => requestStudy('development/debug', { message }),
+  rollbackDraft: () => requestStudy('development/rollback', {}),
+  publishDraft: () => requestStudy('development/publish', {}),
+  nextRound: () => requestStudy('next-round', {}),
+  startEndVote: () => requestStudy('start-end-vote', {}),
+  voteProjectEnd: (participantCode: string, vote: boolean) => requestStudy('end-vote', { participantCode, vote }),
+};
