@@ -135,6 +135,35 @@ export interface StudyComment {
   selected: 0 | 1;
   invested: number;
   created_at: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+  is_own?: boolean;
+  display_order?: number;
+}
+
+export interface StudyIdeaRevision {
+  id: number;
+  experiment_id: string;
+  round_number: number;
+  comment_id: number;
+  participant_code: string;
+  content: string;
+  action: 'create' | 'update' | 'restore' | 'delete';
+  created_at: string;
+}
+
+export interface StudyLeaderboardEntry {
+  rank: number;
+  participant_code: string;
+  participant_name: string;
+  coins: number;
+  top_three_count: number;
+  first_place_count: number;
+  received_investment: number;
+  author_earnings: number;
+  investment_returns: number;
+  investment_net: number;
+  top_three_hits: number;
 }
 
 export interface StudyInvestment {
@@ -272,4 +301,7 @@ export interface StudyState {
   developmentMessages: StudyDevelopmentMessage[];
   currentDraft: StudyDevelopmentDraft | null;
   experimentHistory: StudyExperimentHistoryItem[];
+  ideaRevisions: StudyIdeaRevision[];
+  leaderboard: StudyLeaderboardEntry[];
+  marketPrivacyActive: boolean;
 }

@@ -3,6 +3,8 @@ import {
   addComment,
   abortExperiment,
   createExperiment,
+  deleteComment,
+  filterStudyStateForViewer,
   getStudyState,
   investCoins,
   joinStudy,
@@ -17,6 +19,7 @@ import {
   startNextRound,
   voteProjectEnd,
   type StudyPhase,
+  type StudyViewer,
 } from './studyDb.js';
 import { generateWithDeepSeek } from './deepseek.js';
 
@@ -28,6 +31,10 @@ function sendError(res: Response, error: unknown) {
     tiedComments: anyError?.tiedComments,
     rankScores: anyError?.rankScores,
   });
+}
+
+function sendState(res: Response, state: ReturnType<typeof getStudyState>, viewer: StudyViewer = {}) {
+  res.json(filterStudyStateForViewer(state, viewer));
 }
 
 const fallbackHtml = (title: string, brief: string) => `<!doctype html>
@@ -51,14 +58,29 @@ const fallbackHtml = (title: string, brief: string) => `<!doctype html>
 </html>`;
 
 export function registerStudyRoutes(app: Express) {
-  app.get('/api/study/state', (_req, res) => {
-    res.json(getStudyState());
+  app.get('/api/study/state', (req, res) => {
+    const role = req.query.viewerRole === 'creator' || req.query.viewerRole === 'participant'
+      ? req.query.viewerRole
+      : null;
+    sendState(res, getStudyState(), {
+      role,
+      participantCode: String(req.query.participantCode || ''),
+    });
   });
 
   app.get('/api/study/archive/:experimentId', (req, res) => {
     const state = getStudyState(String(req.params.experimentId || ''));
     if (!state.experiment) {
       res.status(404).json({ error: 'Experiment archive was not found.' });
+      return;
+    }
+    const activeExperimentId = getStudyState().experiment?.id;
+    if (
+      state.experiment.id === activeExperimentId &&
+      state.experiment.phase !== 'ended' &&
+      state.experiment.phase !== 'aborted'
+    ) {
+      res.status(409).json({ error: 'The active experiment is not available through the archive endpoint.' });
       return;
     }
     res.json(state);
@@ -88,7 +110,8 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
         prompt = prompt || String(brief || title);
       }
 
-      res.json(
+      sendState(
+        res,
         createExperiment({
           title: String(title),
           brief: String(brief),
@@ -97,6 +120,7 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
           initialPrompt: prompt,
           maxRounds: Number(maxRounds),
         }),
+        { role: 'creator' },
       );
     } catch (error) {
       sendError(res, error);
@@ -105,7 +129,8 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/join', (req, res) => {
     try {
-      res.json(joinStudy(String(req.body?.participantCode || '')));
+      const participantCode = String(req.body?.participantCode || '');
+      sendState(res, joinStudy(participantCode), { role: 'participant', participantCode });
     } catch (error) {
       sendError(res, error);
     }
@@ -113,7 +138,7 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/phase', (req, res) => {
     try {
-      res.json(setPhase(String(req.body?.phase || '') as StudyPhase));
+      sendState(res, setPhase(String(req.body?.phase || '') as StudyPhase), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -121,7 +146,7 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/rollback-phase', (_req, res) => {
     try {
-      res.json(rollbackPhase());
+      sendState(res, rollbackPhase(), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -129,7 +154,7 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/abort-experiment', (_req, res) => {
     try {
-      res.json(abortExperiment());
+      sendState(res, abortExperiment(), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -137,7 +162,17 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/comments', (req, res) => {
     try {
-      res.json(addComment(String(req.body?.participantCode || ''), String(req.body?.content || '')));
+      const participantCode = String(req.body?.participantCode || '');
+      sendState(res, addComment(participantCode, String(req.body?.content || '')), { role: 'participant', participantCode });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/study/comments/delete', (req, res) => {
+    try {
+      const participantCode = String(req.body?.participantCode || '');
+      sendState(res, deleteComment(participantCode), { role: 'participant', participantCode });
     } catch (error) {
       sendError(res, error);
     }
@@ -145,13 +180,17 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/investments', (req, res) => {
     try {
-      res.json(
+      const actorType = req.body?.actorType === 'creator' ? 'creator' : 'participant';
+      const participantCode = String(req.body?.participantCode || '');
+      sendState(
+        res,
         investCoins(
-          req.body?.actorType === 'creator' ? 'creator' : 'participant',
-          String(req.body?.participantCode || ''),
+          actorType,
+          participantCode,
           Number(req.body?.commentId),
           Number(req.body?.amount || 0),
         ),
+        { role: actorType, participantCode },
       );
     } catch (error) {
       sendError(res, error);
@@ -161,7 +200,7 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
   app.post('/api/study/select-top-ideas', (req, res) => {
     try {
       const commentIds = Array.isArray(req.body?.commentIds) ? req.body.commentIds.map(Number) : undefined;
-      res.json(selectTopIdeas(commentIds));
+      sendState(res, selectTopIdeas(commentIds), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -204,7 +243,7 @@ ${ideaList}`;
           'You plan collaborative web-prototype changes for a controlled CHI study. Return only JSON with "text" containing a structured fusion plan and "code" set to an empty string. Do not use Markdown fences. Use the same language as the participant ideas.',
         maxTokens: 2048,
       });
-      res.json(saveFusionPlan(generated.text));
+      sendState(res, saveFusionPlan(generated.text), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -249,7 +288,7 @@ Existing HTML:
 ${currentVersion.code}`;
 
       const generated = await generateWithDeepSeek(prompt);
-      res.json(saveDevelopmentDraft({ code: generated.code, summary: generated.text }));
+      sendState(res, saveDevelopmentDraft({ code: generated.code, summary: generated.text }), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -306,12 +345,14 @@ ${state.currentDraft.code}`;
         systemPrompt:
           'You are an AI Studio-style web development partner. Return only JSON with "text" containing a concise public change summary and "code" containing the full updated self-contained HTML. Never return a partial patch or Markdown fences.',
       });
-      res.json(
+      sendState(
+        res,
         saveDevelopmentDraft({
           code: generated.code,
           summary: generated.text,
           creatorMessage,
         }),
+        { role: 'creator' },
       );
     } catch (error) {
       sendError(res, error);
@@ -320,7 +361,7 @@ ${state.currentDraft.code}`;
 
   app.post('/api/study/development/rollback', (_req, res) => {
     try {
-      res.json(rollbackDevelopmentDraft());
+      sendState(res, rollbackDevelopmentDraft(), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -328,7 +369,7 @@ ${state.currentDraft.code}`;
 
   app.post('/api/study/development/publish', (_req, res) => {
     try {
-      res.json(publishDevelopmentDraft());
+      sendState(res, publishDevelopmentDraft(), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -336,7 +377,7 @@ ${state.currentDraft.code}`;
 
   app.post('/api/study/next-round', (_req, res) => {
     try {
-      res.json(startNextRound());
+      sendState(res, startNextRound(), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -344,7 +385,7 @@ ${state.currentDraft.code}`;
 
   app.post('/api/study/start-end-vote', (_req, res) => {
     try {
-      res.json(startEndVote());
+      sendState(res, startEndVote(), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
     }
@@ -352,7 +393,8 @@ ${state.currentDraft.code}`;
 
   app.post('/api/study/end-vote', (req, res) => {
     try {
-      res.json(voteProjectEnd(String(req.body?.participantCode || ''), Boolean(req.body?.vote)));
+      const participantCode = String(req.body?.participantCode || '');
+      sendState(res, voteProjectEnd(participantCode, Boolean(req.body?.vote)), { role: 'participant', participantCode });
     } catch (error) {
       sendError(res, error);
     }

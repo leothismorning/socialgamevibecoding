@@ -33,6 +33,9 @@ export type StudyState = {
   developmentMessages: any[];
   currentDraft: any | null;
   experimentHistory: any[];
+  ideaRevisions: any[];
+  leaderboard: any[];
+  marketPrivacyActive: boolean;
   endVoteSummary: {
     eligible: number;
     yes: number;
@@ -84,6 +87,8 @@ db.exec(`
     round_number INTEGER NOT NULL,
     comment_rewarded INTEGER NOT NULL DEFAULT 0,
     budget_allocated_v2 INTEGER NOT NULL DEFAULT 0,
+    investment_settled_v3 INTEGER NOT NULL DEFAULT 0,
+    investment_locked_v3 INTEGER NOT NULL DEFAULT 0,
     selected_comment_id INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -108,7 +113,31 @@ db.exec(`
     participant_code TEXT NOT NULL,
     content TEXT NOT NULL,
     selected INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS comment_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    round_number INTEGER NOT NULL,
+    comment_id INTEGER NOT NULL,
+    participant_code TEXT NOT NULL,
+    content TEXT NOT NULL,
+    action TEXT NOT NULL,
     created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS idea_display_orders (
+    experiment_id TEXT NOT NULL,
+    round_number INTEGER NOT NULL,
+    viewer_key TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    display_order INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(experiment_id, round_number, viewer_key, comment_id),
+    UNIQUE(experiment_id, round_number, viewer_key, display_order)
   );
 
   CREATE TABLE IF NOT EXISTS investments (
@@ -243,6 +272,21 @@ const roundColumns = db.prepare(`PRAGMA table_info(rounds)`).all() as Array<{ na
 if (!roundColumns.some((column) => column.name === 'budget_allocated_v2')) {
   db.exec(`ALTER TABLE rounds ADD COLUMN budget_allocated_v2 INTEGER NOT NULL DEFAULT 0`);
 }
+if (!roundColumns.some((column) => column.name === 'investment_settled_v3')) {
+  db.exec(`ALTER TABLE rounds ADD COLUMN investment_settled_v3 INTEGER NOT NULL DEFAULT 0`);
+}
+if (!roundColumns.some((column) => column.name === 'investment_locked_v3')) {
+  db.exec(`ALTER TABLE rounds ADD COLUMN investment_locked_v3 INTEGER NOT NULL DEFAULT 0`);
+}
+
+const commentColumns = db.prepare(`PRAGMA table_info(comments)`).all() as Array<{ name: string }>;
+if (!commentColumns.some((column) => column.name === 'updated_at')) {
+  db.exec(`ALTER TABLE comments ADD COLUMN updated_at TEXT`);
+  db.exec(`UPDATE comments SET updated_at = created_at WHERE updated_at IS NULL`);
+}
+if (!commentColumns.some((column) => column.name === 'deleted_at')) {
+  db.exec(`ALTER TABLE comments ADD COLUMN deleted_at TEXT`);
+}
 
 const experimentColumns = db.prepare(`PRAGMA table_info(experiments)`).all() as Array<{ name: string }>;
 if (!experimentColumns.some((column) => column.name === 'end_vote_started_at')) {
@@ -306,7 +350,7 @@ function experimentHistory(activeId: string | null) {
       (db.prepare(`SELECT COUNT(*) AS count FROM versions WHERE experiment_id = ?`).get(experiment.id) as any)?.count || 0,
     );
     const commentCount = Number(
-      (db.prepare(`SELECT COUNT(*) AS count FROM comments WHERE experiment_id = ?`).get(experiment.id) as any)?.count || 0,
+      (db.prepare(`SELECT COUNT(*) AS count FROM comments WHERE experiment_id = ? AND deleted_at IS NULL`).get(experiment.id) as any)?.count || 0,
     );
     const archivedJoined = Number(
       (
@@ -339,47 +383,212 @@ function logPhase(experimentId: string, roundNumber: number, fromPhase: string |
   `).run(experimentId, roundNumber, fromPhase, toPhase, now());
 }
 
-function allocateRoundBudgets(experimentId: string, roundNumber: number) {
-  const round = db.prepare(`SELECT * FROM rounds WHERE experiment_id = ? AND round_number = ?`).get(experimentId, roundNumber) as any;
-  if (round?.budget_allocated_v2) return;
+function prepareInvestmentPhase(experimentId: string, roundNumber: number) {
+  const experiment = db.prepare(`SELECT creator_coins FROM experiments WHERE id = ?`).get(experimentId) as any;
+  const creatorDelta = 200 - Number(experiment?.creator_coins || 0);
+  const timestamp = now();
+  db.prepare(`UPDATE experiments SET creator_coins = 200, updated_at = ? WHERE id = ?`).run(timestamp, experimentId);
+  if (creatorDelta !== 0) {
+    db.prepare(`
+      INSERT INTO coin_events (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
+      VALUES (?, ?, NULL, 'creator', ?, 'creator_budget_reset', 'fixed_200', ?)
+    `).run(experimentId, roundNumber, creatorDelta, timestamp);
+  }
+  db.prepare(`
+    UPDATE rounds SET investment_locked_v3 = 0, updated_at = ?
+    WHERE experiment_id = ? AND round_number = ?
+  `).run(timestamp, experimentId, roundNumber);
+}
 
-  const joined = db.prepare(`SELECT code, coins FROM participants WHERE joined_at IS NOT NULL`).all() as any[];
-  const receivedLastRound = db.prepare(`
-    SELECT COALESCE(SUM(i.amount), 0) AS received
+function buildLeaderboard(experimentId: string, participantRows: any[]) {
+  const receivedInvestment = db.prepare(`
+    SELECT COALESCE(SUM(i.amount), 0) AS total
     FROM comments c
     JOIN investments i ON i.comment_id = c.id
-    WHERE c.experiment_id = ? AND c.round_number = ? AND c.participant_code = ?
+    WHERE c.experiment_id = ? AND c.participant_code = ? AND c.deleted_at IS NULL
   `);
-  const coinEvent = db.prepare(`
-    INSERT INTO coin_events (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
-    VALUES (?, ?, ?, ?, ?, 'round_budget_reset', ?, ?)
+  const coinEventTotal = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM coin_events
+    WHERE experiment_id = ? AND participant_code = ? AND reason IN (
+      SELECT value FROM json_each(?)
+    )
+  `);
+  const selectionStats = db.prepare(`
+    SELECT
+      COUNT(*) AS top_three_count,
+      COALESCE(SUM(CASE WHEN s.selection_rank = 1 THEN 1 ELSE 0 END), 0) AS first_place_count
+    FROM selected_ideas s
+    JOIN comments c ON c.id = s.comment_id
+    WHERE s.experiment_id = ? AND c.participant_code = ?
+  `);
+  const successfulInvestments = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM investments i
+    JOIN selected_ideas s
+      ON s.experiment_id = i.experiment_id
+      AND s.round_number = i.round_number
+      AND s.comment_id = i.comment_id
+    WHERE i.experiment_id = ? AND i.participant_code = ? AND i.actor_type = 'participant'
   `);
 
+  const rows = participantRows
+    .filter((participant) => participant.joined_at)
+    .map((participant) => {
+      const selection = selectionStats.get(experimentId, participant.code) as any;
+      const authorEarnings = Number(
+        (coinEventTotal.get(experimentId, participant.code, JSON.stringify(['idea_support_reward', 'idea_rank_bonus'])) as any)
+          ?.total || 0,
+      );
+      const investmentReturns = Number(
+        (coinEventTotal.get(experimentId, participant.code, JSON.stringify(['investment_return'])) as any)?.total || 0,
+      );
+      const investmentNet = Number(
+        (
+          coinEventTotal.get(
+            experimentId,
+            participant.code,
+            JSON.stringify(['investment', 'investment_return', 'investment_refund_on_rollback']),
+          ) as any
+        )?.total || 0,
+      );
+      return {
+        rank: 0,
+        participant_code: participant.code,
+        participant_name: participant.name,
+        coins: Number(participant.coins || 0),
+        top_three_count: Number(selection?.top_three_count || 0),
+        first_place_count: Number(selection?.first_place_count || 0),
+        received_investment: Number((receivedInvestment.get(experimentId, participant.code) as any)?.total || 0),
+        author_earnings: authorEarnings,
+        investment_returns: investmentReturns,
+        investment_net: investmentNet,
+        top_three_hits: Number((successfulInvestments.get(experimentId, participant.code) as any)?.count || 0),
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.coins - a.coins ||
+        b.investment_net - a.investment_net ||
+        b.first_place_count - a.first_place_count ||
+        b.top_three_count - a.top_three_count ||
+        a.participant_code.localeCompare(b.participant_code),
+    );
+
+  let displayedRank = 0;
+  let previous: any = null;
+  return rows.map((row, index) => {
+    const tied =
+      previous &&
+      previous.coins === row.coins &&
+      previous.investment_net === row.investment_net &&
+      previous.first_place_count === row.first_place_count &&
+      previous.top_three_count === row.top_three_count;
+    if (!tied) displayedRank = index + 1;
+    previous = row;
+    return { ...row, rank: displayedRank };
+  });
+}
+
+export type StudyViewer = {
+  role?: 'creator' | 'participant' | null;
+  participantCode?: string | null;
+};
+
+function ensureIdeaDisplayOrder(experimentId: string, roundNumber: number, viewerKey: string, commentIds: number[]) {
+  const existing = db
+    .prepare(`
+      SELECT comment_id, display_order FROM idea_display_orders
+      WHERE experiment_id = ? AND round_number = ? AND viewer_key = ?
+      ORDER BY display_order ASC
+    `)
+    .all(experimentId, roundNumber, viewerKey) as any[];
+  const sameIds =
+    existing.length === commentIds.length &&
+    existing.every((item) => commentIds.includes(Number(item.comment_id)));
+  if (sameIds) return new Map(existing.map((item) => [Number(item.comment_id), Number(item.display_order)]));
+
+  const shuffled = [...commentIds];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
   const tx = db.transaction(() => {
-    for (const participant of joined) {
-      const received =
-        roundNumber > 1
-          ? Number((receivedLastRound.get(experimentId, roundNumber - 1, participant.code) as any)?.received || 0)
-          : 0;
-      const budget = 100 + received;
-      const delta = budget - Number(participant.coins || 0);
-      db.prepare(`UPDATE participants SET coins = ? WHERE code = ?`).run(budget, participant.code);
-      coinEvent.run(experimentId, roundNumber, participant.code, 'participant', delta, String(received), now());
-    }
-
-    const experiment = db.prepare(`SELECT creator_coins FROM experiments WHERE id = ?`).get(experimentId) as any;
-    const creatorDelta = 200 - Number(experiment?.creator_coins || 0);
-    db.prepare(`UPDATE experiments SET creator_coins = 200, updated_at = ? WHERE id = ?`).run(now(), experimentId);
-    coinEvent.run(experimentId, roundNumber, null, 'creator', creatorDelta, 'fixed_200', now());
-
-    db.prepare(`UPDATE rounds SET comment_rewarded = 1, budget_allocated_v2 = 1, updated_at = ? WHERE experiment_id = ? AND round_number = ?`).run(
-      now(),
+    db.prepare(`DELETE FROM idea_display_orders WHERE experiment_id = ? AND round_number = ? AND viewer_key = ?`).run(
       experimentId,
       roundNumber,
+      viewerKey,
     );
+    const insert = db.prepare(`
+      INSERT INTO idea_display_orders
+        (experiment_id, round_number, viewer_key, comment_id, display_order, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    shuffled.forEach((commentId, index) => insert.run(experimentId, roundNumber, viewerKey, commentId, index + 1, now()));
   });
-
   tx();
+  return new Map(shuffled.map((commentId, index) => [commentId, index + 1]));
+}
+
+export function filterStudyStateForViewer(state: StudyState, viewer: StudyViewer = {}): StudyState {
+  const experiment = state.experiment;
+  if (!experiment || experiment.phase !== 'investing') return state;
+  const currentRound = state.rounds.find((round: any) => round.round_number === experiment.current_round) as any;
+  const marketLocked = Number(currentRound?.investment_locked_v3 || 0) === 1;
+
+  const participantCode = String(viewer.participantCode || '').trim().toUpperCase();
+  const viewerKey = viewer.role === 'participant' && participantCode
+    ? participantCode
+    : viewer.role === 'creator'
+      ? 'CREATOR'
+      : 'ANONYMOUS';
+  let comments = state.comments;
+  if (!marketLocked) {
+    const currentComments = state.comments.filter((comment) => comment.round_number === experiment.current_round);
+    const displayOrder = ensureIdeaDisplayOrder(
+      experiment.id,
+      experiment.current_round,
+      viewerKey,
+      currentComments.map((comment) => Number(comment.id)),
+    );
+    const historicalComments = state.comments.filter((comment) => comment.round_number !== experiment.current_round);
+    const privateCurrentComments = currentComments
+      .map((comment) => {
+        const isOwn = viewer.role === 'participant' && comment.participant_code === participantCode;
+        return {
+          ...comment,
+          participant_code: isOwn ? 'YOU' : 'ANONYMOUS',
+          participant_name: undefined,
+          invested: 0,
+          is_own: isOwn,
+          display_order: displayOrder.get(Number(comment.id)) || 0,
+        };
+      })
+      .sort((a, b) => Number(a.display_order) - Number(b.display_order));
+    comments = [...historicalComments, ...privateCurrentComments];
+  }
+  const ownInvestmentCode = viewer.role === 'creator' ? 'CREATOR' : participantCode;
+
+  return {
+    ...state,
+    comments,
+    investments: ownInvestmentCode
+      ? state.investments.filter((investment) => investment.participant_code === ownInvestmentCode)
+      : [],
+    participants: state.participants.map((participant) => ({
+      ...participant,
+      coins: viewer.role === 'participant' && participant.code === participantCode ? participant.coins : 0,
+    })),
+    coinEvents: state.coinEvents.filter((event) =>
+      viewer.role === 'creator'
+        ? event.actor_type === 'creator'
+        : viewer.role === 'participant'
+          ? event.participant_code === participantCode
+          : false,
+    ),
+    leaderboard: [],
+    marketPrivacyActive: !marketLocked,
+  };
 }
 
 export function getStudyState(experimentId?: string): StudyState {
@@ -415,6 +624,9 @@ export function getStudyState(experimentId?: string): StudyState {
       developmentMessages: [],
       currentDraft: null,
       experimentHistory: history,
+      ideaRevisions: [],
+      leaderboard: [],
+      marketPrivacyActive: false,
       endVoteSummary: { eligible: 0, yes: 0, no: 0, pending: 0, requiredYes: 0 },
     };
   }
@@ -427,13 +639,16 @@ export function getStudyState(experimentId?: string): StudyState {
       FROM comments c
       LEFT JOIN participants p ON p.code = c.participant_code
       LEFT JOIN investments i ON i.comment_id = c.id
-      WHERE c.experiment_id = ?
+      WHERE c.experiment_id = ? AND c.deleted_at IS NULL
       GROUP BY c.id
       ORDER BY c.round_number ASC, c.created_at ASC
     `)
     .all(experiment.id);
   const investments = db.prepare(`SELECT * FROM investments WHERE experiment_id = ? ORDER BY created_at ASC`).all(experiment.id);
   const coinEvents = db.prepare(`SELECT * FROM coin_events WHERE experiment_id = ? ORDER BY created_at DESC LIMIT 80`).all(experiment.id);
+  const ideaRevisions = db
+    .prepare(`SELECT * FROM comment_revisions WHERE experiment_id = ? ORDER BY created_at ASC, id ASC`)
+    .all(experiment.id);
   const phaseEvents = db.prepare(`SELECT * FROM phase_events WHERE experiment_id = ? ORDER BY created_at DESC LIMIT 80`).all(experiment.id);
   const selectedComment = experiment.selected_comment_id
     ? db.prepare(`SELECT * FROM comments WHERE id = ?`).get(experiment.selected_comment_id)
@@ -500,6 +715,7 @@ export function getStudyState(experimentId?: string): StudyState {
     pending: Math.max(0, eligible - yes - no),
     requiredYes: eligible > 0 ? Math.floor(eligible * 0.75) + 1 : 0,
   };
+  const leaderboard = buildLeaderboard(experiment.id, participants as any[]);
 
   return {
     experiment,
@@ -522,6 +738,9 @@ export function getStudyState(experimentId?: string): StudyState {
     developmentMessages,
     currentDraft,
     experimentHistory: history,
+    ideaRevisions,
+    leaderboard,
+    marketPrivacyActive: false,
   };
 }
 
@@ -592,7 +811,7 @@ export function setPhase(toPhase: StudyPhase) {
 
   const fromPhase = experiment.phase;
   if (toPhase === 'investing') {
-    allocateRoundBudgets(experiment.id, experiment.current_round);
+    prepareInvestmentPhase(experiment.id, experiment.current_round);
   }
 
   db.prepare(`UPDATE experiments SET phase = ?, updated_at = ? WHERE id = ?`).run(toPhase, now(), experiment.id);
@@ -624,11 +843,82 @@ export function addComment(participantCode: string, content: string) {
   const text = content.trim();
   if (!text) throw new Error('Comment cannot be empty.');
 
-  db.prepare(`
-    INSERT INTO comments (experiment_id, round_number, participant_code, content, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(experiment.id, experiment.current_round, cleanCode, text, now());
+  const existingComments = db
+    .prepare(`
+      SELECT * FROM comments
+      WHERE experiment_id = ? AND round_number = ? AND participant_code = ?
+      ORDER BY id DESC
+    `)
+    .all(experiment.id, experiment.current_round, cleanCode) as any[];
+  const existing = existingComments[0];
+  const timestamp = now();
+  const tx = db.transaction(() => {
+    let commentId: number;
+    let action: 'create' | 'update' | 'restore';
+    if (existing) {
+      commentId = Number(existing.id);
+      action = existing.deleted_at ? 'restore' : 'update';
+      db.prepare(`UPDATE comments SET content = ?, updated_at = ?, deleted_at = NULL WHERE id = ?`).run(
+        text,
+        timestamp,
+        commentId,
+      );
+      for (const duplicate of existingComments.slice(1)) {
+        if (!duplicate.deleted_at) {
+          db.prepare(`UPDATE comments SET deleted_at = ?, updated_at = ? WHERE id = ?`).run(timestamp, timestamp, duplicate.id);
+        }
+      }
+    } else {
+      const inserted = db.prepare(`
+        INSERT INTO comments (experiment_id, round_number, participant_code, content, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(experiment.id, experiment.current_round, cleanCode, text, timestamp, timestamp);
+      commentId = Number(inserted.lastInsertRowid);
+      action = 'create';
+      db.prepare(`UPDATE participants SET coins = coins + 100 WHERE code = ?`).run(cleanCode);
+      db.prepare(`
+        INSERT INTO coin_events
+          (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
+        VALUES (?, ?, ?, 'participant', 100, 'idea_submission_reward', ?, ?)
+      `).run(experiment.id, experiment.current_round, cleanCode, String(commentId), timestamp);
+    }
+    db.prepare(`
+      INSERT INTO comment_revisions
+        (experiment_id, round_number, comment_id, participant_code, content, action, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(experiment.id, experiment.current_round, commentId, cleanCode, text, action, timestamp);
+  });
 
+  tx();
+
+  return getStudyState();
+}
+
+export function deleteComment(participantCode: string) {
+  const experiment = activeExperiment();
+  if (!experiment) throw new Error('Experiment has not been created yet.');
+  if (experiment.phase !== 'commenting') throw new Error('Ideas can only be deleted during the commenting phase.');
+
+  const cleanCode = participantCode.trim().toUpperCase();
+  const comment = db
+    .prepare(`
+      SELECT * FROM comments
+      WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND deleted_at IS NULL
+      ORDER BY id DESC LIMIT 1
+    `)
+    .get(experiment.id, experiment.current_round, cleanCode) as any;
+  if (!comment) throw new Error('There is no active idea to delete in this round.');
+
+  const timestamp = now();
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE comments SET deleted_at = ?, updated_at = ? WHERE id = ?`).run(timestamp, timestamp, comment.id);
+    db.prepare(`
+      INSERT INTO comment_revisions
+        (experiment_id, round_number, comment_id, participant_code, content, action, created_at)
+      VALUES (?, ?, ?, ?, ?, 'delete', ?)
+    `).run(experiment.id, experiment.current_round, comment.id, cleanCode, comment.content, timestamp);
+  });
+  tx();
   return getStudyState();
 }
 
@@ -636,6 +926,10 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
   const experiment = activeExperiment();
   if (!experiment) throw new Error('Experiment has not been created yet.');
   if (experiment.phase !== 'investing') throw new Error('Investments are only open during the investing phase.');
+  const round = db
+    .prepare(`SELECT investment_locked_v3 FROM rounds WHERE experiment_id = ? AND round_number = ?`)
+    .get(experiment.id, experiment.current_round) as any;
+  if (Number(round?.investment_locked_v3 || 0) === 1) throw new Error('The investment market is locked for result settlement.');
 
   const isCreator = actorType === 'creator';
   const cleanCode = isCreator ? 'CREATOR' : participantCode.trim().toUpperCase();
@@ -645,15 +939,36 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
   if (!isCreator && !participant) throw new Error('Join the study before investing.');
 
   const comment = db
-    .prepare(`SELECT * FROM comments WHERE id = ? AND experiment_id = ? AND round_number = ?`)
+    .prepare(`
+      SELECT * FROM comments
+      WHERE id = ? AND experiment_id = ? AND round_number = ? AND deleted_at IS NULL
+    `)
     .get(commentId, experiment.id, experiment.current_round) as any;
   if (!comment) throw new Error('Comment does not belong to the current round.');
   if (!isCreator && comment.participant_code === cleanCode) throw new Error('Participants cannot invest in their own comment.');
 
-  const value = Math.max(1, Math.floor(Number(amount)));
+  const value = Math.floor(Number(amount));
+  if (!Number.isFinite(value) || value < 10 || value > 50 || value % 10 !== 0) {
+    throw new Error('Each idea investment must be 10, 20, 30, 40, or 50 coins.');
+  }
   const previous = db
     .prepare(`SELECT * FROM investments WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id = ?`)
     .get(experiment.id, experiment.current_round, cleanCode, commentId) as any;
+  const committed = Number(
+    (
+      db
+        .prepare(`
+          SELECT COALESCE(SUM(amount), 0) AS total
+          FROM investments
+          WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id != ?
+        `)
+        .get(experiment.id, experiment.current_round, cleanCode, commentId) as any
+    )?.total || 0,
+  );
+  const roundLimit = isCreator ? 200 : 150;
+  if (committed + value > roundLimit) {
+    throw new Error(`${isCreator ? 'Creator' : 'Participant'} may invest at most ${roundLimit} coins per round.`);
+  }
   const delta = value - Number(previous?.amount || 0);
   const availableCoins = isCreator ? Number(experiment.creator_coins) : Number(participant.coins);
   if (delta > availableCoins) throw new Error('Not enough coins.');
@@ -688,6 +1003,137 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
   return getStudyState();
 }
 
+function settleRoundInvestments(experiment: any, selected: any[], totals: any[]) {
+  const round = db
+    .prepare(`SELECT investment_settled_v3 FROM rounds WHERE experiment_id = ? AND round_number = ?`)
+    .get(experiment.id, experiment.current_round) as any;
+  if (Number(round?.investment_settled_v3 || 0) === 1) return;
+
+  const timestamp = now();
+  const addParticipantCoins = db.prepare(`UPDATE participants SET coins = coins + ? WHERE code = ?`);
+  const addCreatorCoins = db.prepare(`UPDATE experiments SET creator_coins = creator_coins + ?, updated_at = ? WHERE id = ?`);
+  const addEvent = db.prepare(`
+    INSERT INTO coin_events
+      (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const idea of totals) {
+    const reward = Math.round(Number(idea.invested || 0) * 0.2);
+    if (reward <= 0) continue;
+    addParticipantCoins.run(reward, idea.participant_code);
+    addEvent.run(
+      experiment.id,
+      experiment.current_round,
+      idea.participant_code,
+      'participant',
+      reward,
+      'idea_support_reward',
+      String(idea.id),
+      timestamp,
+    );
+  }
+
+  const authorBonuses = [60, 40, 30];
+  selected.forEach((idea, index) => {
+    const reward = authorBonuses[index];
+    addParticipantCoins.run(reward, idea.participant_code);
+    addEvent.run(
+      experiment.id,
+      experiment.current_round,
+      idea.participant_code,
+      'participant',
+      reward,
+      'idea_rank_bonus',
+      String(idea.id),
+      timestamp,
+    );
+  });
+
+  const selectedRank = new Map(selected.map((idea, index) => [Number(idea.id), index + 1]));
+  const returnMultipliers = [0, 1.8, 1.5, 1.3];
+  const investments = db
+    .prepare(`SELECT * FROM investments WHERE experiment_id = ? AND round_number = ?`)
+    .all(experiment.id, experiment.current_round) as any[];
+  for (const investment of investments) {
+    const rank = selectedRank.get(Number(investment.comment_id)) || 0;
+    const multiplier = rank > 0 ? returnMultipliers[rank] : 0.5;
+    const returned = Math.round(Number(investment.amount) * multiplier);
+    const isCreator = investment.actor_type === 'creator' || investment.participant_code === 'CREATOR';
+    if (isCreator) {
+      addCreatorCoins.run(returned, timestamp, experiment.id);
+    } else {
+      addParticipantCoins.run(returned, investment.participant_code);
+    }
+    addEvent.run(
+      experiment.id,
+      experiment.current_round,
+      isCreator ? null : investment.participant_code,
+      isCreator ? 'creator' : 'participant',
+      returned,
+      'investment_return',
+      String(investment.id),
+      timestamp,
+    );
+  }
+
+  db.prepare(`
+    UPDATE rounds SET investment_settled_v3 = 1, updated_at = ?
+    WHERE experiment_id = ? AND round_number = ?
+  `).run(timestamp, experiment.id, experiment.current_round);
+}
+
+function reverseRoundSettlement(experiment: any) {
+  const round = db
+    .prepare(`SELECT investment_settled_v3 FROM rounds WHERE experiment_id = ? AND round_number = ?`)
+    .get(experiment.id, experiment.current_round) as any;
+  if (Number(round?.investment_settled_v3 || 0) !== 1) return;
+
+  const balances = db
+    .prepare(`
+      SELECT participant_code, actor_type, reason, ref_id, COALESCE(SUM(amount), 0) AS amount
+      FROM coin_events
+      WHERE experiment_id = ? AND round_number = ?
+        AND reason IN ('idea_support_reward', 'idea_rank_bonus', 'investment_return')
+      GROUP BY participant_code, actor_type, reason, ref_id
+      HAVING COALESCE(SUM(amount), 0) != 0
+    `)
+    .all(experiment.id, experiment.current_round) as any[];
+  const timestamp = now();
+  const addEvent = db.prepare(`
+    INSERT INTO coin_events
+      (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const balance of balances) {
+    const amount = Number(balance.amount || 0);
+    if (amount === 0) continue;
+    if (balance.actor_type === 'creator') {
+      db.prepare(`UPDATE experiments SET creator_coins = creator_coins - ?, updated_at = ? WHERE id = ?`).run(
+        amount,
+        timestamp,
+        experiment.id,
+      );
+    } else {
+      db.prepare(`UPDATE participants SET coins = coins - ? WHERE code = ?`).run(amount, balance.participant_code);
+    }
+    addEvent.run(
+      experiment.id,
+      experiment.current_round,
+      balance.participant_code,
+      balance.actor_type,
+      -amount,
+      balance.reason,
+      balance.ref_id,
+      timestamp,
+    );
+  }
+  db.prepare(`
+    UPDATE rounds SET investment_settled_v3 = 0, updated_at = ?
+    WHERE experiment_id = ? AND round_number = ?
+  `).run(timestamp, experiment.id, experiment.current_round);
+}
+
 export function selectTopIdeas(commentIds?: number[]) {
   const experiment = activeExperiment();
   if (!experiment) throw new Error('Experiment has not been created yet.');
@@ -699,7 +1145,7 @@ export function selectTopIdeas(commentIds?: number[]) {
              COUNT(DISTINCT i.participant_code) AS investor_count
       FROM comments c
       LEFT JOIN investments i ON i.comment_id = c.id
-      WHERE c.experiment_id = ? AND c.round_number = ?
+      WHERE c.experiment_id = ? AND c.round_number = ? AND c.deleted_at IS NULL
       GROUP BY c.id
       ORDER BY invested DESC, c.created_at ASC, c.id ASC
     `)
@@ -714,6 +1160,10 @@ export function selectTopIdeas(commentIds?: number[]) {
   );
 
   if ((!commentIds || commentIds.length === 0) && hasRelevantTie) {
+    db.prepare(`
+      UPDATE rounds SET investment_locked_v3 = 1, updated_at = ?
+      WHERE experiment_id = ? AND round_number = ?
+    `).run(now(), experiment.id, experiment.current_round);
     const error: any = new Error('Tie detected. Creator must resolve only the tied ranking slots.');
     error.status = 409;
     error.tiedComments = tieComments;
@@ -737,6 +1187,10 @@ export function selectTopIdeas(commentIds?: number[]) {
   const weights = [0.6, 0.2, 0.2];
 
   const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE rounds SET investment_locked_v3 = 1, updated_at = ?
+      WHERE experiment_id = ? AND round_number = ?
+    `).run(now(), experiment.id, experiment.current_round);
     db.prepare(`UPDATE comments SET selected = 0 WHERE experiment_id = ? AND round_number = ?`).run(
       experiment.id,
       experiment.current_round,
@@ -767,6 +1221,7 @@ export function selectTopIdeas(commentIds?: number[]) {
         now(),
       );
     });
+    settleRoundInvestments(experiment, selected, totals);
     db.prepare(`UPDATE rounds SET selected_comment_id = ?, updated_at = ? WHERE experiment_id = ? AND round_number = ?`).run(
       selected[0].id,
       now(),
@@ -1056,8 +1511,13 @@ export function rollbackPhase() {
         experiment.id,
         experiment.current_round,
       );
+      db.prepare(`
+        UPDATE rounds SET investment_locked_v3 = 0, updated_at = ?
+        WHERE experiment_id = ? AND round_number = ?
+      `).run(now(), experiment.id, experiment.current_round);
     } else if (fromPhase === 'developing') {
       toPhase = 'investing';
+      reverseRoundSettlement(experiment);
       db.prepare(`UPDATE comments SET selected = 0 WHERE experiment_id = ? AND round_number = ?`).run(
         experiment.id,
         experiment.current_round,
@@ -1088,6 +1548,10 @@ export function rollbackPhase() {
         experiment.current_round,
       );
       db.prepare(`UPDATE experiments SET selected_comment_id = NULL WHERE id = ?`).run(experiment.id);
+      db.prepare(`
+        UPDATE rounds SET investment_locked_v3 = 0, updated_at = ?
+        WHERE experiment_id = ? AND round_number = ?
+      `).run(now(), experiment.id, experiment.current_round);
     } else if (fromPhase === 'previewing') {
       toPhase = 'developing';
       const currentVersion = db.prepare(`SELECT * FROM versions WHERE id = ?`).get(experiment.current_version_id) as any;

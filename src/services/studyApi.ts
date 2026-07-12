@@ -63,7 +63,13 @@ async function requestStudy(path: string, body?: unknown): Promise<StudyState> {
 }
 
 export const studyApi = {
-  state: () => requestStudy('state'),
+  state: (viewerRole?: 'creator' | 'participant' | null, participantCode?: string) => {
+    const params = new URLSearchParams();
+    if (viewerRole) params.set('viewerRole', viewerRole);
+    if (participantCode) params.set('participantCode', participantCode);
+    const query = params.toString();
+    return requestStudy(`state${query ? `?${query}` : ''}`);
+  },
   archive: (experimentId: string) => requestStudy(`archive/${encodeURIComponent(experimentId)}`),
   createExperiment: (input: {
     title: string;
@@ -78,6 +84,7 @@ export const studyApi = {
   rollbackPhase: () => requestStudy('rollback-phase', {}),
   abortExperiment: () => requestStudy('abort-experiment', {}),
   comment: (participantCode: string, content: string) => requestStudy('comments', { participantCode, content }),
+  deleteComment: (participantCode: string) => requestStudy('comments/delete', { participantCode }),
   invest: (actorType: 'participant' | 'creator', participantCode: string, commentId: number, amount: number) =>
     requestStudy('investments', { actorType, participantCode, commentId, amount }),
   selectTopIdeas: (commentIds?: number[]) => requestStudy('select-top-ideas', commentIds ? { commentIds } : {}),

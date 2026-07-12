@@ -39,6 +39,8 @@ import {
   StudyEndVote,
   StudyEndVoteSummary,
   StudyFusionPlan,
+  StudyInvestment,
+  StudyLeaderboardEntry,
   StudyPhase,
   StudySelectedIdea,
   StudyState,
@@ -74,11 +76,11 @@ export default function App() {
 
   const load = React.useCallback(async () => {
     try {
-      setState(await studyApi.state());
+      setState(await studyApi.state(role, participantCode));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load study state.');
     }
-  }, []);
+  }, [participantCode, role]);
 
   React.useEffect(() => {
     load();
@@ -764,6 +766,8 @@ function StudyRoom({
     state.versions.find((version) => version.id === experiment.current_version_id) || state.versions[state.versions.length - 1];
   const liveDraft = experiment.phase === 'developing' ? state.currentDraft : null;
   const currentComments = state.comments.filter((comment) => comment.round_number === experiment.current_round);
+  const currentRoundState = state.rounds.find((round) => round.round_number === experiment.current_round);
+  const investmentLocked = Boolean(currentRoundState?.investment_locked_v3);
   const joinedParticipants = state.participants.filter((participant) => participant.joined_at);
   const me = state.participants.find((participant) => participant.code === participantCode);
 
@@ -859,6 +863,7 @@ function StudyRoom({
             participantCode={participantCode}
             phase={experiment.phase}
             comments={currentComments}
+            marketPrivacyActive={state.marketPrivacyActive}
             onRun={onRun}
             isBusy={isBusy}
           />
@@ -871,6 +876,9 @@ function StudyRoom({
           participantCode={participantCode}
           phase={experiment.phase}
           comments={currentComments}
+          investments={state.investments.filter((investment) => investment.round_number === experiment.current_round)}
+          marketPrivacyActive={state.marketPrivacyActive}
+          investmentLocked={investmentLocked}
           participantCoins={me?.coins || 0}
           creatorCoins={experiment.creator_coins}
           selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
@@ -1183,6 +1191,7 @@ function CommentPanel({
   participantCode,
   phase,
   comments,
+  marketPrivacyActive,
   onRun,
   isBusy,
 }: {
@@ -1190,16 +1199,36 @@ function CommentPanel({
   participantCode: string;
   phase: StudyPhase;
   comments: StudyComment[];
+  marketPrivacyActive: boolean;
   onRun: (action: () => Promise<StudyState>) => void;
   isBusy: boolean;
 }) {
   const [content, setContent] = React.useState('');
   const canComment = role === 'participant' && phase === 'commenting';
+  const myIdea = role === 'participant'
+    ? comments.find((comment) => comment.participant_code === participantCode || comment.is_own)
+    : undefined;
+  const loadedIdeaId = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    if (myIdea && loadedIdeaId.current !== myIdea.id) {
+      loadedIdeaId.current = myIdea.id;
+      setContent(myIdea.content);
+    } else if (!myIdea && loadedIdeaId.current !== null) {
+      loadedIdeaId.current = null;
+      setContent('');
+    }
+  }, [myIdea?.id]);
 
   const submit = () => {
     if (!content.trim()) return;
+    onRun(() => studyApi.comment(participantCode, content));
+  };
+
+  const remove = () => {
     onRun(async () => {
-      const next = await studyApi.comment(participantCode, content);
+      const next = await studyApi.deleteComment(participantCode);
+      loadedIdeaId.current = null;
       setContent('');
       return next;
     });
@@ -1211,11 +1240,27 @@ function CommentPanel({
         {comments.length === 0 ? (
           <div className="rounded-2xl bg-slate-50 p-5 text-center text-sm text-slate-400">No comments in this round yet.</div>
         ) : (
-          comments.map((comment) => <CommentCard key={comment.id} comment={comment} />)
+          comments.map((comment) => <CommentCard key={comment.id} comment={comment} hideMarketInfo={marketPrivacyActive} />)
         )}
       </div>
 
       <div className="mt-4">
+        {myIdea && canComment && (
+          <div className="mb-3 flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+            <div>
+              <p className="text-xs font-black text-emerald-700">Your round Idea · 100 Coin awarded</p>
+              <p className="mt-1 text-[11px] text-emerald-600">You can edit it until investing begins. Updates do not award more Coin.</p>
+            </div>
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={remove}
+              className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-[11px] font-black text-rose-600 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          </div>
+        )}
         <textarea
           value={content}
           onChange={(event) => setContent(event.target.value)}
@@ -1230,7 +1275,7 @@ function CommentPanel({
           className="mt-3 w-full h-12 rounded-2xl bg-blue-600 text-white font-black disabled:bg-slate-200 disabled:text-slate-400 flex items-center justify-center gap-2"
         >
           <Send className="h-4 w-4" />
-          Submit comment
+          {myIdea ? 'Update Idea' : 'Submit Idea · earn 100 Coin'}
         </button>
       </div>
     </Card>
@@ -1242,6 +1287,9 @@ function InvestmentPanel({
   participantCode,
   phase,
   comments,
+  investments,
+  marketPrivacyActive,
+  investmentLocked,
   participantCoins,
   creatorCoins,
   selectedIdeas,
@@ -1252,6 +1300,9 @@ function InvestmentPanel({
   participantCode: string;
   phase: StudyPhase;
   comments: StudyComment[];
+  investments: StudyInvestment[];
+  marketPrivacyActive: boolean;
+  investmentLocked: boolean;
   participantCoins: number;
   creatorCoins: number;
   selectedIdeas: StudySelectedIdea[];
@@ -1259,23 +1310,42 @@ function InvestmentPanel({
   isBusy: boolean;
 }) {
   const [amounts, setAmounts] = React.useState<Record<number, number>>({});
-  const sortedComments = [...comments].sort((a, b) => Number(b.invested || 0) - Number(a.invested || 0));
-  const canInvest = phase === 'investing';
+  const isInvestmentPhase = phase === 'investing';
+  const canInvest = isInvestmentPhase && !investmentLocked;
+  const sortedComments = marketPrivacyActive
+    ? [...comments]
+    : [...comments].sort((a, b) => Number(b.invested || 0) - Number(a.invested || 0));
   const availableCoins = role === 'creator' ? creatorCoins : participantCoins;
   const selectionByComment = new Map(selectedIdeas.map((idea) => [idea.comment_id, idea]));
+  const investmentCode = role === 'creator' ? 'CREATOR' : participantCode;
+  const ownInvestments = investments.filter((investment) => investment.participant_code === investmentCode);
+  const committedThisRound = ownInvestments.reduce((sum, investment) => sum + Number(investment.amount || 0), 0);
+  const roundLimit = role === 'creator' ? 200 : 150;
+  const remainingCapacity = Math.max(0, roundLimit - committedThisRound);
 
   return (
-    <Card title="Investment board" icon={<CircleDollarSign />} badge={canInvest ? `${availableCoins} coins available` : 'locked'}>
+    <Card
+      title="Investment board"
+      icon={<CircleDollarSign />}
+      badge={canInvest ? `${availableCoins} available · ${remainingCapacity} round capacity` : 'locked'}
+    >
       <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
-        Participant budget each round = 100 + coins invested into their comments in the previous round. Creator budget resets to 200.
+        Submit one Idea to earn 100 Coin. Participant investment is capped at 150 per round and 50 per Idea, in steps of 10. Unspent Coin carries forward. Creator resets to 200.
+        {marketPrivacyActive && <span className="mt-1 block font-black">Authors, live totals, other investors, and rankings stay hidden until investing closes.</span>}
+        {investmentLocked && <span className="mt-1 block font-black">The market is locked. Results are revealed while Creator resolves the final ranking.</span>}
       </div>
       <div className="grid md:grid-cols-2 gap-4">
         {sortedComments.length === 0 ? (
           <div className="md:col-span-2 rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-400">Comments will become investment options after commenting.</div>
         ) : (
           sortedComments.map((comment, index) => {
-            const ownComment = role === 'participant' && comment.participant_code === participantCode;
+            const ownComment = role === 'participant' && (comment.is_own || comment.participant_code === participantCode);
             const selectedIdea = selectionByComment.get(comment.id);
+            const existingInvestment = ownInvestments.find((investment) => investment.comment_id === comment.id);
+            const amount = amounts[comment.id] ?? Number(existingInvestment?.amount || 10);
+            const delta = amount - Number(existingInvestment?.amount || 0);
+            const exceedsBalance = delta > availableCoins;
+            const exceedsRoundLimit = committedThisRound - Number(existingInvestment?.amount || 0) + amount > roundLimit;
             return (
               <div
                 key={comment.id}
@@ -1285,8 +1355,14 @@ function InvestmentPanel({
                 )}
               >
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-black text-blue-600">#{index + 1} · {comment.participant_code}</span>
-                  <span className="text-xs font-black text-amber-600">{comment.invested || 0} coins</span>
+                  <span className="text-xs font-black text-blue-600">
+                    {marketPrivacyActive
+                      ? `${comment.is_own ? 'Your Idea' : 'Anonymous Idea'} ${index + 1}`
+                      : `#${index + 1} · ${comment.participant_code}`}
+                  </span>
+                  <span className="text-xs font-black text-amber-600">
+                    {marketPrivacyActive ? (existingInvestment ? `Your stake: ${existingInvestment.amount}` : 'Market total hidden') : `${comment.invested || 0} coins`}
+                  </span>
                 </div>
                 <p className="text-sm text-slate-600 leading-6 min-h-[72px]">{comment.content}</p>
                 {selectedIdea && (
@@ -1296,22 +1372,30 @@ function InvestmentPanel({
                   </div>
                 )}
                 <div className="mt-4 flex gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    value={amounts[comment.id] || 10}
+                  <select
+                    value={amount}
                     onChange={(event) => setAmounts((prev) => ({ ...prev, [comment.id]: Number(event.target.value) }))}
                     disabled={!canInvest || ownComment || isBusy}
                     className="w-24 rounded-xl border border-blue-100 px-3 text-sm font-bold outline-none disabled:bg-slate-50"
-                  />
+                  >
+                    {[10, 20, 30, 40, 50].map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
                   <button
-                    disabled={!canInvest || ownComment || isBusy}
+                    disabled={!canInvest || ownComment || isBusy || exceedsBalance || exceedsRoundLimit}
                     onClick={() =>
-                      onRun(() => studyApi.invest(role, participantCode, comment.id, amounts[comment.id] || 10))
+                      onRun(() => studyApi.invest(role, participantCode, comment.id, amount))
                     }
                     className="flex-1 h-11 rounded-xl bg-gradient-to-r from-amber-400 to-violet-500 text-white text-xs font-black disabled:bg-none disabled:bg-slate-200 disabled:text-slate-400"
                   >
-                    {ownComment ? 'Own comment' : 'Invest'}
+                    {ownComment
+                      ? 'Own Idea'
+                      : exceedsBalance
+                        ? 'Not enough Coin'
+                        : exceedsRoundLimit
+                          ? 'Round limit reached'
+                          : existingInvestment
+                            ? `Update stake to ${amount}`
+                            : `Invest ${amount}`}
                   </button>
                 </div>
               </div>
@@ -1606,6 +1690,8 @@ function EndedArchive({
         </div>
       </section>
 
+      {!isAborted && <FinalCoinLeaderboard entries={state.leaderboard} />}
+
       <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
         <Card title="Round progress" icon={<Clock3 />} badge={`${state.versions.length} snapshots`}>
           <div className="max-h-[720px] space-y-3 overflow-y-auto pr-1 custom-scrollbar-light">
@@ -1777,6 +1863,59 @@ function ArchiveStat({ label, value }: { label: string; value: React.ReactNode }
   );
 }
 
+function FinalCoinLeaderboard({ entries }: { entries: StudyLeaderboardEntry[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <Card title="Final Coin leaderboard" icon={<Trophy />} badge={`${entries.length} Participants`}>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[860px] border-separate border-spacing-y-2 text-left">
+          <thead>
+            <tr className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+              <th className="px-4 py-2">Rank</th>
+              <th className="px-4 py-2">Participant</th>
+              <th className="px-4 py-2">Final Coin</th>
+              <th className="px-4 py-2">Top 3 Ideas</th>
+              <th className="px-4 py-2">First place</th>
+              <th className="px-4 py-2">Received</th>
+              <th className="px-4 py-2">Author earnings</th>
+              <th className="px-4 py-2">Investment net</th>
+              <th className="px-4 py-2">Top 3 hits</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry) => (
+              <tr
+                key={entry.participant_code}
+                className={cn(
+                  'text-sm font-bold text-slate-600',
+                  entry.rank === 1 ? 'bg-amber-50' : 'bg-white/80',
+                )}
+              >
+                <td className="rounded-l-2xl px-4 py-4 text-lg font-black text-blue-950">
+                  {entry.rank === 1 ? '🏆' : `#${entry.rank}`}
+                </td>
+                <td className="px-4 py-4 font-black text-blue-700">{entry.participant_code}</td>
+                <td className="px-4 py-4 text-lg font-black text-amber-600">{entry.coins}</td>
+                <td className="px-4 py-4">{entry.top_three_count}</td>
+                <td className="px-4 py-4">{entry.first_place_count}</td>
+                <td className="px-4 py-4">{entry.received_investment}</td>
+                <td className="px-4 py-4 text-emerald-600">+{entry.author_earnings}</td>
+                <td className={cn('px-4 py-4', entry.investment_net >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
+                  {entry.investment_net >= 0 ? '+' : ''}{entry.investment_net}
+                </td>
+                <td className="rounded-r-2xl px-4 py-4">{entry.top_three_hits}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-[11px] leading-5 text-slate-400">
+        Ranking is determined by final Coin. Ties are resolved by investment net, first-place Ideas, then total Top 3 Ideas.
+      </p>
+    </Card>
+  );
+}
+
 function VersionTimeline({ state }: { state: StudyState }) {
   return (
     <Card title="Version evolution" icon={<Eye />} badge={`${state.versions.length} versions`}>
@@ -1818,12 +1957,14 @@ function VersionTimeline({ state }: { state: StudyState }) {
   );
 }
 
-function CommentCard({ comment }: { comment: StudyComment }) {
+function CommentCard({ comment, hideMarketInfo = false }: { comment: StudyComment; hideMarketInfo?: boolean }) {
   return (
     <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
       <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-black text-blue-600">#{comment.id} · {comment.participant_code}</p>
-        <p className="text-xs font-black text-amber-600">{comment.invested || 0} coins</p>
+        <p className="text-xs font-black text-blue-600">
+          {hideMarketInfo ? (comment.is_own ? 'Your anonymous Idea' : 'Anonymous Idea') : `#${comment.id} · ${comment.participant_code}`}
+        </p>
+        <p className="text-xs font-black text-amber-600">{hideMarketInfo ? 'Investment hidden' : `${comment.invested || 0} coins`}</p>
       </div>
       <p className="text-sm text-slate-600 leading-6">{comment.content}</p>
     </div>
