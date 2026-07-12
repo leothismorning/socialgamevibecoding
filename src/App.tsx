@@ -19,6 +19,7 @@ import {
   Undo2,
   Trash2,
   Trophy,
+  UserRound,
   Users,
   Vote,
   X,
@@ -129,11 +130,20 @@ export default function App() {
     return <LoadingScreen />;
   }
 
+  const identityLabel = role === 'creator'
+    ? 'Creator / Host'
+    : role === 'participant'
+      ? participantCode
+        ? `Participant · ${participantCode}`
+        : 'Participant · Not joined'
+      : undefined;
+
   if (archiveState) {
     return (
       <Shell
         error={error}
         isBusy={isBusy}
+        identityLabel={identityLabel}
         onRefresh={() => openArchive(archiveState.experiment!.id)}
         onLeave={() => {
           setArchiveState(null);
@@ -155,7 +165,7 @@ export default function App() {
 
   if (role === 'creator' && (!state.experiment || showCreatorSetup)) {
     return (
-      <Shell error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
+      <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
         <CreatorSetup
           existingExperimentTitle={state.experiment?.title}
           onCancel={state.experiment ? () => setShowCreatorSetup(false) : undefined}
@@ -179,7 +189,7 @@ export default function App() {
 
   if (role === 'participant' && (!participantCode || !hasJoinedActiveExperiment)) {
     return (
-      <Shell error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
+      <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
         <ParticipantGate
           onJoin={(code) =>
             run(async () => {
@@ -196,7 +206,7 @@ export default function App() {
   }
 
   return (
-    <Shell error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
+    <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
       <StudyRoom
         state={state}
         role={role}
@@ -233,12 +243,14 @@ function Shell({
   children,
   error,
   isBusy,
+  identityLabel,
   onRefresh,
   onLeave,
 }: {
   children: React.ReactNode;
   error: string | null;
   isBusy: boolean;
+  identityLabel?: string;
   onRefresh: () => void;
   onLeave: () => void;
 }) {
@@ -262,6 +274,13 @@ function Shell({
         </div>
 
         <div className="flex items-center gap-3">
+          {identityLabel && (
+            <div className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/80 px-3 text-xs font-black text-blue-950 shadow-sm sm:px-4">
+              <UserRound className="h-4 w-4 text-violet-500" />
+              <span className="hidden text-slate-400 xl:inline">当前身份</span>
+              <span>{identityLabel}</span>
+            </div>
+          )}
           <button
             onClick={onRefresh}
             className="h-11 px-4 rounded-2xl bg-white border border-blue-100 text-slate-500 hover:text-blue-600 shadow-sm flex items-center gap-2 text-xs font-bold transition"
