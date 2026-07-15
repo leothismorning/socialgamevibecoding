@@ -134,6 +134,7 @@ export interface StudyComment {
   content: string;
   selected: 0 | 1;
   invested: number;
+  investor_count: number;
   created_at: string;
   updated_at?: string;
   deleted_at?: string | null;

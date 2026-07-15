@@ -39,7 +39,6 @@ import {
   StudyEndVote,
   StudyEndVoteSummary,
   StudyFusionPlan,
-  StudyInvestment,
   StudyLeaderboardEntry,
   StudyPhase,
   StudySelectedIdea,
@@ -52,6 +51,8 @@ import { useGlobalPointerSpotlight } from './hooks/useGlobalPointerSpotlight';
 import { VersionEvolution } from './components/VersionEvolution';
 import { ThemeToggle } from './theme';
 import { CursorSafeIframe } from './components/CursorSafeIframe';
+import { ParticipantRoster } from './components/ParticipantRoster';
+import { LiveCommentLeaderboard } from './components/LiveCommentLeaderboard';
 
 type Role = 'creator' | 'participant';
 
@@ -68,6 +69,9 @@ const phaseLabels: Record<StudyPhase, { title: string; subtitle: string; tone: s
 };
 
 const participantCodePattern = /^P(?:[1-9]|1[0-9])$/;
+const ROOM_CAPACITY = 20;
+const MINIMUM_ROOM_OCCUPANCY = 15;
+const COMMENT_CHARACTER_LIMIT = 280;
 
 function getParticipantClientId() {
   const stored = localStorage.getItem('participant-client-id');
@@ -80,7 +84,7 @@ function getParticipantClientId() {
 function getRankedComments(comments: StudyComment[]) {
   const originalOrder = new Map(comments.map((comment, index) => [comment.id, index]));
   return [...comments].sort((a, b) =>
-    Number(b.invested || 0) - Number(a.invested || 0) ||
+    Number(b.investor_count || 0) - Number(a.investor_count || 0) ||
     Number(originalOrder.get(a.id)) - Number(originalOrder.get(b.id))
   );
 }
@@ -757,6 +761,7 @@ function StudyRoom({
   const currentRoundState = state.rounds.find((round) => round.round_number === experiment.current_round);
   const investmentLocked = Boolean(currentRoundState?.investment_locked_v3);
   const joinedParticipants = state.participants.filter((participant) => participant.joined_at);
+  const roomOccupancy = joinedParticipants.length + 1;
   const me = state.participants.find((participant) => participant.code === participantCode);
 
   if (experiment.phase === 'ended' || experiment.phase === 'aborted') {
@@ -774,7 +779,7 @@ function StudyRoom({
       <div className="study-stats grid grid-cols-2 lg:grid-cols-5 gap-4">
         <TopStat icon={<Sparkles />} label={experiment.title} value={`Round ${experiment.current_round}/${experiment.max_rounds}`} />
         <TopStat icon={<Clock3 />} label={phase.subtitle} value={phase.title} tone={phase.tone} />
-        <TopStat icon={<Users />} label="Joined participants" value={`${joinedParticipants.length}/19`} />
+        <TopStat icon={<Users />} label="Joined participants" value={`${roomOccupancy}/${ROOM_CAPACITY}`} />
         <TopStat
           icon={<CircleDollarSign />}
           label={role === 'creator' ? 'Creator coins' : `${participantCode || 'Participant'} coins`}
@@ -786,6 +791,12 @@ function StudyRoom({
           value={`${state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round).length}/3`}
         />
       </div>
+
+      <ParticipantRoster
+        participants={state.participants}
+        minimumOccupancy={MINIMUM_ROOM_OCCUPANCY}
+        capacity={ROOM_CAPACITY}
+      />
 
       <div className="workbench-primary-grid grid items-start xl:grid-cols-[minmax(0,1fr)_480px] gap-6">
         <section className="prototype-frame workbench-preview flex min-h-0 flex-col rounded-[2rem] bg-white/80 border border-white shadow-xl shadow-blue-100 overflow-hidden">
@@ -825,6 +836,8 @@ function StudyRoom({
             endVoteSummary={state.endVoteSummary}
             tiedComments={tiedComments}
             tieRankScores={tieRankScores}
+            roomOccupancy={roomOccupancy}
+            minimumRoomOccupancy={MINIMUM_ROOM_OCCUPANCY}
             onRun={onRun}
             onAbortExperiment={onAbortExperiment}
           />
@@ -847,19 +860,18 @@ function StudyRoom({
             />
           )}
           <div className="feedback-market-group">
-            <InvestmentPanel
+            <LiveCommentLeaderboard
               role={role}
               participantCode={participantCode}
               phase={experiment.phase}
               comments={currentComments}
               investments={state.investments.filter((investment) => investment.round_number === experiment.current_round)}
-              marketPrivacyActive={state.marketPrivacyActive}
               investmentLocked={investmentLocked}
-              participantCoins={me?.coins || 0}
-              creatorCoins={experiment.creator_coins}
+              availableCoins={role === 'creator' ? experiment.creator_coins : me?.coins || 0}
               selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
               onRun={onRun}
               isBusy={isBusy}
+              invest={(commentId, amount) => studyApi.invest(role, participantCode, commentId, amount)}
             />
             <CommentPanel
               role={role}
@@ -915,6 +927,8 @@ function CreatorControls({
   endVoteSummary,
   tiedComments,
   tieRankScores,
+  roomOccupancy,
+  minimumRoomOccupancy,
   onRun,
   onAbortExperiment,
 }: {
@@ -928,6 +942,8 @@ function CreatorControls({
   endVoteSummary: StudyEndVoteSummary;
   tiedComments: StudyComment[];
   tieRankScores: number[];
+  roomOccupancy: number;
+  minimumRoomOccupancy: number;
   onRun: (action: () => Promise<StudyState>) => void;
   onAbortExperiment: () => void;
 }) {
@@ -937,7 +953,7 @@ function CreatorControls({
   React.useEffect(() => {
     const used = new Set<number>();
     const defaults = tieRankScores.map((score) => {
-      const match = tiedComments.find((comment) => Number(comment.invested || 0) === score && !used.has(comment.id));
+      const match = tiedComments.find((comment) => Number(comment.investor_count || 0) === score && !used.has(comment.id));
       if (match) used.add(match.id);
       return match?.id || 0;
     });
@@ -955,7 +971,10 @@ function CreatorControls({
   const actions: Partial<Record<StudyPhase, { label: string; helper: string; run: () => Promise<StudyState>; icon: React.ReactNode }>> = {
     experience: {
       label: 'Start commenting',
-      helper: 'Participants can now submit timed comments.',
+      helper:
+        roomOccupancy >= minimumRoomOccupancy
+          ? `${roomOccupancy}/20 people are ready. Participants can now submit timed comments.`
+          : `At least ${minimumRoomOccupancy} people including Host are required. Current room: ${roomOccupancy}/20.`,
       run: () => studyApi.setPhase('commenting'),
       icon: <MessageCircle />,
     },
@@ -1020,7 +1039,11 @@ function CreatorControls({
       ) : action ? (
         <>
           <button
-            disabled={isBusy || (phase === 'investing' && commentCount < 3)}
+            disabled={
+              isBusy ||
+              (phase === 'experience' && roomOccupancy < minimumRoomOccupancy) ||
+              (phase === 'investing' && commentCount < 3)
+            }
             onClick={() => onRun(action.run)}
             className="primary-action w-full h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2 [&_svg]:h-5 [&_svg]:w-5"
           >
@@ -1054,14 +1077,14 @@ function CreatorControls({
           <div className="mb-3">
             <p className="text-xs font-black text-amber-700">Tie resolution</p>
             <p className="mt-1 text-[11px] leading-5 text-amber-700/80">
-              Creator can only choose between ideas with the same coin total. Higher-voted ideas remain locked.
+              Creator can only choose between ideas with the same vote total. Higher-voted ideas remain locked.
             </p>
           </div>
           <div className="space-y-3">
             {tieRankScores.map((score, index) => (
               <label key={`${score}-${index}`} className="block">
                 <span className="mb-1 block text-[11px] font-black text-slate-500">
-                  Rank #{index + 1} · {index === 0 ? 'Core' : 'Supporting'} · {score} coins
+                  Rank #{index + 1} · {index === 0 ? 'Core' : 'Supporting'} · {score} votes
                 </span>
                 <select
                   value={tieChoices[index] || ''}
@@ -1076,7 +1099,7 @@ function CreatorControls({
                 >
                   <option value="">Choose tied idea</option>
                   {tiedComments
-                    .filter((comment) => Number(comment.invested || 0) === score)
+                    .filter((comment) => Number(comment.investor_count || 0) === score)
                     .map((comment) => (
                       <option
                         key={comment.id}
@@ -1119,7 +1142,7 @@ function CreatorControls({
                 <span className="text-xs font-black text-blue-700">
                   #{idea.selection_rank} · {idea.selection_role === 'core' ? 'Core' : 'Supporting'} · {idea.participant_code}
                 </span>
-                <span className="text-[11px] font-black text-amber-600">{idea.invested} coins</span>
+                <span className="text-[11px] font-black text-amber-600">{idea.investor_count} votes</span>
               </div>
               <p className="mt-2 text-xs leading-5 text-slate-600">{idea.content}</p>
             </div>
@@ -1251,12 +1274,17 @@ function CommentPanel({
       )}
       <textarea
         value={content}
-        onChange={(event) => setContent(event.target.value)}
+        onChange={(event) => setContent(event.target.value.slice(0, COMMENT_CHARACTER_LIMIT))}
         disabled={!canComment || isBusy}
+        maxLength={COMMENT_CHARACTER_LIMIT}
         placeholder={canComment ? '写下你希望下一版怎么改...' : '评论阶段开放后才可以提交'}
         rows={5}
         className="comment-composer w-full resize-none overflow-y-auto rounded-2xl border border-blue-100 bg-white/80 p-4 text-sm outline-none focus:border-blue-300 disabled:bg-slate-50 disabled:text-slate-400"
       />
+      <div className="comment-composer-count" aria-live="polite">
+        <span>{content.trim() ? '已输入' : '评论内容'}</span>
+        <strong>{content.length}/{COMMENT_CHARACTER_LIMIT}</strong>
+      </div>
       <button
         onClick={submit}
         disabled={!canComment || !content.trim() || isBusy}
@@ -1288,256 +1316,6 @@ function CommentPanel({
       </div>
 
       {composer}
-    </Card>
-  );
-}
-
-function InvestmentPanel({
-  role,
-  participantCode,
-  phase,
-  comments,
-  investments,
-  marketPrivacyActive,
-  investmentLocked,
-  participantCoins,
-  creatorCoins,
-  selectedIdeas,
-  onRun,
-  isBusy,
-}: {
-  role: Role;
-  participantCode: string;
-  phase: StudyPhase;
-  comments: StudyComment[];
-  investments: StudyInvestment[];
-  marketPrivacyActive: boolean;
-  investmentLocked: boolean;
-  participantCoins: number;
-  creatorCoins: number;
-  selectedIdeas: StudySelectedIdea[];
-  onRun: (action: () => Promise<StudyState>) => void;
-  isBusy: boolean;
-}) {
-  const [pendingInvestmentIds, setPendingInvestmentIds] = React.useState<Set<number>>(() => new Set());
-  const [successfulInvestmentId, setSuccessfulInvestmentId] = React.useState<number | null>(null);
-  const [reactionFeedback, setReactionFeedback] = React.useState<{ commentId: number; label: string } | null>(null);
-  const successTimer = React.useRef<number | null>(null);
-
-  const clearInvestmentSuccess = React.useCallback((commentId: number) => {
-    setSuccessfulInvestmentId((current) => current === commentId ? null : current);
-    setReactionFeedback((current) => current?.commentId === commentId ? null : current);
-    if (successTimer.current !== null) {
-      window.clearTimeout(successTimer.current);
-      successTimer.current = null;
-    }
-  }, []);
-
-  React.useEffect(() => () => {
-    if (successTimer.current !== null) window.clearTimeout(successTimer.current);
-  }, []);
-
-  const investWithSuccessFeedback = (
-    commentId: number,
-    currentAmount: number,
-    nextAmount: number,
-  ) => {
-    if (pendingInvestmentIds.has(commentId)) return;
-    setPendingInvestmentIds((current) => new Set(current).add(commentId));
-    onRun(async () => {
-      try {
-        const next = await studyApi.invest(role, participantCode, commentId, nextAmount);
-        setSuccessfulInvestmentId(null);
-        setReactionFeedback(null);
-        window.requestAnimationFrame(() => {
-          setSuccessfulInvestmentId(commentId);
-          setReactionFeedback({
-            commentId,
-            label: nextAmount === 0 ? `+${currentAmount}` : '+20',
-          });
-        });
-        if (successTimer.current !== null) window.clearTimeout(successTimer.current);
-        successTimer.current = window.setTimeout(() => clearInvestmentSuccess(commentId), 900);
-        return next;
-      } finally {
-        setPendingInvestmentIds((current) => {
-          const updated = new Set(current);
-          updated.delete(commentId);
-          return updated;
-        });
-      }
-    });
-  };
-  const isInvestmentPhase = phase === 'investing';
-  const canInvest = isInvestmentPhase && !investmentLocked;
-  const sortedComments = React.useMemo(
-    () => marketPrivacyActive ? [...comments] : getRankedComments(comments),
-    [comments, marketPrivacyActive],
-  );
-  const investmentListRef = React.useRef<HTMLDivElement>(null);
-  const previousCardPositions = React.useRef(new Map<number, DOMRect>());
-
-  React.useLayoutEffect(() => {
-    const list = investmentListRef.current;
-    if (!list) return;
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const nextPositions = new Map<number, DOMRect>();
-
-    list.querySelectorAll<HTMLElement>('[data-investment-card-id]').forEach((element) => {
-      const id = Number(element.dataset.investmentCardId);
-      const next = element.getBoundingClientRect();
-      const previous = previousCardPositions.current.get(id);
-      nextPositions.set(id, next);
-      if (!reduceMotion && previous) {
-        const deltaY = previous.top - next.top;
-        if (Math.abs(deltaY) > 1) {
-          element.animate(
-            [{ transform: `translateY(${deltaY}px)` }, { transform: 'translateY(0)' }],
-            { duration: 280, easing: 'cubic-bezier(.22,1,.36,1)' },
-          );
-        }
-      }
-    });
-
-    previousCardPositions.current = nextPositions;
-  }, [sortedComments]);
-  const availableCoins = role === 'creator' ? creatorCoins : participantCoins;
-  const selectionByComment = new Map(selectedIdeas.map((idea) => [idea.comment_id, idea]));
-  const investmentCode = role === 'creator' ? 'CREATOR' : participantCode;
-  const ownInvestments = investments.filter((investment) => investment.participant_code === investmentCode);
-  const committedThisRound = ownInvestments.reduce((sum, investment) => sum + Number(investment.amount || 0), 0);
-  const roundLimit = role === 'creator' ? 200 : 150;
-
-  return (
-    <Card
-      title="Investment leaderboard"
-      icon={<Trophy />}
-      badge={`剩余金币：${availableCoins}${canInvest ? '' : ' · 已锁定'}`}
-    >
-      <div className="leaderboard-rules mb-4">
-        <strong>Investment leaderboard</strong>
-        <span>Tap the coin reaction to add 20 · up to 100 per Idea · 150 per participant each round</span>
-        {marketPrivacyActive && <span className="mt-1 block font-black">Authors, live totals, other investors, and rankings stay hidden until investing closes.</span>}
-        {investmentLocked && <span className="mt-1 block font-black">The market is locked. Results are revealed while Creator resolves the final ranking.</span>}
-      </div>
-      <div ref={investmentListRef} className="investment-scroll-region grid min-h-0 gap-3 overflow-y-auto pr-1 custom-scrollbar-light">
-        {sortedComments.length === 0 ? (
-          <div className="md:col-span-2 rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-400">Comments will become investment options after commenting.</div>
-        ) : (
-          sortedComments.map((comment, index) => {
-            const ownComment = role === 'participant' && (comment.is_own || comment.participant_code === participantCode);
-            const selectedIdea = selectionByComment.get(comment.id);
-            const existingInvestment = ownInvestments.find((investment) => investment.comment_id === comment.id);
-            const currentAmount = Number(existingInvestment?.amount || 0);
-            const nextAmount = currentAmount === 100 ? 0 : currentAmount + 20;
-            const addsCoins = nextAmount > currentAmount;
-            const exceedsBalance = addsCoins && availableCoins < 20;
-            const exceedsRoundLimit = addsCoins && committedThisRound + 20 > roundLimit;
-            const reactionPending = pendingInvestmentIds.has(comment.id);
-            const reactionDisabled = !canInvest || ownComment || isBusy || reactionPending || exceedsBalance || exceedsRoundLimit;
-            const visibleRank = marketPrivacyActive ? null : index + 1;
-            return (
-              <div
-                key={comment.id}
-                className={cn('ranked-idea-item min-w-0', ownComment && 'is-own-idea')}
-                data-investment-card-id={comment.id}
-              >
-              <InteractiveSurface
-                strength="bet"
-                disabled={!canInvest || ownComment || isBusy}
-                className={cn(
-                  'bet-action',
-                  successfulInvestmentId === comment.id && 'bet-action-success',
-                )}
-                onAnimationEnd={(event) => {
-                  if (event.animationName === 'investment-success-pulse') {
-                    clearInvestmentSuccess(comment.id);
-                  }
-                }}
-              >
-              <div
-                className={cn(
-                  'bet-action-panel unified-ranked-comment rounded-2xl border p-4 bg-white/80 transition',
-                  !marketPrivacyActive && `ranking-tier-${Math.min(index + 1, 5)}`,
-                  ownComment && 'own-idea-card',
-                  comment.selected ? 'selected border-violet-300 shadow-lg shadow-violet-100' : 'border-blue-100',
-                )}
-              >
-                <div className="ranked-idea-header">
-                  <span className="rank-number" aria-label={visibleRank ? `Rank ${visibleRank}` : 'Ranking hidden'}>
-                    <small>RANK</small>
-                    <strong>{visibleRank ?? '—'}</strong>
-                  </span>
-                  <div className="ranked-idea-identity">
-                    <div className="ranked-idea-labels">
-                      <strong>{marketPrivacyActive ? (ownComment ? 'YOUR IDEA' : 'ANONYMOUS IDEA') : comment.participant_code}</strong>
-                      {visibleRank && visibleRank <= 3 && <span>TOP {visibleRank}</span>}
-                      {ownComment && <span className="own-idea-label">OWN IDEA</span>}
-                    </div>
-                    <span>{ownComment ? 'Your submitted direction' : 'Community direction'}</span>
-                  </div>
-                  <div className="ranked-idea-score">
-                    <strong>{marketPrivacyActive ? '—' : Number(comment.invested || 0)}</strong>
-                    <span>COINS</span>
-                  </div>
-                </div>
-                <div className="ranked-idea-body">
-                  <ExpandableCommentText content={comment.content} className="ranked-idea-content" />
-                  <div className="coin-reaction-wrap">
-                    <button
-                      type="button"
-                      disabled={reactionDisabled}
-                      onClick={() => investWithSuccessFeedback(comment.id, currentAmount, nextAmount)}
-                      className={cn(
-                        'coin-reaction-button',
-                        currentAmount > 0 && 'is-active',
-                        successfulInvestmentId === comment.id && 'is-reacting',
-                        exceedsBalance && 'is-insufficient',
-                      )}
-                      aria-label={
-                        ownComment
-                          ? 'Cannot invest in your own idea'
-                          : currentAmount === 100
-                            ? 'Return the 100 coins invested in this idea'
-                            : `Add 20 coins to this idea. Current investment ${currentAmount}`
-                      }
-                      aria-pressed={currentAmount > 0}
-                    >
-                      <CircleDollarSign aria-hidden="true" />
-                      <span>{currentAmount}</span>
-                      {reactionFeedback?.commentId === comment.id && (
-                        <i className="coin-reaction-float" aria-hidden="true">{reactionFeedback.label}</i>
-                      )}
-                    </button>
-                    <span className={cn('coin-reaction-status', (exceedsBalance || exceedsRoundLimit) && 'is-error')}>
-                      {ownComment
-                        ? 'Own idea'
-                        : exceedsBalance
-                          ? '余额不足'
-                          : exceedsRoundLimit
-                            ? '本轮额度已满'
-                            : currentAmount === 100
-                              ? '再次点击返还'
-                              : currentAmount > 0
-                                ? '已投入'
-                                : '点击投入 20'}
-                    </span>
-                  </div>
-                </div>
-                {selectedIdea && (
-                  <div className="selected-idea-badge mt-3 inline-flex items-center gap-1 px-3 py-1 text-xs font-black">
-                    <BadgeCheck className="h-3 w-3" />
-                    #{selectedIdea.selection_rank} {selectedIdea.selection_role === 'core' ? 'Core idea' : 'Supporting idea'}
-                  </div>
-                )}
-                {!marketPrivacyActive && visibleRank === 1 && <strong className="ranked-leading-label">LEADING</strong>}
-              </div>
-              </InteractiveSurface>
-              </div>
-            );
-          })
-        )}
-      </div>
     </Card>
   );
 }
@@ -2101,7 +1879,7 @@ function CommentCard({
         <p className="text-xs font-black text-blue-600">
           {hideMarketInfo ? (comment.is_own ? 'Your anonymous Idea' : 'Anonymous Idea') : `#${rank ?? '—'} · ${comment.participant_code}`}
         </p>
-        <p className="text-xs font-black text-amber-600">{hideMarketInfo ? 'Investment hidden' : `${comment.invested || 0} coins`}</p>
+        <p className="text-xs font-black text-amber-600">{hideMarketInfo ? 'Voting hidden' : `${comment.investor_count || 0} votes`}</p>
       </div>
       <ExpandableCommentText content={comment.content} />
     </div>

@@ -250,8 +250,10 @@
 }
 
 .participantTitle {
-  font-size: clamp(18px, 1.72vw, 23px);
+  width: 100%;
+  font-size: clamp(16px, 1.55vw, 21px);
   letter-spacing: -.055em !important;
+  text-align: center;
 }
 
 .backKeywords span {
@@ -262,6 +264,7 @@
 
 .participantKeywords {
   top: 58%;
+  width: 52%;
 }
 
 .cardCopy {

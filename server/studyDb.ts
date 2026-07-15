@@ -609,45 +609,15 @@ function ensureIdeaDisplayOrder(experimentId: string, roundNumber: number, viewe
 export function filterStudyStateForViewer(state: StudyState, viewer: StudyViewer = {}): StudyState {
   const experiment = state.experiment;
   if (!experiment || experiment.phase !== 'investing') return state;
-  const currentRound = state.rounds.find((round: any) => round.round_number === experiment.current_round) as any;
-  const marketLocked = Number(currentRound?.investment_locked_v3 || 0) === 1;
-
   const participantCode = String(viewer.participantCode || '').trim().toUpperCase();
-  const viewerKey = viewer.role === 'participant' && participantCode
-    ? participantCode
-    : viewer.role === 'creator'
-      ? 'CREATOR'
-      : 'ANONYMOUS';
-  let comments = state.comments;
-  if (!marketLocked) {
-    const currentComments = state.comments.filter((comment) => comment.round_number === experiment.current_round);
-    const displayOrder = ensureIdeaDisplayOrder(
-      experiment.id,
-      experiment.current_round,
-      viewerKey,
-      currentComments.map((comment) => Number(comment.id)),
-    );
-    const historicalComments = state.comments.filter((comment) => comment.round_number !== experiment.current_round);
-    const privateCurrentComments = currentComments
-      .map((comment) => {
-        const isOwn = viewer.role === 'participant' && comment.participant_code === participantCode;
-        return {
-          ...comment,
-          participant_code: isOwn ? 'YOU' : 'ANONYMOUS',
-          participant_name: undefined,
-          invested: 0,
-          is_own: isOwn,
-          display_order: displayOrder.get(Number(comment.id)) || 0,
-        };
-      })
-      .sort((a, b) => Number(a.display_order) - Number(b.display_order));
-    comments = [...historicalComments, ...privateCurrentComments];
-  }
   const ownInvestmentCode = viewer.role === 'creator' ? 'CREATOR' : participantCode;
 
   return {
     ...state,
-    comments,
+    comments: state.comments.map((comment) => ({
+      ...comment,
+      is_own: viewer.role === 'participant' && comment.participant_code === participantCode,
+    })),
     investments: ownInvestmentCode
       ? state.investments.filter((investment) => investment.participant_code === ownInvestmentCode)
       : [],
@@ -663,7 +633,7 @@ export function filterStudyStateForViewer(state: StudyState, viewer: StudyViewer
           : false,
     ),
     leaderboard: [],
-    marketPrivacyActive: !marketLocked,
+    marketPrivacyActive: false,
   };
 }
 
@@ -711,7 +681,8 @@ export function getStudyState(experimentId?: string): StudyState {
   const versions = db.prepare(`SELECT * FROM versions WHERE experiment_id = ? ORDER BY round_number ASC, id ASC`).all(experiment.id);
   const comments = db
     .prepare(`
-      SELECT c.*, p.name AS participant_name, COALESCE(SUM(i.amount), 0) AS invested
+      SELECT c.*, p.name AS participant_name, COALESCE(SUM(i.amount), 0) AS invested,
+             COUNT(DISTINCT i.participant_code) AS investor_count
       FROM comments c
       LEFT JOIN participants p ON p.code = c.participant_code
       LEFT JOIN investments i ON i.comment_id = c.id
@@ -948,6 +919,15 @@ export function setPhase(toPhase: StudyPhase) {
   if (!valid.includes(toPhase)) throw new Error('Invalid phase.');
 
   const fromPhase = experiment.phase;
+  if (fromPhase === 'experience' && toPhase === 'commenting') {
+    const joinedParticipants = Number(
+      (db.prepare(`SELECT COUNT(*) AS count FROM participant_sessions WHERE experiment_id = ?`).get(experiment.id) as any)?.count || 0,
+    );
+    const roomOccupancy = joinedParticipants + 1;
+    if (roomOccupancy < 15) {
+      throw new Error(`At least 15 people including the Host are required to start. Current room: ${roomOccupancy}/20.`);
+    }
+  }
   if (toPhase === 'investing') {
     prepareInvestmentPhase(experiment.id, experiment.current_round);
   }
@@ -985,6 +965,7 @@ export function addComment(participantCode: string, content: string) {
 
   const text = content.trim();
   if (!text) throw new Error('Comment cannot be empty.');
+  if (text.length > 280) throw new Error('Comment cannot exceed 280 characters.');
 
   const existingComments = db
     .prepare(`
@@ -1092,16 +1073,16 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
     if (!isCreator && comment.participant_code === cleanCode) throw new Error('Participants cannot invest in their own comment.');
 
     const value = Math.floor(Number(amount));
-    if (![0, 20, 40, 60, 80, 100].includes(value)) {
-      throw new Error('Coin reactions must be 0, 20, 40, 60, 80, or 100 coins.');
+    if (![0, 20].includes(value)) {
+      throw new Error('A comment vote must be either 20 coins or withdrawn to 0.');
     }
     const previous = db
       .prepare(`SELECT * FROM investments WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id = ?`)
       .get(experiment.id, experiment.current_round, cleanCode, commentId) as any;
     const previousAmount = Number(previous?.amount || 0);
-    const expectedAmount = previousAmount === 100 ? 0 : previousAmount + 20;
+    const expectedAmount = previousAmount > 0 ? 0 : 20;
     if (value !== expectedAmount) {
-      const error: any = new Error(`Investment changed elsewhere. The next valid reaction is ${expectedAmount} coins.`);
+      const error: any = new Error(previousAmount > 0 ? 'You have already voted for this comment.' : 'This vote changed elsewhere. Try again.');
       error.status = 409;
       throw error;
     }
@@ -1128,8 +1109,6 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
     const timestamp = now();
     if (value === 0) {
       db.prepare(`DELETE FROM investments WHERE id = ?`).run(previous.id);
-    } else if (previous) {
-      db.prepare(`UPDATE investments SET amount = ?, created_at = ? WHERE id = ?`).run(value, timestamp, previous.id);
     } else {
       db.prepare(`
         INSERT INTO investments (experiment_id, round_number, participant_code, comment_id, amount, created_at, actor_type)
@@ -1299,16 +1278,16 @@ export function selectTopIdeas(commentIds?: number[]) {
       LEFT JOIN investments i ON i.comment_id = c.id
       WHERE c.experiment_id = ? AND c.round_number = ? AND c.deleted_at IS NULL
       GROUP BY c.id
-      ORDER BY invested DESC, c.created_at ASC, c.id ASC
+      ORDER BY investor_count DESC, c.created_at ASC, c.id ASC
     `)
     .all(experiment.id, experiment.current_round) as any[];
 
   if (totals.length < 3) throw new Error('At least three ideas are required before the voting result can be locked.');
-  const rankScores = totals.slice(0, 3).map((comment) => Number(comment.invested || 0));
+  const rankScores = totals.slice(0, 3).map((comment) => Number(comment.investor_count || 0));
   const relevantScores = new Set(rankScores);
-  const tieComments = totals.filter((comment) => relevantScores.has(Number(comment.invested || 0)));
+  const tieComments = totals.filter((comment) => relevantScores.has(Number(comment.investor_count || 0)));
   const hasRelevantTie = [...relevantScores].some(
-    (score) => totals.filter((comment) => Number(comment.invested || 0) === score).length > 1,
+    (score) => totals.filter((comment) => Number(comment.investor_count || 0) === score).length > 1,
   );
 
   if ((!commentIds || commentIds.length === 0) && hasRelevantTie) {
@@ -1330,7 +1309,7 @@ export function selectTopIdeas(commentIds?: number[]) {
     }
     selected = commentIds.map((commentId, index) => {
       const comment = totals.find((item) => item.id === commentId);
-      if (!comment || Number(comment.invested || 0) !== rankScores[index]) {
+      if (!comment || Number(comment.investor_count || 0) !== rankScores[index]) {
         throw new Error('Creator may only reorder or choose ideas tied at that ranking position.');
       }
       return comment;
