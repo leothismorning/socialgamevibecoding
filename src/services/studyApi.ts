@@ -79,7 +79,8 @@ export const studyApi = {
     initialCode: string;
     maxRounds: number;
   }) => requestStudy('experiment', input),
-  join: (participantCode: string) => requestStudy('join', { participantCode }),
+  join: (clientId: string) => requestStudy('join', { clientId }),
+  leave: (clientId: string) => requestStudy('leave', { clientId }),
   setPhase: (phase: StudyPhase) => requestStudy('phase', { phase }),
   rollbackPhase: () => requestStudy('rollback-phase', {}),
   abortExperiment: () => requestStudy('abort-experiment', {}),

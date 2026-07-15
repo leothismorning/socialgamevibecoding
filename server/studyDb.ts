@@ -36,6 +36,7 @@ export type StudyState = {
   ideaRevisions: any[];
   leaderboard: any[];
   marketPrivacyActive: boolean;
+  viewerParticipantCode?: string;
   endVoteSummary: {
     eligible: number;
     yes: number;
@@ -261,6 +262,16 @@ db.exec(`
     last_seen_at TEXT,
     PRIMARY KEY(experiment_id, code)
   );
+
+  CREATE TABLE IF NOT EXISTS participant_sessions (
+    experiment_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    participant_code TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY(experiment_id, client_id),
+    UNIQUE(experiment_id, participant_code)
+  );
 `);
 
 const investmentColumns = db.prepare(`PRAGMA table_info(investments)`).all() as Array<{ name: string }>;
@@ -301,13 +312,26 @@ const seedParticipants = db.transaction(() => {
     INSERT OR IGNORE INTO participants (code, name, role, coins)
     VALUES (?, ?, 'participant', 0)
   `);
-  for (let i = 1; i <= 20; i += 1) {
-    const code = `P${String(i).padStart(2, '0')}`;
-    insert.run(code, `Participant ${String(i).padStart(2, '0')}`);
+  for (let i = 1; i <= 19; i += 1) {
+    const code = `P${i}`;
+    insert.run(code, `Participant ${i}`);
   }
 });
 
 seedParticipants();
+
+const participantAllocationMigration = db
+  .prepare(`SELECT value FROM app_meta WHERE key = 'automatic_participant_allocation_v1'`)
+  .get() as any;
+if (!participantAllocationMigration) {
+  const migrateAutomaticAllocation = db.transaction(() => {
+    // Clear seats selected through the retired P01-P20 picker before automatic assignment begins.
+    db.prepare(`UPDATE participants SET coins = 0, joined_at = NULL, last_seen_at = NULL`).run();
+    db.prepare(`DELETE FROM participant_sessions`).run();
+    db.prepare(`INSERT INTO app_meta (key, value) VALUES ('automatic_participant_allocation_v1', ?)`).run(now());
+  });
+  migrateAutomaticAllocation();
+}
 
 function getActiveExperimentId() {
   const stored = db.prepare(`SELECT value FROM app_meta WHERE key = 'active_experiment_id'`).get() as any;
@@ -330,6 +354,58 @@ function activeExperiment(experimentId?: string) {
   if (!id) return undefined;
   return db.prepare(`SELECT * FROM experiments WHERE id = ?`).get(id) as any | undefined;
 }
+
+function migrateLegacyInvestmentTiers() {
+  const migrated = db.prepare(`SELECT value FROM app_meta WHERE key = 'coin_reaction_tiers_v1'`).get() as any;
+  if (migrated) return;
+  const experiment = activeExperiment();
+  const migration = db.transaction(() => {
+    if (experiment) {
+      const round = db
+        .prepare(`SELECT investment_locked_v3 FROM rounds WHERE experiment_id = ? AND round_number = ?`)
+        .get(experiment.id, experiment.current_round) as any;
+      if (Number(round?.investment_locked_v3 || 0) === 0) {
+        const legacyInvestments = db.prepare(`
+          SELECT * FROM investments WHERE experiment_id = ? AND round_number = ?
+        `).all(experiment.id, experiment.current_round) as any[];
+        const timestamp = now();
+        for (const investment of legacyInvestments) {
+          const amount = Number(investment.amount || 0);
+          if (amount <= 0) continue;
+          if (investment.actor_type === 'creator') {
+            db.prepare(`UPDATE experiments SET creator_coins = creator_coins + ?, updated_at = ? WHERE id = ?`).run(
+              amount,
+              timestamp,
+              experiment.id,
+            );
+          } else {
+            db.prepare(`UPDATE participants SET coins = coins + ? WHERE code = ?`).run(amount, investment.participant_code);
+          }
+          db.prepare(`
+            INSERT INTO coin_events (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
+            VALUES (?, ?, ?, ?, ?, 'investment_reaction_migration_refund', ?, ?)
+          `).run(
+            experiment.id,
+            experiment.current_round,
+            investment.actor_type === 'creator' ? null : investment.participant_code,
+            investment.actor_type || 'participant',
+            amount,
+            String(investment.comment_id),
+            timestamp,
+          );
+        }
+        db.prepare(`DELETE FROM investments WHERE experiment_id = ? AND round_number = ?`).run(
+          experiment.id,
+          experiment.current_round,
+        );
+      }
+    }
+    db.prepare(`INSERT INTO app_meta (key, value) VALUES ('coin_reaction_tiers_v1', ?)`).run(now());
+  });
+  migration.immediate();
+}
+
+migrateLegacyInvestmentTiers();
 
 function snapshotParticipants(experimentId: string) {
   db.prepare(`DELETE FROM experiment_participant_snapshots WHERE experiment_id = ?`).run(experimentId);
@@ -763,6 +839,7 @@ export function createExperiment(input: {
       snapshotParticipants(previousExperiment.id);
     }
     db.prepare(`UPDATE participants SET coins = 0, joined_at = NULL, last_seen_at = NULL`).run();
+    db.prepare(`DELETE FROM participant_sessions`).run();
 
     db.prepare(`
       INSERT INTO experiments (id, title, brief, creator_name, creator_coins, phase, current_round, max_rounds, created_at, updated_at)
@@ -790,15 +867,76 @@ export function createExperiment(input: {
   return getStudyState();
 }
 
-export function joinStudy(code: string) {
-  const participantCode = code.trim().toUpperCase();
-  const participant = db.prepare(`SELECT * FROM participants WHERE code = ?`).get(participantCode) as any;
-  if (!participant) {
-    throw new Error('Participant code must be P01-P20.');
+const allocateParticipant = db.transaction((rawClientId: string) => {
+  const experiment = activeExperiment();
+  if (!experiment) throw new Error('Creator must start an experiment before participants can join.');
+  if (experiment.phase === 'ended' || experiment.phase === 'aborted') {
+    throw new Error('This experiment is no longer accepting participants.');
   }
 
-  const joinedAt = participant.joined_at || now();
-  db.prepare(`UPDATE participants SET joined_at = ?, last_seen_at = ? WHERE code = ?`).run(joinedAt, now(), participantCode);
+  const clientId = rawClientId.trim();
+  if (!clientId || clientId.length > 160) throw new Error('A valid participant session is required.');
+  const timestamp = now();
+  const existing = db.prepare(`
+    SELECT participant_code FROM participant_sessions
+    WHERE experiment_id = ? AND client_id = ?
+  `).get(experiment.id, clientId) as any;
+
+  if (existing?.participant_code) {
+    db.prepare(`UPDATE participant_sessions SET last_seen_at = ? WHERE experiment_id = ? AND client_id = ?`).run(
+      timestamp,
+      experiment.id,
+      clientId,
+    );
+    db.prepare(`
+      UPDATE participants
+      SET joined_at = COALESCE(joined_at, ?), last_seen_at = ?
+      WHERE code = ?
+    `).run(timestamp, timestamp, existing.participant_code);
+    return String(existing.participant_code);
+  }
+
+  const occupied = new Set(
+    (db.prepare(`SELECT participant_code FROM participant_sessions WHERE experiment_id = ?`).all(experiment.id) as any[])
+      .map((row) => String(row.participant_code)),
+  );
+  const participantCode = Array.from({ length: 19 }, (_, index) => `P${index + 1}`)
+    .find((code) => !occupied.has(code));
+  if (!participantCode) throw new Error('This room is full. A maximum of 19 participants can join.');
+
+  db.prepare(`
+    INSERT INTO participant_sessions (experiment_id, client_id, participant_code, joined_at, last_seen_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(experiment.id, clientId, participantCode, timestamp, timestamp);
+  db.prepare(`
+    UPDATE participants SET name = ?, coins = 0, joined_at = ?, last_seen_at = ? WHERE code = ?
+  `).run(`Participant ${participantCode.slice(1)}`, timestamp, timestamp, participantCode);
+  return participantCode;
+});
+
+export function joinStudy(clientId: string) {
+  const participantCode = allocateParticipant.immediate(clientId);
+  return { ...getStudyState(), viewerParticipantCode: participantCode };
+}
+
+export function leaveStudy(clientId: string) {
+  const experiment = activeExperiment();
+  if (!experiment) return getStudyState();
+  const cleanClientId = clientId.trim();
+  if (!cleanClientId) return getStudyState();
+
+  const releaseParticipant = db.transaction(() => {
+    const session = db.prepare(`
+      SELECT participant_code FROM participant_sessions
+      WHERE experiment_id = ? AND client_id = ?
+    `).get(experiment.id, cleanClientId) as any;
+    if (!session?.participant_code) return;
+    db.prepare(`DELETE FROM participant_sessions WHERE experiment_id = ? AND client_id = ?`).run(experiment.id, cleanClientId);
+    db.prepare(`
+      UPDATE participants SET coins = 0, joined_at = NULL, last_seen_at = ? WHERE code = ?
+    `).run(now(), session.participant_code);
+  });
+  releaseParticipant.immediate();
   return getStudyState();
 }
 
@@ -826,8 +964,13 @@ export function abortExperiment() {
   if (experiment.phase === 'aborted') return getStudyState();
 
   const stoppedAt = now();
-  db.prepare(`UPDATE experiments SET phase = 'aborted', updated_at = ? WHERE id = ?`).run(stoppedAt, experiment.id);
-  logPhase(experiment.id, experiment.current_round, experiment.phase, 'aborted');
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE experiments SET phase = 'aborted', updated_at = ? WHERE id = ?`).run(stoppedAt, experiment.id);
+    snapshotParticipants(experiment.id);
+    db.prepare(`DELETE FROM participant_sessions WHERE experiment_id = ?`).run(experiment.id);
+    logPhase(experiment.id, experiment.current_round, experiment.phase, 'aborted');
+  });
+  tx();
   return getStudyState();
 }
 
@@ -923,83 +1066,92 @@ export function deleteComment(participantCode: string) {
 }
 
 export function investCoins(actorType: 'participant' | 'creator', participantCode: string, commentId: number, amount: number) {
-  const experiment = activeExperiment();
-  if (!experiment) throw new Error('Experiment has not been created yet.');
-  if (experiment.phase !== 'investing') throw new Error('Investments are only open during the investing phase.');
-  const round = db
-    .prepare(`SELECT investment_locked_v3 FROM rounds WHERE experiment_id = ? AND round_number = ?`)
-    .get(experiment.id, experiment.current_round) as any;
-  if (Number(round?.investment_locked_v3 || 0) === 1) throw new Error('The investment market is locked for result settlement.');
+  const updateReaction = db.transaction(() => {
+    const experiment = activeExperiment();
+    if (!experiment) throw new Error('Experiment has not been created yet.');
+    if (experiment.phase !== 'investing') throw new Error('Investments are only open during the investing phase.');
+    const round = db
+      .prepare(`SELECT investment_locked_v3 FROM rounds WHERE experiment_id = ? AND round_number = ?`)
+      .get(experiment.id, experiment.current_round) as any;
+    if (Number(round?.investment_locked_v3 || 0) === 1) throw new Error('The investment market is locked for result settlement.');
 
-  const isCreator = actorType === 'creator';
-  const cleanCode = isCreator ? 'CREATOR' : participantCode.trim().toUpperCase();
-  const participant = isCreator
-    ? null
-    : (db.prepare(`SELECT * FROM participants WHERE code = ? AND joined_at IS NOT NULL`).get(cleanCode) as any);
-  if (!isCreator && !participant) throw new Error('Join the study before investing.');
+    const isCreator = actorType === 'creator';
+    const cleanCode = isCreator ? 'CREATOR' : participantCode.trim().toUpperCase();
+    const participant = isCreator
+      ? null
+      : (db.prepare(`SELECT * FROM participants WHERE code = ? AND joined_at IS NOT NULL`).get(cleanCode) as any);
+    if (!isCreator && !participant) throw new Error('Join the study before investing.');
 
-  const comment = db
-    .prepare(`
-      SELECT * FROM comments
-      WHERE id = ? AND experiment_id = ? AND round_number = ? AND deleted_at IS NULL
-    `)
-    .get(commentId, experiment.id, experiment.current_round) as any;
-  if (!comment) throw new Error('Comment does not belong to the current round.');
-  if (!isCreator && comment.participant_code === cleanCode) throw new Error('Participants cannot invest in their own comment.');
+    const comment = db
+      .prepare(`
+        SELECT * FROM comments
+        WHERE id = ? AND experiment_id = ? AND round_number = ? AND deleted_at IS NULL
+      `)
+      .get(commentId, experiment.id, experiment.current_round) as any;
+    if (!comment) throw new Error('Comment does not belong to the current round.');
+    if (!isCreator && comment.participant_code === cleanCode) throw new Error('Participants cannot invest in their own comment.');
 
-  const value = Math.floor(Number(amount));
-  if (!Number.isFinite(value) || value < 10 || value > 50 || value % 10 !== 0) {
-    throw new Error('Each idea investment must be 10, 20, 30, 40, or 50 coins.');
-  }
-  const previous = db
-    .prepare(`SELECT * FROM investments WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id = ?`)
-    .get(experiment.id, experiment.current_round, cleanCode, commentId) as any;
-  const committed = Number(
-    (
-      db
-        .prepare(`
-          SELECT COALESCE(SUM(amount), 0) AS total
-          FROM investments
-          WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id != ?
-        `)
-        .get(experiment.id, experiment.current_round, cleanCode, commentId) as any
-    )?.total || 0,
-  );
-  const roundLimit = isCreator ? 200 : 150;
-  if (committed + value > roundLimit) {
-    throw new Error(`${isCreator ? 'Creator' : 'Participant'} may invest at most ${roundLimit} coins per round.`);
-  }
-  const delta = value - Number(previous?.amount || 0);
-  const availableCoins = isCreator ? Number(experiment.creator_coins) : Number(participant.coins);
-  if (delta > availableCoins) throw new Error('Not enough coins.');
+    const value = Math.floor(Number(amount));
+    if (![0, 20, 40, 60, 80, 100].includes(value)) {
+      throw new Error('Coin reactions must be 0, 20, 40, 60, 80, or 100 coins.');
+    }
+    const previous = db
+      .prepare(`SELECT * FROM investments WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id = ?`)
+      .get(experiment.id, experiment.current_round, cleanCode, commentId) as any;
+    const previousAmount = Number(previous?.amount || 0);
+    const expectedAmount = previousAmount === 100 ? 0 : previousAmount + 20;
+    if (value !== expectedAmount) {
+      const error: any = new Error(`Investment changed elsewhere. The next valid reaction is ${expectedAmount} coins.`);
+      error.status = 409;
+      throw error;
+    }
 
-  const tx = db.transaction(() => {
-    if (previous) {
-      db.prepare(`UPDATE investments SET amount = ?, created_at = ? WHERE id = ?`).run(value, now(), previous.id);
+    const committed = Number(
+      (
+        db
+          .prepare(`
+            SELECT COALESCE(SUM(amount), 0) AS total
+            FROM investments
+            WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id != ?
+          `)
+          .get(experiment.id, experiment.current_round, cleanCode, commentId) as any
+      )?.total || 0,
+    );
+    const roundLimit = isCreator ? 200 : 150;
+    if (committed + value > roundLimit) {
+      throw new Error(`${isCreator ? 'Creator' : 'Participant'} may invest at most ${roundLimit} coins per round.`);
+    }
+    const delta = value - previousAmount;
+    const availableCoins = isCreator ? Number(experiment.creator_coins) : Number(participant.coins);
+    if (delta > availableCoins) throw new Error('Not enough coins for another 20-coin reaction.');
+
+    const timestamp = now();
+    if (value === 0) {
+      db.prepare(`DELETE FROM investments WHERE id = ?`).run(previous.id);
+    } else if (previous) {
+      db.prepare(`UPDATE investments SET amount = ?, created_at = ? WHERE id = ?`).run(value, timestamp, previous.id);
     } else {
       db.prepare(`
         INSERT INTO investments (experiment_id, round_number, participant_code, comment_id, amount, created_at, actor_type)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(experiment.id, experiment.current_round, cleanCode, commentId, value, now(), actorType);
+      `).run(experiment.id, experiment.current_round, cleanCode, commentId, value, timestamp, actorType);
     }
-    if (delta !== 0) {
-      if (isCreator) {
-        db.prepare(`UPDATE experiments SET creator_coins = creator_coins - ?, updated_at = ? WHERE id = ?`).run(
-          delta,
-          now(),
-          experiment.id,
-        );
-      } else {
-        db.prepare(`UPDATE participants SET coins = coins - ? WHERE code = ?`).run(delta, cleanCode);
-      }
-      db.prepare(`
-        INSERT INTO coin_events (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
-        VALUES (?, ?, ?, ?, ?, 'investment', ?, ?)
-      `).run(experiment.id, experiment.current_round, isCreator ? null : cleanCode, actorType, -delta, String(commentId), now());
+    if (isCreator) {
+      db.prepare(`UPDATE experiments SET creator_coins = creator_coins - ?, updated_at = ? WHERE id = ?`).run(
+        delta,
+        timestamp,
+        experiment.id,
+      );
+    } else {
+      db.prepare(`UPDATE participants SET coins = coins - ? WHERE code = ?`).run(delta, cleanCode);
     }
+    db.prepare(`
+      INSERT INTO coin_events (experiment_id, round_number, participant_code, actor_type, amount, reason, ref_id, created_at)
+      VALUES (?, ?, ?, ?, ?, 'investment', ?, ?)
+    `).run(experiment.id, experiment.current_round, isCreator ? null : cleanCode, actorType, -delta, String(commentId), timestamp);
   });
 
-  tx();
+  updateReaction.immediate();
   return getStudyState();
 }
 
@@ -1655,6 +1807,8 @@ export function voteProjectEnd(participantCode: string, vote: boolean) {
         experiment.id,
       );
       logPhase(experiment.id, experiment.current_round, 'ending_vote', 'ended');
+      snapshotParticipants(experiment.id);
+      db.prepare(`DELETE FROM participant_sessions WHERE experiment_id = ?`).run(experiment.id);
     } else if (totalVotes >= eligible) {
       db.prepare(`UPDATE experiments SET phase = 'previewing', end_vote_started_at = NULL, updated_at = ? WHERE id = ?`).run(
         timestamp,

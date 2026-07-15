@@ -8,6 +8,7 @@ import {
   getStudyState,
   investCoins,
   joinStudy,
+  leaveStudy,
   rollbackPhase,
   rollbackDevelopmentDraft,
   publishDevelopmentDraft,
@@ -129,8 +130,16 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/join', (req, res) => {
     try {
-      const participantCode = String(req.body?.participantCode || '');
-      sendState(res, joinStudy(participantCode), { role: 'participant', participantCode });
+      const joined = joinStudy(String(req.body?.clientId || ''));
+      sendState(res, joined, { role: 'participant', participantCode: joined.viewerParticipantCode });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/study/leave', (req, res) => {
+    try {
+      sendState(res, leaveStudy(String(req.body?.clientId || '')));
     } catch (error) {
       sendError(res, error);
     }

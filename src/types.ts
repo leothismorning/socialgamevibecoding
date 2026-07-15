@@ -304,4 +304,5 @@ export interface StudyState {
   ideaRevisions: StudyIdeaRevision[];
   leaderboard: StudyLeaderboardEntry[];
   marketPrivacyActive: boolean;
+  viewerParticipantCode?: string;
 }

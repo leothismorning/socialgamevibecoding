@@ -46,6 +46,12 @@ import {
   StudyState,
 } from './types';
 import { cn } from './lib/utils';
+import { RoleSelection } from './components/RoleSelection';
+import { InteractiveSurface } from './components/InteractiveSurface';
+import { useGlobalPointerSpotlight } from './hooks/useGlobalPointerSpotlight';
+import { VersionEvolution } from './components/VersionEvolution';
+import { ThemeToggle } from './theme';
+import { CursorSafeIframe } from './components/CursorSafeIframe';
 
 type Role = 'creator' | 'participant';
 
@@ -61,12 +67,33 @@ const phaseLabels: Record<StudyPhase, { title: string; subtitle: string; tone: s
   ended: { title: 'Ended', subtitle: 'Study session completed', tone: 'bg-slate-900 text-white' },
 };
 
-const participantCodes = Array.from({ length: 20 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`);
+const participantCodePattern = /^P(?:[1-9]|1[0-9])$/;
+
+function getParticipantClientId() {
+  const stored = localStorage.getItem('participant-client-id');
+  if (stored) return stored;
+  const created = crypto.randomUUID();
+  localStorage.setItem('participant-client-id', created);
+  return created;
+}
+
+function getRankedComments(comments: StudyComment[]) {
+  const originalOrder = new Map(comments.map((comment, index) => [comment.id, index]));
+  return [...comments].sort((a, b) =>
+    Number(b.invested || 0) - Number(a.invested || 0) ||
+    Number(originalOrder.get(a.id)) - Number(originalOrder.get(b.id))
+  );
+}
 
 export default function App() {
+  useGlobalPointerSpotlight();
   const [state, setState] = React.useState<StudyState | null>(null);
   const [role, setRole] = React.useState<Role | null>(() => (localStorage.getItem('study-role') as Role | null) || null);
-  const [participantCode, setParticipantCode] = React.useState(() => localStorage.getItem('participant-code') || '');
+  const [participantCode, setParticipantCode] = React.useState(() => {
+    const stored = localStorage.getItem('participant-code') || '';
+    return participantCodePattern.test(stored) ? stored : '';
+  });
+  const [participantClientId] = React.useState(getParticipantClientId);
   const [error, setError] = React.useState<string | null>(null);
   const [isBusy, setIsBusy] = React.useState(false);
   const [tiedComments, setTiedComments] = React.useState<StudyComment[]>([]);
@@ -110,6 +137,9 @@ export default function App() {
   };
 
   const leaveIdentity = () => {
+    if (role === 'participant') {
+      void studyApi.leave(participantClientId).catch(() => undefined);
+    }
     setRole(null);
     setParticipantCode('');
     localStorage.removeItem('study-role');
@@ -193,11 +223,13 @@ export default function App() {
     return (
       <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
         <ParticipantGate
-          onJoin={(code) =>
+          onJoin={() =>
             run(async () => {
-              const joined = await studyApi.join(code);
-              setParticipantCode(code);
-              localStorage.setItem('participant-code', code);
+              const joined = await studyApi.join(participantClientId);
+              const assignedCode = joined.viewerParticipantCode;
+              if (!assignedCode) throw new Error('The room did not return an assigned participant number.');
+              setParticipantCode(assignedCode);
+              localStorage.setItem('participant-code', assignedCode);
               return joined;
             })
           }
@@ -232,8 +264,8 @@ export default function App() {
 
 function LoadingScreen() {
   return (
-    <div className="min-h-screen grid place-items-center bg-[#f7f9ff] text-blue-950">
-      <div className="rounded-[2rem] bg-white/80 border border-white p-8 shadow-2xl shadow-blue-100 flex items-center gap-4">
+    <div className="loading-screen min-h-screen grid place-items-center bg-[#f7f9ff] text-blue-950">
+      <div className="loading-panel rounded-[2rem] bg-white/80 border border-white p-8 shadow-2xl shadow-blue-100 flex items-center gap-4">
         <RefreshCw className="h-5 w-5 animate-spin text-violet-500" />
         <span className="text-sm font-bold tracking-wide">Loading study system...</span>
       </div>
@@ -259,14 +291,14 @@ function Shell({
   const [debugOpen, setDebugOpen] = React.useState(false);
 
   return (
-    <div className="min-h-screen bg-[#f7f9ff] text-blue-950 relative overflow-hidden">
+    <div className="app-shell min-h-screen bg-[#f7f9ff] text-blue-950 relative overflow-hidden">
       <div className="pointer-events-none absolute -top-28 -left-20 h-80 w-80 rounded-full bg-sky-200/60 blur-3xl" />
       <div className="pointer-events-none absolute top-20 right-10 h-96 w-96 rounded-full bg-violet-200/60 blur-3xl" />
       <div className="pointer-events-none absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-emerald-100/80 blur-3xl" />
 
-      <header className="relative z-10 h-20 px-8 flex items-center justify-between border-b border-white/70 bg-white/55 backdrop-blur-2xl">
+      <header className="app-header relative z-10 h-20 px-8 flex items-center justify-between border-b border-white/70 bg-white/55 backdrop-blur-2xl">
         <div className="flex items-center gap-4">
-          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-violet-600 grid place-items-center text-2xl shadow-xl shadow-violet-200">
+          <div className="brand-mark h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-violet-600 grid place-items-center text-2xl shadow-xl shadow-violet-200">
             🏝️
           </div>
           <div>
@@ -276,6 +308,7 @@ function Shell({
         </div>
 
         <div className="flex items-center gap-3">
+          <ThemeToggle />
           {identityLabel && (
             <div className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/80 px-3 text-xs font-black text-blue-950 shadow-sm sm:px-4">
               <UserRound className="h-4 w-4 text-violet-500" />
@@ -299,10 +332,10 @@ function Shell({
         </div>
       </header>
 
-      <main className="relative z-10 p-7">{children}</main>
+      <main className="app-main relative z-10 p-7">{children}</main>
 
       {error && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-2xl rounded-2xl bg-rose-50 border border-rose-200 px-5 py-4 text-sm font-semibold text-rose-700 shadow-2xl shadow-rose-100">
+        <div className="error-toast fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-2xl rounded-2xl bg-rose-50 border border-rose-200 px-5 py-4 text-sm font-semibold text-rose-700 shadow-2xl shadow-rose-100">
           {error}
         </div>
       )}
@@ -374,7 +407,7 @@ function DebugConsole({ open, onClose }: { open: boolean; onClose: () => void })
   };
 
   return (
-    <div className="fixed inset-x-4 bottom-4 z-50 rounded-[2rem] bg-slate-950 text-slate-100 shadow-2xl border border-white/10 overflow-hidden">
+    <div className="debug-console fixed inset-x-4 bottom-4 z-50 rounded-[2rem] bg-slate-950 text-slate-100 shadow-2xl border border-white/10 overflow-hidden">
       <header className="h-14 px-5 flex items-center justify-between border-b border-white/10 bg-slate-900">
         <div className="flex items-center gap-3">
           <div className="h-9 w-9 rounded-xl bg-violet-500 grid place-items-center">
@@ -425,7 +458,7 @@ function DebugConsole({ open, onClose }: { open: boolean; onClose: () => void })
   );
 }
 
-function DebugLogRow({ log }: { log: ClientDebugEntry }) {
+function DebugLogRow({ log }: { key?: React.Key; log: ClientDebugEntry }) {
   const color =
     log.source === 'ai'
       ? 'text-violet-300 bg-violet-500/10 border-violet-500/20'
@@ -467,49 +500,13 @@ function RoleGate({
   onViewArchive: (experimentId: string) => void;
 }) {
   return (
-    <div className="min-h-screen bg-[#f7f9ff] grid place-items-center p-8 relative overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,.45),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(167,139,250,.38),transparent_32%)]" />
-      <div className="relative w-full max-w-5xl space-y-7">
-      <section className="rounded-[3rem] bg-white/70 backdrop-blur-2xl border border-white p-10 shadow-2xl shadow-blue-200/60">
-        <div className="text-center mb-10">
-          <div className="inline-grid place-items-center h-16 w-16 rounded-3xl bg-gradient-to-br from-sky-400 to-violet-600 text-3xl shadow-xl shadow-violet-200 mb-5">
-            ✨
-          </div>
-          <h1 className="text-4xl font-black text-blue-950">进入协作 Vibecoding 实验</h1>
-          <p className="mt-3 text-slate-500 font-medium">Creator 负责上传项目和推进流程；Participant 使用 P01-P20 参与体验、评论与投资。</p>
-        </div>
-
-        <div className="grid md:grid-cols-2 gap-6">
-          <button
-            onClick={() => onChoose('creator')}
-            className="group text-left rounded-[2rem] bg-white border border-blue-100 p-8 shadow-xl shadow-blue-100/70 hover:-translate-y-1 transition"
-          >
-            <div className="h-14 w-14 rounded-2xl bg-blue-100 text-blue-600 grid place-items-center mb-8">
-              <FlaskConical className="h-7 w-7" />
-            </div>
-            <h2 className="text-2xl font-black mb-3">我是 Creator / Host</h2>
-            <p className="text-sm leading-7 text-slate-500">上传初始项目、推进实验阶段并参与投资；系统自动选择前三名 Idea，仅在平票时由 Creator 裁决。</p>
-            <div className="mt-8 flex items-center gap-2 text-blue-600 font-black text-sm">
-              Start as creator <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition" />
-            </div>
-          </button>
-
-          <button
-            onClick={() => onChoose('participant')}
-            className="group text-left rounded-[2rem] bg-white border border-violet-100 p-8 shadow-xl shadow-violet-100/70 hover:-translate-y-1 transition"
-          >
-            <div className="h-14 w-14 rounded-2xl bg-violet-100 text-violet-600 grid place-items-center mb-8">
-              <Users className="h-7 w-7" />
-            </div>
-            <h2 className="text-2xl font-black mb-3">我是 Participant</h2>
-            <p className="text-sm leading-7 text-slate-500">用实验编号 P01-P20 加入同一个项目，按回合体验、评论、投资，并观察项目如何被集体推动。</p>
-            <div className="mt-8 flex items-center gap-2 text-violet-600 font-black text-sm">
-              Join as participant <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition" />
-            </div>
-          </button>
-        </div>
-      </section>
-      <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
+    <div className="role-selection-page min-h-screen bg-black">
+      <ThemeToggle className="theme-toggle-floating" />
+      <RoleSelection
+        onCommit={(selectedRole) => onChoose(selectedRole === 'host' ? 'creator' : 'participant')}
+      />
+      <div className="role-selection-history mx-auto w-full max-w-5xl px-6 pb-14">
+        <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
       </div>
     </div>
   );
@@ -568,15 +565,15 @@ function CreatorSetup({
   };
 
   return (
-    <section className="max-w-6xl mx-auto grid lg:grid-cols-[.85fr_1.15fr] gap-7">
-      <div className="rounded-[2.5rem] bg-white/75 backdrop-blur border border-white p-8 shadow-xl shadow-blue-100">
+    <section className="setup-grid max-w-6xl mx-auto grid lg:grid-cols-[.85fr_1.15fr] gap-7">
+      <div className="setup-intro rounded-[2.5rem] bg-white/75 backdrop-blur border border-white p-8 shadow-xl shadow-blue-100">
         <p className="text-xs font-black uppercase tracking-[0.3em] text-violet-500 mb-4">Creator setup</p>
-        <h2 className="text-3xl font-black mb-4">{existingExperimentTitle ? '开启新的实验项目' : '上传或创建第一个项目'}</h2>
+        <h2 className="product-title text-4xl font-black mb-4">{existingExperimentTitle ? '开启新的实验项目' : '上传或创建第一个项目'}</h2>
         <p className="text-sm text-slate-500 leading-7">
           你可以上传已有 HTML 项目，也可以用“快速创建”调用 DeepSeek，像 AI Studio 一样根据描述生成一个在线网页。
         </p>
         {existingExperimentTitle && (
-          <div className="mt-6 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
+          <div className="notice-dark mt-6 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
             当前实验「{existingExperimentTitle}」会完整保存在历史实验中。新实验使用独立参与者、金币、评论和版本数据。
           </div>
         )}
@@ -609,18 +606,19 @@ function CreatorSetup({
               { id: 'quick', title: '快速创建', desc: '调用 DeepSeek 生成网页' },
               { id: 'upload', title: '上传项目', desc: '上传 .html 文件' },
             ].map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setMode(item.id as CreateMode)}
-                className={cn(
-                  'rounded-2xl border p-4 text-left transition',
-                  mode === item.id ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200' : 'bg-white border-blue-100 text-slate-500',
-                )}
-              >
-                <p className="text-sm font-black">{item.title}</p>
-                <p className={cn('mt-1 text-[11px] font-semibold', mode === item.id ? 'text-blue-100' : 'text-slate-400')}>{item.desc}</p>
-              </button>
+              <InteractiveSurface key={item.id} strength="surface" className="h-full">
+                <button
+                  type="button"
+                  onClick={() => setMode(item.id as CreateMode)}
+                  className={cn(
+                    'creation-option h-full w-full rounded-2xl border p-4 text-left transition',
+                    mode === item.id ? 'selected bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200' : 'bg-white border-blue-100 text-slate-500',
+                  )}
+                >
+                  <p className="text-sm font-black">{item.title}</p>
+                  <p className={cn('mt-1 text-[11px] font-semibold', mode === item.id ? 'text-blue-100' : 'text-slate-400')}>{item.desc}</p>
+                </button>
+              </InteractiveSurface>
             ))}
           </div>
         </div>
@@ -628,7 +626,7 @@ function CreatorSetup({
         {mode === 'quick' && (
           <div className="space-y-3">
             <TextField label="Quick create prompt for DeepSeek" value={initialPrompt} onChange={setInitialPrompt} rows={5} />
-            <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
+            <div className="notice-dark rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
               快速创建会请求 DeepSeek 生成初始 HTML。若网络或代理不可用，左下角 Debug 控制台会显示具体失败原因。
             </div>
           </div>
@@ -655,8 +653,8 @@ function CreatorSetup({
           <label className="text-xs font-black uppercase tracking-widest text-slate-400">Max rounds</label>
           <div className="mt-2 flex gap-3">
             {[3, 4].map((round) => (
+              <InteractiveSurface key={round} strength="magnetic">
               <button
-                key={round}
                 type="button"
                 onClick={() => setMaxRounds(round)}
                 className={cn(
@@ -666,6 +664,7 @@ function CreatorSetup({
               >
                 {round} rounds
               </button>
+              </InteractiveSurface>
             ))}
           </div>
         </div>
@@ -681,7 +680,7 @@ function CreatorSetup({
           )}
           <button
             disabled={isBusy}
-            className="flex-1 h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2"
+            className="primary-action flex-1 h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isBusy ? <RefreshCw className="h-5 w-5 animate-spin" /> : <Play className="h-5 w-5 fill-white" />}
             {existingExperimentTitle ? 'Archive current & start new experiment' : 'Create experiment'}
@@ -692,40 +691,29 @@ function CreatorSetup({
   );
 }
 
-function ParticipantGate({ onJoin, isBusy }: { onJoin: (code: string) => void; isBusy: boolean }) {
-  const [code, setCode] = React.useState('P01');
+function ParticipantGate({ onJoin, isBusy }: { onJoin: () => void; isBusy: boolean }) {
+  const requested = React.useRef(false);
+
+  React.useEffect(() => {
+    if (requested.current) return;
+    requested.current = true;
+    onJoin();
+  }, [onJoin]);
+
   return (
-    <section className="max-w-3xl mx-auto rounded-[2.5rem] bg-white/80 backdrop-blur border border-white p-10 shadow-2xl shadow-blue-100">
+    <section className="join-panel max-w-3xl mx-auto rounded-[2.5rem] bg-white/80 backdrop-blur border border-white p-10 shadow-2xl shadow-blue-100">
       <div className="text-center mb-8">
-        <div className="inline-grid h-16 w-16 place-items-center rounded-3xl bg-violet-100 text-violet-600 mb-5">
-          <Users className="h-8 w-8" />
+        <div className="inline-grid h-16 w-16 place-items-center rounded-3xl bg-emerald-50 text-emerald-700 mb-5">
+          <Users className={cn('h-8 w-8', isBusy && 'animate-pulse')} />
         </div>
-        <h2 className="text-3xl font-black">选择你的实验编号</h2>
-        <p className="mt-3 text-sm text-slate-500">实验当天可以把 P01-P20 分配给 20 位参与者，不需要完整账号系统。</p>
+        <h2 className="text-3xl font-black">Assigning your participant number</h2>
+        <p className="mt-3 text-sm text-slate-500">
+          The room assigns P1–P19 in join order. This number is kept when you refresh or reconnect.
+        </p>
       </div>
-
-      <div className="grid grid-cols-5 gap-3 mb-8">
-        {participantCodes.map((item) => (
-          <button
-            key={item}
-            onClick={() => setCode(item)}
-            className={cn(
-              'h-12 rounded-2xl border text-sm font-black transition',
-              code === item ? 'bg-violet-600 text-white border-violet-600 shadow-lg shadow-violet-200' : 'bg-white border-violet-100 text-slate-500',
-            )}
-          >
-            {item}
-          </button>
-        ))}
+      <div className="mx-auto h-2 w-48 overflow-hidden rounded-full bg-emerald-50">
+        <div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-[#C7F8FB] via-[#95CDB6] to-[#0FA958]" />
       </div>
-
-      <button
-        onClick={() => onJoin(code)}
-        disabled={isBusy}
-        className="w-full h-14 rounded-2xl bg-gradient-to-r from-violet-500 to-blue-500 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50"
-      >
-        Join as {code}
-      </button>
     </section>
   );
 }
@@ -782,11 +770,11 @@ function StudyRoom({
   }
 
   return (
-    <div className="max-w-[1800px] mx-auto space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+    <div className="study-room max-w-[1800px] mx-auto space-y-6">
+      <div className="study-stats grid grid-cols-2 lg:grid-cols-5 gap-4">
         <TopStat icon={<Sparkles />} label={experiment.title} value={`Round ${experiment.current_round}/${experiment.max_rounds}`} />
         <TopStat icon={<Clock3 />} label={phase.subtitle} value={phase.title} tone={phase.tone} />
-        <TopStat icon={<Users />} label="Joined participants" value={`${joinedParticipants.length}/20`} />
+        <TopStat icon={<Users />} label="Joined participants" value={`${joinedParticipants.length}/19`} />
         <TopStat
           icon={<CircleDollarSign />}
           label={role === 'creator' ? 'Creator coins' : `${participantCode || 'Participant'} coins`}
@@ -799,8 +787,8 @@ function StudyRoom({
         />
       </div>
 
-      <div className="grid xl:grid-cols-[1fr_430px] gap-6">
-        <section className="rounded-[2rem] bg-white/80 border border-white shadow-xl shadow-blue-100 overflow-hidden">
+      <div className="workbench-primary-grid grid items-start xl:grid-cols-[minmax(0,1fr)_480px] gap-6">
+        <section className="prototype-frame workbench-preview flex min-h-0 flex-col rounded-[2rem] bg-white/80 border border-white shadow-xl shadow-blue-100 overflow-hidden">
           <div className="h-16 px-6 flex items-center justify-between border-b border-blue-50">
             <div>
               <h2 className="font-black text-lg">{liveDraft ? `Live Candidate Draft ${liveDraft.attempt_number}` : 'Current Prototype'}</h2>
@@ -812,9 +800,9 @@ function StudyRoom({
             </div>
             <div className={cn('px-4 py-2 rounded-2xl text-xs font-black', phase.tone)}>{phase.title}</div>
           </div>
-          <div className="h-[620px] bg-white">
+          <div className="prototype-canvas min-h-0 flex-1">
             {liveDraft || currentVersion ? (
-              <iframe
+              <CursorSafeIframe
                 title={liveDraft ? 'Live candidate prototype' : 'Current prototype'}
                 srcDoc={(liveDraft || currentVersion)?.code}
                 className="w-full h-full border-0"
@@ -825,7 +813,7 @@ function StudyRoom({
           </div>
         </section>
 
-        <aside className="space-y-6">
+        <aside className="workbench-feedback-stack custom-scrollbar-light min-h-0 space-y-4">
           <CreatorControls
             role={role}
             phase={experiment.phase}
@@ -858,33 +846,36 @@ function StudyRoom({
               isBusy={isBusy}
             />
           )}
-          <CommentPanel
-            role={role}
-            participantCode={participantCode}
-            phase={experiment.phase}
-            comments={currentComments}
-            marketPrivacyActive={state.marketPrivacyActive}
-            onRun={onRun}
-            isBusy={isBusy}
-          />
+          <div className="feedback-market-group">
+            <InvestmentPanel
+              role={role}
+              participantCode={participantCode}
+              phase={experiment.phase}
+              comments={currentComments}
+              investments={state.investments.filter((investment) => investment.round_number === experiment.current_round)}
+              marketPrivacyActive={state.marketPrivacyActive}
+              investmentLocked={investmentLocked}
+              participantCoins={me?.coins || 0}
+              creatorCoins={experiment.creator_coins}
+              selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
+              onRun={onRun}
+              isBusy={isBusy}
+            />
+            <CommentPanel
+              role={role}
+              participantCode={participantCode}
+              phase={experiment.phase}
+              comments={currentComments}
+              marketPrivacyActive={state.marketPrivacyActive}
+              onRun={onRun}
+              isBusy={isBusy}
+              composerOnly
+            />
+          </div>
         </aside>
       </div>
 
-      <div className="grid xl:grid-cols-[1.05fr_.95fr] gap-6">
-        <InvestmentPanel
-          role={role}
-          participantCode={participantCode}
-          phase={experiment.phase}
-          comments={currentComments}
-          investments={state.investments.filter((investment) => investment.round_number === experiment.current_round)}
-          marketPrivacyActive={state.marketPrivacyActive}
-          investmentLocked={investmentLocked}
-          participantCoins={me?.coins || 0}
-          creatorCoins={experiment.creator_coins}
-          selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
-          onRun={onRun}
-          isBusy={isBusy}
-        />
+      <div className="version-workbench-row">
         <VersionTimeline state={state} />
       </div>
     </div>
@@ -1002,7 +993,7 @@ function CreatorControls({
           <button
             disabled={isBusy}
             onClick={() => onRun(() => studyApi.nextRound())}
-            className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 font-black text-white shadow-xl shadow-violet-200 disabled:opacity-50"
+            className="primary-action flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 font-black text-white shadow-xl shadow-violet-200 disabled:opacity-50"
           >
             <ChevronRight className="h-5 w-5" />
             Start next round
@@ -1031,7 +1022,7 @@ function CreatorControls({
           <button
             disabled={isBusy || (phase === 'investing' && commentCount < 3)}
             onClick={() => onRun(action.run)}
-            className="w-full h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2 [&_svg]:h-5 [&_svg]:w-5"
+            className="primary-action w-full h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2 [&_svg]:h-5 [&_svg]:w-5"
           >
             {isBusy ? <RefreshCw className="animate-spin" /> : action.icon}
             {action.label}
@@ -1059,7 +1050,7 @@ function CreatorControls({
       )}
 
       {tiedComments.length > 0 && tieRankScores.length === 3 && (
-        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+        <div className="notice-dark mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <div className="mb-3">
             <p className="text-xs font-black text-amber-700">Tie resolution</p>
             <p className="mt-1 text-[11px] leading-5 text-amber-700/80">
@@ -1194,6 +1185,7 @@ function CommentPanel({
   marketPrivacyActive,
   onRun,
   isBusy,
+  composerOnly = false,
 }: {
   role: Role;
   participantCode: string;
@@ -1202,6 +1194,7 @@ function CommentPanel({
   marketPrivacyActive: boolean;
   onRun: (action: () => Promise<StudyState>) => void;
   isBusy: boolean;
+  composerOnly?: boolean;
 }) {
   const [content, setContent] = React.useState('');
   const canComment = role === 'participant' && phase === 'commenting';
@@ -1209,6 +1202,10 @@ function CommentPanel({
     ? comments.find((comment) => comment.participant_code === participantCode || comment.is_own)
     : undefined;
   const loadedIdeaId = React.useRef<number | null>(null);
+  const rankByCommentId = React.useMemo(
+    () => new Map(getRankedComments(comments).map((comment, index) => [comment.id, index + 1])),
+    [comments],
+  );
 
   React.useEffect(() => {
     if (myIdea && loadedIdeaId.current !== myIdea.id) {
@@ -1234,50 +1231,63 @@ function CommentPanel({
     });
   };
 
+  const composer = (
+    <div className={composerOnly ? 'unified-comment-composer' : 'mt-4'}>
+      {myIdea && canComment && (
+        <div className="mb-3 flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+          <div>
+            <p className="text-xs font-black text-emerald-700">Your round Idea · 100 Coin awarded</p>
+            <p className="mt-1 text-[11px] text-emerald-600">You can edit it until investing begins. Updates do not award more Coin.</p>
+          </div>
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={remove}
+            className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-[11px] font-black text-rose-600 disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+      <textarea
+        value={content}
+        onChange={(event) => setContent(event.target.value)}
+        disabled={!canComment || isBusy}
+        placeholder={canComment ? '写下你希望下一版怎么改...' : '评论阶段开放后才可以提交'}
+        rows={5}
+        className="comment-composer w-full resize-none overflow-y-auto rounded-2xl border border-blue-100 bg-white/80 p-4 text-sm outline-none focus:border-blue-300 disabled:bg-slate-50 disabled:text-slate-400"
+      />
+      <button
+        onClick={submit}
+        disabled={!canComment || !content.trim() || isBusy}
+        className="primary-action mt-3 w-full h-12 rounded-2xl bg-blue-600 text-white font-black disabled:bg-slate-200 disabled:text-slate-400 flex items-center justify-center gap-2"
+      >
+        <Send className="h-4 w-4" />
+        {myIdea ? 'Update Idea' : 'Submit Idea · earn 100 Coin'}
+      </button>
+    </div>
+  );
+
+  if (composerOnly) return composer;
+
   return (
     <Card title="Round comments" icon={<MessageCircle />} badge={`${comments.length} ideas`}>
-      <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1 custom-scrollbar-light">
+      <div className="comment-scroll-region min-h-0 space-y-3 overflow-y-auto pr-1 custom-scrollbar-light">
         {comments.length === 0 ? (
           <div className="rounded-2xl bg-slate-50 p-5 text-center text-sm text-slate-400">No comments in this round yet.</div>
         ) : (
-          comments.map((comment) => <CommentCard key={comment.id} comment={comment} hideMarketInfo={marketPrivacyActive} />)
+          comments.map((comment) => (
+            <CommentCard
+              key={comment.id}
+              comment={comment}
+              rank={rankByCommentId.get(comment.id)}
+              hideMarketInfo={marketPrivacyActive}
+            />
+          ))
         )}
       </div>
 
-      <div className="mt-4">
-        {myIdea && canComment && (
-          <div className="mb-3 flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-            <div>
-              <p className="text-xs font-black text-emerald-700">Your round Idea · 100 Coin awarded</p>
-              <p className="mt-1 text-[11px] text-emerald-600">You can edit it until investing begins. Updates do not award more Coin.</p>
-            </div>
-            <button
-              type="button"
-              disabled={isBusy}
-              onClick={remove}
-              className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-[11px] font-black text-rose-600 disabled:opacity-50"
-            >
-              Delete
-            </button>
-          </div>
-        )}
-        <textarea
-          value={content}
-          onChange={(event) => setContent(event.target.value)}
-          disabled={!canComment || isBusy}
-          placeholder={canComment ? '写下你希望下一版怎么改...' : '评论阶段开放后才可以提交'}
-          rows={3}
-          className="w-full rounded-2xl border border-blue-100 bg-white/80 p-4 text-sm outline-none focus:border-blue-300 disabled:bg-slate-50 disabled:text-slate-400"
-        />
-        <button
-          onClick={submit}
-          disabled={!canComment || !content.trim() || isBusy}
-          className="mt-3 w-full h-12 rounded-2xl bg-blue-600 text-white font-black disabled:bg-slate-200 disabled:text-slate-400 flex items-center justify-center gap-2"
-        >
-          <Send className="h-4 w-4" />
-          {myIdea ? 'Update Idea' : 'Submit Idea · earn 100 Coin'}
-        </button>
-      </div>
+      {composer}
     </Card>
   );
 }
@@ -1309,32 +1319,108 @@ function InvestmentPanel({
   onRun: (action: () => Promise<StudyState>) => void;
   isBusy: boolean;
 }) {
-  const [amounts, setAmounts] = React.useState<Record<number, number>>({});
+  const [pendingInvestmentIds, setPendingInvestmentIds] = React.useState<Set<number>>(() => new Set());
+  const [successfulInvestmentId, setSuccessfulInvestmentId] = React.useState<number | null>(null);
+  const [reactionFeedback, setReactionFeedback] = React.useState<{ commentId: number; label: string } | null>(null);
+  const successTimer = React.useRef<number | null>(null);
+
+  const clearInvestmentSuccess = React.useCallback((commentId: number) => {
+    setSuccessfulInvestmentId((current) => current === commentId ? null : current);
+    setReactionFeedback((current) => current?.commentId === commentId ? null : current);
+    if (successTimer.current !== null) {
+      window.clearTimeout(successTimer.current);
+      successTimer.current = null;
+    }
+  }, []);
+
+  React.useEffect(() => () => {
+    if (successTimer.current !== null) window.clearTimeout(successTimer.current);
+  }, []);
+
+  const investWithSuccessFeedback = (
+    commentId: number,
+    currentAmount: number,
+    nextAmount: number,
+  ) => {
+    if (pendingInvestmentIds.has(commentId)) return;
+    setPendingInvestmentIds((current) => new Set(current).add(commentId));
+    onRun(async () => {
+      try {
+        const next = await studyApi.invest(role, participantCode, commentId, nextAmount);
+        setSuccessfulInvestmentId(null);
+        setReactionFeedback(null);
+        window.requestAnimationFrame(() => {
+          setSuccessfulInvestmentId(commentId);
+          setReactionFeedback({
+            commentId,
+            label: nextAmount === 0 ? `+${currentAmount}` : '+20',
+          });
+        });
+        if (successTimer.current !== null) window.clearTimeout(successTimer.current);
+        successTimer.current = window.setTimeout(() => clearInvestmentSuccess(commentId), 900);
+        return next;
+      } finally {
+        setPendingInvestmentIds((current) => {
+          const updated = new Set(current);
+          updated.delete(commentId);
+          return updated;
+        });
+      }
+    });
+  };
   const isInvestmentPhase = phase === 'investing';
   const canInvest = isInvestmentPhase && !investmentLocked;
-  const sortedComments = marketPrivacyActive
-    ? [...comments]
-    : [...comments].sort((a, b) => Number(b.invested || 0) - Number(a.invested || 0));
+  const sortedComments = React.useMemo(
+    () => marketPrivacyActive ? [...comments] : getRankedComments(comments),
+    [comments, marketPrivacyActive],
+  );
+  const investmentListRef = React.useRef<HTMLDivElement>(null);
+  const previousCardPositions = React.useRef(new Map<number, DOMRect>());
+
+  React.useLayoutEffect(() => {
+    const list = investmentListRef.current;
+    if (!list) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const nextPositions = new Map<number, DOMRect>();
+
+    list.querySelectorAll<HTMLElement>('[data-investment-card-id]').forEach((element) => {
+      const id = Number(element.dataset.investmentCardId);
+      const next = element.getBoundingClientRect();
+      const previous = previousCardPositions.current.get(id);
+      nextPositions.set(id, next);
+      if (!reduceMotion && previous) {
+        const deltaY = previous.top - next.top;
+        if (Math.abs(deltaY) > 1) {
+          element.animate(
+            [{ transform: `translateY(${deltaY}px)` }, { transform: 'translateY(0)' }],
+            { duration: 280, easing: 'cubic-bezier(.22,1,.36,1)' },
+          );
+        }
+      }
+    });
+
+    previousCardPositions.current = nextPositions;
+  }, [sortedComments]);
   const availableCoins = role === 'creator' ? creatorCoins : participantCoins;
   const selectionByComment = new Map(selectedIdeas.map((idea) => [idea.comment_id, idea]));
   const investmentCode = role === 'creator' ? 'CREATOR' : participantCode;
   const ownInvestments = investments.filter((investment) => investment.participant_code === investmentCode);
   const committedThisRound = ownInvestments.reduce((sum, investment) => sum + Number(investment.amount || 0), 0);
   const roundLimit = role === 'creator' ? 200 : 150;
-  const remainingCapacity = Math.max(0, roundLimit - committedThisRound);
 
   return (
     <Card
-      title="Investment board"
-      icon={<CircleDollarSign />}
-      badge={canInvest ? `${availableCoins} available · ${remainingCapacity} round capacity` : 'locked'}
+      title="Investment leaderboard"
+      icon={<Trophy />}
+      badge={`剩余金币：${availableCoins}${canInvest ? '' : ' · 已锁定'}`}
     >
-      <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
-        Submit one Idea to earn 100 Coin. Participant investment is capped at 150 per round and 50 per Idea, in steps of 10. Unspent Coin carries forward. Creator resets to 200.
+      <div className="leaderboard-rules mb-4">
+        <strong>Investment leaderboard</strong>
+        <span>Tap the coin reaction to add 20 · up to 100 per Idea · 150 per participant each round</span>
         {marketPrivacyActive && <span className="mt-1 block font-black">Authors, live totals, other investors, and rankings stay hidden until investing closes.</span>}
         {investmentLocked && <span className="mt-1 block font-black">The market is locked. Results are revealed while Creator resolves the final ranking.</span>}
       </div>
-      <div className="grid md:grid-cols-2 gap-4">
+      <div ref={investmentListRef} className="investment-scroll-region grid min-h-0 gap-3 overflow-y-auto pr-1 custom-scrollbar-light">
         {sortedComments.length === 0 ? (
           <div className="md:col-span-2 rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-400">Comments will become investment options after commenting.</div>
         ) : (
@@ -1342,62 +1428,111 @@ function InvestmentPanel({
             const ownComment = role === 'participant' && (comment.is_own || comment.participant_code === participantCode);
             const selectedIdea = selectionByComment.get(comment.id);
             const existingInvestment = ownInvestments.find((investment) => investment.comment_id === comment.id);
-            const amount = amounts[comment.id] ?? Number(existingInvestment?.amount || 10);
-            const delta = amount - Number(existingInvestment?.amount || 0);
-            const exceedsBalance = delta > availableCoins;
-            const exceedsRoundLimit = committedThisRound - Number(existingInvestment?.amount || 0) + amount > roundLimit;
+            const currentAmount = Number(existingInvestment?.amount || 0);
+            const nextAmount = currentAmount === 100 ? 0 : currentAmount + 20;
+            const addsCoins = nextAmount > currentAmount;
+            const exceedsBalance = addsCoins && availableCoins < 20;
+            const exceedsRoundLimit = addsCoins && committedThisRound + 20 > roundLimit;
+            const reactionPending = pendingInvestmentIds.has(comment.id);
+            const reactionDisabled = !canInvest || ownComment || isBusy || reactionPending || exceedsBalance || exceedsRoundLimit;
+            const visibleRank = marketPrivacyActive ? null : index + 1;
             return (
               <div
                 key={comment.id}
+                className={cn('ranked-idea-item min-w-0', ownComment && 'is-own-idea')}
+                data-investment-card-id={comment.id}
+              >
+              <InteractiveSurface
+                strength="bet"
+                disabled={!canInvest || ownComment || isBusy}
                 className={cn(
-                  'rounded-2xl border p-4 bg-white/80 transition',
-                  comment.selected ? 'border-violet-300 shadow-lg shadow-violet-100' : 'border-blue-100',
+                  'bet-action',
+                  successfulInvestmentId === comment.id && 'bet-action-success',
+                )}
+                onAnimationEnd={(event) => {
+                  if (event.animationName === 'investment-success-pulse') {
+                    clearInvestmentSuccess(comment.id);
+                  }
+                }}
+              >
+              <div
+                className={cn(
+                  'bet-action-panel unified-ranked-comment rounded-2xl border p-4 bg-white/80 transition',
+                  !marketPrivacyActive && `ranking-tier-${Math.min(index + 1, 5)}`,
+                  ownComment && 'own-idea-card',
+                  comment.selected ? 'selected border-violet-300 shadow-lg shadow-violet-100' : 'border-blue-100',
                 )}
               >
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-black text-blue-600">
-                    {marketPrivacyActive
-                      ? `${comment.is_own ? 'Your Idea' : 'Anonymous Idea'} ${index + 1}`
-                      : `#${index + 1} · ${comment.participant_code}`}
+                <div className="ranked-idea-header">
+                  <span className="rank-number" aria-label={visibleRank ? `Rank ${visibleRank}` : 'Ranking hidden'}>
+                    <small>RANK</small>
+                    <strong>{visibleRank ?? '—'}</strong>
                   </span>
-                  <span className="text-xs font-black text-amber-600">
-                    {marketPrivacyActive ? (existingInvestment ? `Your stake: ${existingInvestment.amount}` : 'Market total hidden') : `${comment.invested || 0} coins`}
-                  </span>
+                  <div className="ranked-idea-identity">
+                    <div className="ranked-idea-labels">
+                      <strong>{marketPrivacyActive ? (ownComment ? 'YOUR IDEA' : 'ANONYMOUS IDEA') : comment.participant_code}</strong>
+                      {visibleRank && visibleRank <= 3 && <span>TOP {visibleRank}</span>}
+                      {ownComment && <span className="own-idea-label">OWN IDEA</span>}
+                    </div>
+                    <span>{ownComment ? 'Your submitted direction' : 'Community direction'}</span>
+                  </div>
+                  <div className="ranked-idea-score">
+                    <strong>{marketPrivacyActive ? '—' : Number(comment.invested || 0)}</strong>
+                    <span>COINS</span>
+                  </div>
                 </div>
-                <p className="text-sm text-slate-600 leading-6 min-h-[72px]">{comment.content}</p>
+                <div className="ranked-idea-body">
+                  <ExpandableCommentText content={comment.content} className="ranked-idea-content" />
+                  <div className="coin-reaction-wrap">
+                    <button
+                      type="button"
+                      disabled={reactionDisabled}
+                      onClick={() => investWithSuccessFeedback(comment.id, currentAmount, nextAmount)}
+                      className={cn(
+                        'coin-reaction-button',
+                        currentAmount > 0 && 'is-active',
+                        successfulInvestmentId === comment.id && 'is-reacting',
+                        exceedsBalance && 'is-insufficient',
+                      )}
+                      aria-label={
+                        ownComment
+                          ? 'Cannot invest in your own idea'
+                          : currentAmount === 100
+                            ? 'Return the 100 coins invested in this idea'
+                            : `Add 20 coins to this idea. Current investment ${currentAmount}`
+                      }
+                      aria-pressed={currentAmount > 0}
+                    >
+                      <CircleDollarSign aria-hidden="true" />
+                      <span>{currentAmount}</span>
+                      {reactionFeedback?.commentId === comment.id && (
+                        <i className="coin-reaction-float" aria-hidden="true">{reactionFeedback.label}</i>
+                      )}
+                    </button>
+                    <span className={cn('coin-reaction-status', (exceedsBalance || exceedsRoundLimit) && 'is-error')}>
+                      {ownComment
+                        ? 'Own idea'
+                        : exceedsBalance
+                          ? '余额不足'
+                          : exceedsRoundLimit
+                            ? '本轮额度已满'
+                            : currentAmount === 100
+                              ? '再次点击返还'
+                              : currentAmount > 0
+                                ? '已投入'
+                                : '点击投入 20'}
+                    </span>
+                  </div>
+                </div>
                 {selectedIdea && (
-                  <div className="mt-3 inline-flex items-center gap-1 rounded-xl bg-violet-100 text-violet-600 px-3 py-1 text-xs font-black">
+                  <div className="selected-idea-badge mt-3 inline-flex items-center gap-1 px-3 py-1 text-xs font-black">
                     <BadgeCheck className="h-3 w-3" />
                     #{selectedIdea.selection_rank} {selectedIdea.selection_role === 'core' ? 'Core idea' : 'Supporting idea'}
                   </div>
                 )}
-                <div className="mt-4 flex gap-2">
-                  <select
-                    value={amount}
-                    onChange={(event) => setAmounts((prev) => ({ ...prev, [comment.id]: Number(event.target.value) }))}
-                    disabled={!canInvest || ownComment || isBusy}
-                    className="w-24 rounded-xl border border-blue-100 px-3 text-sm font-bold outline-none disabled:bg-slate-50"
-                  >
-                    {[10, 20, 30, 40, 50].map((value) => <option key={value} value={value}>{value}</option>)}
-                  </select>
-                  <button
-                    disabled={!canInvest || ownComment || isBusy || exceedsBalance || exceedsRoundLimit}
-                    onClick={() =>
-                      onRun(() => studyApi.invest(role, participantCode, comment.id, amount))
-                    }
-                    className="flex-1 h-11 rounded-xl bg-gradient-to-r from-amber-400 to-violet-500 text-white text-xs font-black disabled:bg-none disabled:bg-slate-200 disabled:text-slate-400"
-                  >
-                    {ownComment
-                      ? 'Own Idea'
-                      : exceedsBalance
-                        ? 'Not enough Coin'
-                        : exceedsRoundLimit
-                          ? 'Round limit reached'
-                          : existingInvestment
-                            ? `Update stake to ${amount}`
-                            : `Invest ${amount}`}
-                  </button>
-                </div>
+                {!marketPrivacyActive && visibleRank === 1 && <strong className="ranked-leading-label">LEADING</strong>}
+              </div>
+              </InteractiveSurface>
               </div>
             );
           })
@@ -1477,7 +1612,7 @@ function DevelopmentChatPanel({
             <div
               key={item.id}
               className={cn(
-                'rounded-2xl border p-3',
+                'message-card rounded-2xl border p-3',
                 item.role === 'creator'
                   ? 'ml-6 border-blue-100 bg-blue-50'
                   : item.role === 'assistant'
@@ -1511,7 +1646,7 @@ function DevelopmentChatPanel({
             type="button"
             disabled={isBusy || !message.trim()}
             onClick={submit}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-500 to-blue-600 text-sm font-black text-white disabled:opacity-40"
+            className="primary-action flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-500 to-blue-600 text-sm font-black text-white disabled:opacity-40"
           >
             {isBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             Send & generate next draft
@@ -1643,7 +1778,7 @@ function EndedArchive({
 
   return (
     <div className="mx-auto max-w-[1800px] space-y-6">
-      <section className="overflow-hidden rounded-[2.5rem] bg-gradient-to-r from-slate-950 via-blue-950 to-violet-950 p-8 text-white shadow-2xl shadow-blue-200">
+      <section className="archive-hero overflow-hidden rounded-[2.5rem] bg-gradient-to-r from-slate-950 via-blue-950 to-violet-950 p-8 text-white shadow-2xl shadow-blue-200">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-black">
@@ -1727,7 +1862,7 @@ function EndedArchive({
           </div>
         </Card>
 
-        <section className="overflow-hidden rounded-[2rem] border border-white bg-white/80 shadow-xl shadow-blue-100">
+        <section className="archive-preview overflow-hidden rounded-[2rem] border border-white bg-white/80 shadow-xl shadow-blue-100">
           <div className="border-b border-blue-50 p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -1785,7 +1920,7 @@ function EndedArchive({
           </div>
           <div className="h-[650px] bg-white">
             {selectedVersion ? (
-              <iframe title="Archived project version" srcDoc={selectedVersion.code} className="h-full w-full border-0" />
+              <CursorSafeIframe title="Archived project version" srcDoc={selectedVersion.code} className="h-full w-full border-0" />
             ) : (
               <div className="grid h-full place-items-center text-slate-400">No archived version.</div>
             )}
@@ -1815,11 +1950,11 @@ function ExperimentHistoryPanel({
       </p>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {archives.map((experiment) => (
+          <InteractiveSurface key={experiment.id} strength="surface">
           <button
-            key={experiment.id}
             type="button"
             onClick={() => onViewArchive(experiment.id)}
-            className="rounded-2xl border border-blue-100 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-lg hover:shadow-violet-100"
+            className="archive-item w-full rounded-2xl border border-blue-100 bg-white p-4 text-left transition hover:border-violet-200 hover:shadow-lg hover:shadow-violet-100"
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1839,6 +1974,7 @@ function ExperimentHistoryPanel({
               View archive <ArrowRight className="h-3.5 w-3.5" />
             </p>
           </button>
+          </InteractiveSurface>
         ))}
       </div>
     </Card>
@@ -1847,7 +1983,7 @@ function ExperimentHistoryPanel({
 
 function ArchiveMiniStat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-xl bg-blue-50/70 px-2 py-2">
+    <div className="archive-mini-stat rounded-xl bg-blue-50/70 px-2 py-2">
       <p className="text-sm font-black text-blue-700">{value}</p>
       <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
     </div>
@@ -1868,7 +2004,7 @@ function FinalCoinLeaderboard({ entries }: { entries: StudyLeaderboardEntry[] })
   return (
     <Card title="Final Coin leaderboard" icon={<Trophy />} badge={`${entries.length} Participants`}>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[860px] border-separate border-spacing-y-2 text-left">
+        <table className="leaderboard-table w-full min-w-[860px] border-separate border-spacing-y-2 text-left">
           <thead>
             <tr className="text-[10px] font-black uppercase tracking-wider text-slate-400">
               <th className="px-4 py-2">Rank</th>
@@ -1918,55 +2054,56 @@ function FinalCoinLeaderboard({ entries }: { entries: StudyLeaderboardEntry[] })
 
 function VersionTimeline({ state }: { state: StudyState }) {
   return (
-    <Card title="Version evolution" icon={<Eye />} badge={`${state.versions.length} versions`}>
-      <div className="grid md:grid-cols-2 gap-4">
-        {state.versions.map((version) => {
-          const sources = state.versionSources.filter((source) => source.version_id === version.id);
-          const legacySource = version.source_comment_id
-            ? state.comments.find((comment) => comment.id === version.source_comment_id)
-            : null;
-          return (
-            <div key={version.id} className="rounded-2xl border border-blue-100 bg-white/80 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-black text-blue-950">{version.title}</p>
-                <span className="rounded-xl bg-blue-50 text-blue-600 px-3 py-1 text-xs font-black">Round {version.round_number}</span>
-              </div>
-              {sources.length > 0 ? (
-                <div className="space-y-2">
-                  {sources.map((source) => (
-                    <p key={source.comment_id} className="text-xs text-slate-500 leading-5 line-clamp-2">
-                      <span className="font-black text-blue-600">
-                        #{source.selection_rank} {source.selection_role === 'core' ? 'Core' : 'Supporting'} · {source.participant_code}:
-                      </span>{' '}
-                      {source.content}
-                    </p>
-                  ))}
-                </div>
-              ) : legacySource ? (
-                <p className="text-xs text-slate-500 leading-6">
-                  Built from {legacySource.participant_code}: {legacySource.content}
-                </p>
-              ) : (
-                <p className="text-xs text-slate-500 leading-6">Initial creator upload</p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </Card>
+    <div className="version-timeline-shell self-start">
+      <Card title="Version evolution" icon={<Eye />} badge={`${state.versions.length} versions`}>
+        <VersionEvolution state={state} />
+      </Card>
+    </div>
   );
 }
 
-function CommentCard({ comment, hideMarketInfo = false }: { comment: StudyComment; hideMarketInfo?: boolean }) {
+function ExpandableCommentText({ content, className = '' }: { content: string; className?: string }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const canExpand = content.length > 140;
+
   return (
-    <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
+    <div className={className}>
+      <p className={cn('text-sm leading-6 text-slate-600 break-words', canExpand && !expanded && 'line-clamp-3')}>
+        {content}
+      </p>
+      {canExpand && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-1 text-[11px] font-black text-blue-600 hover:underline"
+          aria-expanded={expanded}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function CommentCard({
+  comment,
+  rank,
+  hideMarketInfo = false,
+}: {
+  key?: React.Key;
+  comment: StudyComment;
+  rank?: number;
+  hideMarketInfo?: boolean;
+}) {
+  return (
+    <div className={cn('comment-card rounded-2xl border border-blue-100 bg-white/80 p-4', rank && `comment-rank-${Math.min(rank, 5)}`)}>
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs font-black text-blue-600">
-          {hideMarketInfo ? (comment.is_own ? 'Your anonymous Idea' : 'Anonymous Idea') : `#${comment.id} · ${comment.participant_code}`}
+          {hideMarketInfo ? (comment.is_own ? 'Your anonymous Idea' : 'Anonymous Idea') : `#${rank ?? '—'} · ${comment.participant_code}`}
         </p>
         <p className="text-xs font-black text-amber-600">{hideMarketInfo ? 'Investment hidden' : `${comment.invested || 0} coins`}</p>
       </div>
-      <p className="text-sm text-slate-600 leading-6">{comment.content}</p>
+      <ExpandableCommentText content={comment.content} />
     </div>
   );
 }
@@ -1983,7 +2120,7 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-[2rem] bg-white/80 border border-white p-6 shadow-xl shadow-blue-100/70">
+    <section className="ui-card rounded-[2rem] bg-white/80 border border-white p-6 shadow-xl shadow-blue-100/70">
       <header className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-blue-50 text-blue-600 grid place-items-center [&_svg]:h-5 [&_svg]:w-5">{icon}</div>
@@ -1998,7 +2135,7 @@ function Card({
 
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <label className="block">
+    <label className="ui-field block">
       <span className="text-xs font-black uppercase tracking-widest text-slate-400">{label}</span>
       <input
         value={value}
@@ -2023,7 +2160,7 @@ function TextField({
   placeholder?: string;
 }) {
   return (
-    <label className="block">
+    <label className="ui-field block">
       <span className="text-xs font-black uppercase tracking-widest text-slate-400">{label}</span>
       <textarea
         value={value}
