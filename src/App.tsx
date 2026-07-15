@@ -167,7 +167,7 @@ export default function App() {
   }
 
   const identityLabel = role === 'creator'
-    ? 'Creator / Host'
+    ? 'Creator'
     : role === 'participant'
       ? participantCode
         ? `Participant · ${participantCode}`
@@ -509,7 +509,7 @@ function RoleGate({
     <div className="role-selection-page min-h-screen bg-black">
       <ThemeToggle className="theme-toggle-floating" />
       <RoleSelection
-        onCommit={(selectedRole) => onChoose(selectedRole === 'host' ? 'creator' : 'participant')}
+        onCommit={onChoose}
       />
       <div className="role-selection-history mx-auto w-full max-w-5xl px-6 pb-14">
         <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
@@ -815,7 +815,7 @@ function StudyRoom({
           <dl>
             <div><dt>Mode</dt><dd>Public room</dd></div>
             <div><dt>Players</dt><dd>{MINIMUM_ROOM_OCCUPANCY}–{ROOM_CAPACITY}</dd></div>
-            <div><dt>Duration</dt><dd>Host controlled</dd></div>
+            <div><dt>Duration</dt><dd>Creator controlled</dd></div>
             <div><dt>Start</dt><dd>{MINIMUM_ROOM_OCCUPANCY} people</dd></div>
           </dl>
         </section>
@@ -1004,8 +1004,8 @@ function CreatorControls({
 
   if (role !== 'creator') {
     return (
-      <Card title="Host controls" icon={<MousePointer2 />}>
-        <p className="text-sm text-slate-500 leading-7">Creator/Host controls the phase transitions. Your participant view updates automatically.</p>
+      <Card title="Creator controls" icon={<MousePointer2 />}>
+        <p className="text-sm text-slate-500 leading-7">The Creator controls the phase transitions. Your participant view updates automatically.</p>
       </Card>
     );
   }
@@ -1016,7 +1016,7 @@ function CreatorControls({
       helper:
         roomOccupancy >= minimumRoomOccupancy
           ? `${roomOccupancy}/20 people are ready. Participants can now submit timed comments.`
-          : `At least ${minimumRoomOccupancy} people including Host are required. Current room: ${roomOccupancy}/20.`,
+          : `At least ${minimumRoomOccupancy} people including the Creator are required. Current room: ${roomOccupancy}/20.`,
       run: () => studyApi.setPhase('commenting'),
       icon: <MessageCircle />,
     },

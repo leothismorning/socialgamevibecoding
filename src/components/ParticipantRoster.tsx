@@ -36,7 +36,7 @@ export function ParticipantRoster({
     participants.filter((participant) => participant.joined_at).map((participant) => [participant.code, participant]),
   );
   const seats = [
-    { code: 'HOST', label: 'Host', joined: true },
+    { code: 'CREATOR', label: 'Creator', joined: true },
     ...Array.from({ length: capacity - 1 }, (_, index) => {
       const code = `P${index + 1}`;
       const participant = joinedByCode.get(code);
@@ -61,7 +61,7 @@ export function ParticipantRoster({
       <div className="participant-seat-grid" role="list" aria-label={`${occupancy} of ${capacity} seats occupied`}>
         {seats.map((seat) => (
           <div
-            className={cn('participant-seat', seat.joined ? 'is-joined' : 'is-empty', seat.code === 'HOST' && 'is-host')}
+            className={cn('participant-seat', seat.joined ? 'is-joined' : 'is-empty', seat.code === 'CREATOR' && 'is-creator')}
             key={seat.code}
             role="listitem"
           >

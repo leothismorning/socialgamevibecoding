@@ -925,7 +925,7 @@ export function setPhase(toPhase: StudyPhase) {
     );
     const roomOccupancy = joinedParticipants + 1;
     if (roomOccupancy < 15) {
-      throw new Error(`At least 15 people including the Host are required to start. Current room: ${roomOccupancy}/20.`);
+      throw new Error(`At least 15 people including the Creator are required to start. Current room: ${roomOccupancy}/20.`);
     }
   }
   if (toPhase === 'investing') {

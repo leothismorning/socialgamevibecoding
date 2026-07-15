@@ -4009,7 +4009,7 @@ html[data-theme="light"] .app-shell :is(.bg-slate-700, .bg-slate-900, .bg-slate-
   background: linear-gradient(145deg, rgba(199, 248, 251, .9), rgba(149, 205, 182, .52));
 }
 
-.participant-seat.is-host {
+.participant-seat.is-creator {
   border-color: rgba(15, 169, 88, .44);
   background: linear-gradient(145deg, #c7f8fb, #95cdb6);
 }

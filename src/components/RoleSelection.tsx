@@ -2,7 +2,7 @@ import React from 'react';
 import styles from './RoleSelection.module.css';
 import { usePointerTilt } from '../hooks/usePointerTilt';
 
-export type SelectedRole = 'host' | 'participant' | null;
+export type SelectedRole = 'creator' | 'participant' | null;
 
 type RoleDefinition = {
   id: Exclude<SelectedRole, null>;
@@ -13,8 +13,8 @@ type RoleDefinition = {
 
 const roles: RoleDefinition[] = [
   {
-    id: 'host',
-    title: 'HOST',
+    id: 'creator',
+    title: 'CREATOR',
     description: 'Create, guide and lead.',
     keywords: ['guide', 'create', 'lead', 'orchestrate'],
   },
@@ -127,8 +127,8 @@ function RoleCard({
 
         <span className={styles.faceBack}>
           <PersonIcon role={role.id} variant="outline" />
-          <span className={`${styles.backKeywords} ${role.id === 'participant' ? styles.participantKeywords : styles.hostKeywords}`}>
-            <strong className={role.id === 'participant' ? styles.participantTitle : styles.hostTitle}>{role.title}</strong>
+          <span className={`${styles.backKeywords} ${role.id === 'participant' ? styles.participantKeywords : styles.creatorKeywords}`}>
+            <strong className={role.id === 'participant' ? styles.participantTitle : styles.creatorTitle}>{role.title}</strong>
             {role.keywords.map((keyword) => <span key={keyword}>{keyword}</span>)}
           </span>
         </span>
@@ -162,7 +162,7 @@ function PersonIcon({
       <svg className={styles.personFill} viewBox="0 0 200 200" aria-hidden="true">
         <defs>
           <linearGradient id={gradientId} x1="20" y1="20" x2="176" y2="188" gradientUnits="userSpaceOnUse">
-            {role === 'host' ? (
+            {role === 'creator' ? (
               <>
                 <stop stopColor="#CBEFF0" />
                 <stop offset=".48" stopColor="#95CDB6" />

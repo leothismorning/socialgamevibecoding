@@ -241,11 +241,11 @@
   white-space: nowrap;
 }
 
-.hostTitle {
+.creatorTitle {
   font-size: clamp(24px, 2.6vw, 31px);
 }
 
-.hostKeywords {
+.creatorKeywords {
   top: 58%;
 }
 
