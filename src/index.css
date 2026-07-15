@@ -1326,6 +1326,191 @@ summary:focus-visible {
   }
 }
 
+/* The study information rail collapses as one unit without touching study state. */
+.study-layout-shell {
+  --sidebar-width: clamp(250px, 21vw, 276px);
+  position: relative;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) !important;
+  transition: grid-template-columns 240ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.study-layout-shell.is-sidebar-collapsed {
+  --sidebar-width: 52px;
+}
+
+.study-info-sidebar {
+  position: sticky;
+  top: 84px;
+  display: block !important;
+  width: 100%;
+  max-height: calc(100dvh - 104px);
+  min-width: 0;
+  padding: 0 !important;
+  overflow: visible !important;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.study-info-sidebar-scroll {
+  display: flex;
+  max-height: calc(100dvh - 106px);
+  min-width: 0;
+  padding: 14px;
+  flex-direction: column;
+  gap: 12px;
+  overflow-x: clip;
+  overflow-y: auto;
+  border-radius: inherit;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 160ms ease,
+    transform 200ms ease,
+    visibility 160ms ease;
+  scrollbar-gutter: stable;
+}
+
+.sidebar-collapse-toggle {
+  position: absolute;
+  z-index: 20;
+  top: 18px;
+  right: -18px;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(92, 172, 120, .38);
+  border-radius: 50%;
+  color: #2e563b;
+  background: linear-gradient(145deg, #ffffff, #cbeff0);
+  box-shadow: 0 8px 24px rgba(46, 86, 59, .16);
+  transform: translateZ(0);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    right 200ms ease;
+}
+
+.sidebar-collapse-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sidebar-collapse-toggle:hover {
+  border-color: #0fa958;
+  box-shadow: 0 10px 28px rgba(15, 169, 88, .22);
+  transform: translateY(-1px);
+}
+
+.sidebar-collapse-toggle:active {
+  transform: scale(.94);
+}
+
+.sidebar-collapse-toggle:focus-visible {
+  outline: 3px solid rgba(149, 205, 182, .48);
+  outline-offset: 3px;
+}
+
+.sidebar-collapsed-mark {
+  position: absolute;
+  top: 66px;
+  left: 50%;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(92, 172, 120, .26);
+  border-radius: 11px;
+  color: #2e563b;
+  background: linear-gradient(145deg, #c7f8fb, #95cdb6);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -6px) scale(.92);
+  transition: opacity 140ms ease, transform 180ms ease;
+}
+
+.sidebar-collapsed-mark svg {
+  width: 17px;
+  height: 17px;
+}
+
+.is-sidebar-collapsed .study-info-sidebar {
+  height: calc(100dvh - 104px);
+  min-height: 180px;
+  border-color: rgba(92, 172, 120, .3);
+  box-shadow: 0 12px 34px rgba(46, 86, 59, .08);
+}
+
+.is-sidebar-collapsed .study-info-sidebar-scroll {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-10px);
+}
+
+.is-sidebar-collapsed .sidebar-collapse-toggle {
+  right: 6px;
+}
+
+.is-sidebar-collapsed .sidebar-collapsed-mark {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+.study-main-column {
+  width: 100%;
+  min-width: 0;
+}
+
+html[data-theme="dark"] .sidebar-collapse-toggle {
+  color: #c7f8fb;
+  background: linear-gradient(145deg, #07100c, #2e563b);
+}
+
+@media (max-width: 960px) {
+  .study-layout-shell,
+  .study-layout-shell.is-sidebar-collapsed {
+    --sidebar-width: 100%;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .study-info-sidebar {
+    position: relative;
+    top: auto;
+    max-height: none;
+  }
+
+  .study-info-sidebar-scroll {
+    max-height: none;
+  }
+
+  .sidebar-collapse-toggle,
+  .is-sidebar-collapsed .sidebar-collapse-toggle {
+    top: 10px;
+    right: 10px;
+  }
+
+  .is-sidebar-collapsed .study-info-sidebar {
+    height: 58px;
+    min-height: 58px;
+  }
+
+  .is-sidebar-collapsed .sidebar-collapsed-mark {
+    top: 11px;
+    left: 14px;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .study-layout-shell,
+  .study-info-sidebar-scroll,
+  .sidebar-collapse-toggle,
+  .sidebar-collapsed-mark {
+    transition: none !important;
+  }
+}
+
 /* Main study workspace: one fixed information rail and one continuous content flow. */
 .is-workspace-shell {
   overflow: visible !important;

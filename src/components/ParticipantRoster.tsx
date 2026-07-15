@@ -23,12 +23,10 @@ export function ParticipantAvatar({ joined = true, className = '' }: { joined?: 
 
 export function ParticipantRoster({
   participants,
-  minimumOccupancy = 15,
   capacity = 20,
   compact = false,
 }: {
   participants: StudyParticipant[];
-  minimumOccupancy?: number;
   capacity?: number;
   compact?: boolean;
 }) {
@@ -44,7 +42,6 @@ export function ParticipantRoster({
     }),
   ];
   const occupancy = joinedByCode.size + 1;
-  const ready = occupancy >= minimumOccupancy;
 
   return (
     <section className={cn('participant-roster', compact && 'is-compact')} aria-labelledby="participant-roster-title">
@@ -53,9 +50,9 @@ export function ParticipantRoster({
           <p className="participant-roster-kicker">ROOM</p>
           <h2 id="participant-roster-title">Joined participants</h2>
         </div>
-        <div className={cn('participant-roster-readiness', ready && 'is-ready')}>
+        <div className="participant-roster-readiness is-ready">
           <strong>{occupancy}/{capacity}</strong>
-          <span>{ready ? 'Ready to start' : `${minimumOccupancy - occupancy} more needed`}</span>
+          <span>Creator can start anytime</span>
         </div>
       </div>
       <div className="participant-seat-grid" role="list" aria-label={`${occupancy} of ${capacity} seats occupied`}>

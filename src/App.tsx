@@ -11,6 +11,8 @@ import {
   FlaskConical,
   MessageCircle,
   MousePointer2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   RefreshCw,
   Send,
@@ -70,7 +72,6 @@ const phaseLabels: Record<StudyPhase, { title: string; subtitle: string; tone: s
 
 const participantCodePattern = /^P(?:[1-9]|1[0-9])$/;
 const ROOM_CAPACITY = 20;
-const MINIMUM_ROOM_OCCUPANCY = 15;
 const COMMENT_CHARACTER_LIMIT = 280;
 
 function getParticipantClientId() {
@@ -745,6 +746,8 @@ function StudyRoom({
   onNewExperiment: () => void;
   onAbortExperiment: () => void;
 }) {
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
+
   if (!state.experiment) {
     return (
       <section className="max-w-3xl mx-auto rounded-[2.5rem] bg-white/80 border border-white p-10 text-center shadow-xl shadow-blue-100">
@@ -777,34 +780,51 @@ function StudyRoom({
   }
 
   return (
-    <div className="study-room study-layout-shell max-w-[1920px] mx-auto">
-      <aside className="study-info-sidebar custom-scrollbar-light" aria-label="Project and room information">
-        <section className="sidebar-project-identity">
+    <div className={cn('study-room study-layout-shell max-w-[1920px] mx-auto', isSidebarCollapsed && 'is-sidebar-collapsed')}>
+      <aside className="study-info-sidebar" aria-label="Project and room information">
+        <button
+          type="button"
+          className="sidebar-collapse-toggle"
+          aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!isSidebarCollapsed}
+          aria-controls="study-info-sidebar-content"
+          onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+        >
+          {isSidebarCollapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
+        </button>
+        <span className="sidebar-collapsed-mark" aria-hidden="true"><Sparkles /></span>
+        <div
+          id="study-info-sidebar-content"
+          className="study-info-sidebar-scroll custom-scrollbar-light"
+          aria-hidden={isSidebarCollapsed}
+          inert={isSidebarCollapsed}
+        >
+          <section className="sidebar-project-identity">
           <span className="sidebar-project-mark" aria-hidden="true"><Sparkles /></span>
           <div>
             <p>Vibecoding Study</p>
             <h1>{experiment.title}</h1>
             <span>Creator · {experiment.creator_name}</span>
           </div>
-        </section>
+          </section>
 
-        <section className="sidebar-round-card" aria-label={`Current round ${experiment.current_round} of ${experiment.max_rounds}`}>
+          <section className="sidebar-round-card" aria-label={`Current round ${experiment.current_round} of ${experiment.max_rounds}`}>
           <span className="sidebar-live-dot" aria-hidden="true" />
           <div>
             <small>CURRENT ROUND</small>
             <strong>Round {experiment.current_round}/{experiment.max_rounds}</strong>
           </div>
           <span className={cn('sidebar-phase-badge', phase.tone)}>{phase.title}</span>
-        </section>
+          </section>
 
-        <section className="sidebar-description-card">
+          <section className="sidebar-description-card">
           <p className="sidebar-section-kicker">PROJECT DESCRIPTION</p>
           <h2>本轮项目说明</h2>
           <p>{experiment.brief}</p>
           <span>{phase.subtitle}</span>
-        </section>
+          </section>
 
-        <section className="sidebar-room-info">
+          <section className="sidebar-room-info">
           <div className="sidebar-section-heading">
             <div>
               <p className="sidebar-section-kicker">ROOM INFO</p>
@@ -814,25 +834,24 @@ function StudyRoom({
           </div>
           <dl>
             <div><dt>Mode</dt><dd>Public room</dd></div>
-            <div><dt>Players</dt><dd>{MINIMUM_ROOM_OCCUPANCY}–{ROOM_CAPACITY}</dd></div>
+            <div><dt>Capacity</dt><dd>{ROOM_CAPACITY} people</dd></div>
             <div><dt>Duration</dt><dd>Creator controlled</dd></div>
-            <div><dt>Start</dt><dd>{MINIMUM_ROOM_OCCUPANCY} people</dd></div>
+            <div><dt>Start</dt><dd>Anytime</dd></div>
           </dl>
-        </section>
+          </section>
 
-        <ParticipantRoster
-          participants={state.participants}
-          minimumOccupancy={MINIMUM_ROOM_OCCUPANCY}
-          capacity={ROOM_CAPACITY}
-          compact
-        />
+          <ParticipantRoster
+            participants={state.participants}
+            capacity={ROOM_CAPACITY}
+            compact
+          />
 
-        <section className="sidebar-session-stats" aria-label="Current session statistics">
+          <section className="sidebar-session-stats" aria-label="Current session statistics">
           <div><CircleDollarSign aria-hidden="true" /><span>Coins</span><strong>{role === 'creator' ? experiment.creator_coins : me?.coins ?? 0}</strong></div>
           <div><Trophy aria-hidden="true" /><span>Selected</span><strong>{state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round).length}/3</strong></div>
-        </section>
+          </section>
 
-        <div className="sidebar-flow-control">
+          <div className="sidebar-flow-control">
           <CreatorControls
             role={role}
             phase={experiment.phase}
@@ -845,10 +864,10 @@ function StudyRoom({
             tiedComments={tiedComments}
             tieRankScores={tieRankScores}
             roomOccupancy={roomOccupancy}
-            minimumRoomOccupancy={MINIMUM_ROOM_OCCUPANCY}
             onRun={onRun}
             onAbortExperiment={onAbortExperiment}
           />
+          </div>
         </div>
       </aside>
 
@@ -970,7 +989,6 @@ function CreatorControls({
   tiedComments,
   tieRankScores,
   roomOccupancy,
-  minimumRoomOccupancy,
   onRun,
   onAbortExperiment,
 }: {
@@ -985,7 +1003,6 @@ function CreatorControls({
   tiedComments: StudyComment[];
   tieRankScores: number[];
   roomOccupancy: number;
-  minimumRoomOccupancy: number;
   onRun: (action: () => Promise<StudyState>) => void;
   onAbortExperiment: () => void;
 }) {
@@ -1013,10 +1030,7 @@ function CreatorControls({
   const actions: Partial<Record<StudyPhase, { label: string; helper: string; run: () => Promise<StudyState>; icon: React.ReactNode }>> = {
     experience: {
       label: 'Start commenting',
-      helper:
-        roomOccupancy >= minimumRoomOccupancy
-          ? `${roomOccupancy}/20 people are ready. Participants can now submit timed comments.`
-          : `At least ${minimumRoomOccupancy} people including the Creator are required. Current room: ${roomOccupancy}/20.`,
+      helper: `${roomOccupancy}/20 people joined. The Creator can start anytime.`,
       run: () => studyApi.setPhase('commenting'),
       icon: <MessageCircle />,
     },
@@ -1083,7 +1097,6 @@ function CreatorControls({
           <button
             disabled={
               isBusy ||
-              (phase === 'experience' && roomOccupancy < minimumRoomOccupancy) ||
               (phase === 'investing' && commentCount < 3)
             }
             onClick={() => onRun(action.run)}

@@ -919,15 +919,6 @@ export function setPhase(toPhase: StudyPhase) {
   if (!valid.includes(toPhase)) throw new Error('Invalid phase.');
 
   const fromPhase = experiment.phase;
-  if (fromPhase === 'experience' && toPhase === 'commenting') {
-    const joinedParticipants = Number(
-      (db.prepare(`SELECT COUNT(*) AS count FROM participant_sessions WHERE experiment_id = ?`).get(experiment.id) as any)?.count || 0,
-    );
-    const roomOccupancy = joinedParticipants + 1;
-    if (roomOccupancy < 15) {
-      throw new Error(`At least 15 people including the Creator are required to start. Current room: ${roomOccupancy}/20.`);
-    }
-  }
   if (toPhase === 'investing') {
     prepareInvestmentPhase(experiment.id, experiment.current_round);
   }
