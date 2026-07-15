@@ -3,8 +3,9 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
+import { generateWithAI } from './server/ai.js';
 import { addDebugLog, clearDebugLogs, getDebugLogs } from './server/debugLog.js';
-import { generateWithDeepSeek } from './server/deepseek.js';
+import { getAIProvider } from './server/studyDb.js';
 import { registerStudyRoutes } from './server/studyRoutes.js';
 
 const app = express();
@@ -54,15 +55,15 @@ app.post('/api/debug/clear', (_req, res) => {
 registerStudyRoutes(app);
 
 app.post('/api/ai/generate', async (req, res) => {
-  const { prompt, model = 'deepseek-v4-flash' } = req.body ?? {};
+  const { prompt } = req.body ?? {};
   if (typeof prompt !== 'string' || !prompt.trim()) {
     return res.status(400).json({ error: 'A non-empty prompt is required.' });
   }
 
   try {
-    return res.json(await generateWithDeepSeek(prompt, model));
+    return res.json(await generateWithAI(getAIProvider(), prompt));
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown DeepSeek error.';
+    const message = error instanceof Error ? error.message : 'Unknown AI generation error.';
     return res.status(500).json({ error: message });
   }
 });

@@ -5,6 +5,7 @@ import {
   createExperiment,
   deleteComment,
   filterStudyStateForViewer,
+  getAIProvider,
   getStudyState,
   investCoins,
   joinStudy,
@@ -14,14 +15,16 @@ import {
   saveDevelopmentDraft,
   saveFusionPlan,
   selectTopIdeas,
+  setAIProvider,
   setPhase,
   startEndVote,
   startNextRound,
   voteProjectEnd,
   type StudyPhase,
+  type StudyAIProvider,
   type StudyViewer,
 } from './studyDb.js';
-import { generateWithDeepSeek } from './deepseek.js';
+import { generateWithAI } from './ai.js';
 
 function sendError(res: Response, error: unknown) {
   const anyError = error as any;
@@ -68,6 +71,15 @@ export function registerStudyRoutes(app: Express) {
     });
   });
 
+  app.post('/api/study/ai-provider', (req, res) => {
+    try {
+      const provider = String(req.body?.provider || '') as StudyAIProvider;
+      sendState(res, setAIProvider(provider), { role: 'creator' });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.get('/api/study/archive/:experimentId', (req, res) => {
     const state = getStudyState(String(req.params.experimentId || ''));
     if (!state.experiment) {
@@ -95,7 +107,8 @@ export function registerStudyRoutes(app: Express) {
       let prompt = String(initialPrompt || '').trim();
 
       if (!code && prompt) {
-        const generated = await generateWithDeepSeek(
+        const generated = await generateWithAI(
+          getAIProvider(),
           `Create the initial playable web prototype for a CHI user-study collaborative vibecoding experiment.
 Project title: ${title}
 Project brief: ${brief}
@@ -238,7 +251,7 @@ Current prototype summary/source length: ${currentVersion.code.length} character
 Selected ideas:
 ${ideaList}`;
 
-      const generated = await generateWithDeepSeek(prompt, 'deepseek-v4-flash', {
+      const generated = await generateWithAI(getAIProvider(), prompt, {
         systemPrompt:
           'You plan collaborative web-prototype changes for a controlled CHI study. Return only JSON with "text" containing a structured fusion plan and "code" set to an empty string. Do not use Markdown fences. Use the same language as the participant ideas.',
         maxTokens: 2048,
@@ -287,7 +300,7 @@ ${state.fusionPlan.content}
 Existing HTML:
 ${currentVersion.code}`;
 
-      const generated = await generateWithDeepSeek(prompt);
+      const generated = await generateWithAI(getAIProvider(), prompt);
       sendState(res, saveDevelopmentDraft({ code: generated.code, summary: generated.text }), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
@@ -297,7 +310,7 @@ ${currentVersion.code}`;
   app.post('/api/study/development/debug', async (req, res) => {
     try {
       const creatorMessage = String(req.body?.message || '').trim();
-      if (!creatorMessage) throw new Error('Enter a development message for DeepSeek.');
+      if (!creatorMessage) throw new Error('Enter a development message for the selected AI model.');
       const state = getStudyState();
       if (!state.experiment || !state.currentDraft) throw new Error('Generate the initial candidate before debugging.');
       if (!state.fusionPlan?.content) throw new Error('The fusion plan is missing.');
@@ -341,7 +354,7 @@ ${creatorMessage}
 Current candidate HTML (Draft ${state.currentDraft.attempt_number}):
 ${state.currentDraft.code}`;
 
-      const generated = await generateWithDeepSeek(prompt, 'deepseek-v4-flash', {
+      const generated = await generateWithAI(getAIProvider(), prompt, {
         systemPrompt:
           'You are an AI Studio-style web development partner. Return only JSON with "text" containing a concise public change summary and "code" containing the full updated self-contained HTML. Never return a partial patch or Markdown fences.',
       });

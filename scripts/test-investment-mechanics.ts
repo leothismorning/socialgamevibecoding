@@ -15,9 +15,14 @@ const {
   joinStudy,
   rollbackPhase,
   selectTopIdeas,
+  setAIProvider,
   setPhase,
   startNextRound,
 } = await import('../server/studyDb.js');
+
+assert.equal(getStudyState().aiProvider, 'deepseek');
+assert.equal(setAIProvider('gemini').aiProvider, 'gemini');
+assert.equal(setAIProvider('deepseek').aiProvider, 'deepseek');
 
 function participant(state: ReturnType<typeof getStudyState>, code: string) {
   const row = state.participants.find((item: any) => item.code === code) as any;

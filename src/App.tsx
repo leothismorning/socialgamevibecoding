@@ -40,6 +40,7 @@ import {
   StudyEndVoteSummary,
   StudyFusionPlan,
   StudyInvestment,
+  StudyAIProvider,
   StudyLeaderboardEntry,
   StudyPhase,
   StudySelectedIdea,
@@ -128,6 +129,10 @@ export default function App() {
     }
   };
 
+  const changeAIProvider = (provider: StudyAIProvider) => {
+    run(() => studyApi.setAIProvider(provider));
+  };
+
   if (!state) {
     return <LoadingScreen />;
   }
@@ -146,6 +151,8 @@ export default function App() {
         error={error}
         isBusy={isBusy}
         identityLabel={identityLabel}
+        aiProvider={state.aiProvider}
+        onAIProviderChange={role === 'creator' ? changeAIProvider : undefined}
         onRefresh={() => openArchive(archiveState.experiment!.id)}
         onLeave={() => {
           setArchiveState(null);
@@ -167,7 +174,15 @@ export default function App() {
 
   if (role === 'creator' && (!state.experiment || showCreatorSetup)) {
     return (
-      <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
+      <Shell
+        identityLabel={identityLabel}
+        aiProvider={state.aiProvider}
+        onAIProviderChange={changeAIProvider}
+        error={error}
+        isBusy={isBusy}
+        onRefresh={load}
+        onLeave={leaveIdentity}
+      >
         <CreatorSetup
           existingExperimentTitle={state.experiment?.title}
           onCancel={state.experiment ? () => setShowCreatorSetup(false) : undefined}
@@ -191,7 +206,14 @@ export default function App() {
 
   if (role === 'participant' && (!participantCode || !hasJoinedActiveExperiment)) {
     return (
-      <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
+      <Shell
+        identityLabel={identityLabel}
+        aiProvider={state.aiProvider}
+        error={error}
+        isBusy={isBusy}
+        onRefresh={load}
+        onLeave={leaveIdentity}
+      >
         <ParticipantGate
           onJoin={(code) =>
             run(async () => {
@@ -208,7 +230,15 @@ export default function App() {
   }
 
   return (
-    <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
+    <Shell
+      identityLabel={identityLabel}
+      aiProvider={state.aiProvider}
+      onAIProviderChange={role === 'creator' ? changeAIProvider : undefined}
+      error={error}
+      isBusy={isBusy}
+      onRefresh={load}
+      onLeave={leaveIdentity}
+    >
       <StudyRoom
         state={state}
         role={role}
@@ -246,6 +276,8 @@ function Shell({
   error,
   isBusy,
   identityLabel,
+  aiProvider,
+  onAIProviderChange,
   onRefresh,
   onLeave,
 }: {
@@ -253,10 +285,14 @@ function Shell({
   error: string | null;
   isBusy: boolean;
   identityLabel?: string;
+  aiProvider: StudyAIProvider;
+  onAIProviderChange?: (provider: StudyAIProvider) => void;
   onRefresh: () => void;
   onLeave: () => void;
 }) {
   const [debugOpen, setDebugOpen] = React.useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = React.useState(false);
+  const modelLabel = aiProvider === 'gemini' ? 'Gemini 2.5 Flash' : 'DeepSeek';
 
   return (
     <div className="min-h-screen bg-[#f7f9ff] text-blue-950 relative overflow-hidden">
@@ -283,6 +319,49 @@ function Shell({
               <span>{identityLabel}</span>
             </div>
           )}
+          <div className="relative">
+            <button
+              type="button"
+              data-testid="ai-provider-menu"
+              aria-expanded={modelMenuOpen}
+              onClick={() => onAIProviderChange && setModelMenuOpen((open) => !open)}
+              disabled={!onAIProviderChange || isBusy}
+              className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/80 px-4 text-xs font-black text-violet-700 shadow-sm transition hover:border-violet-200 disabled:cursor-default disabled:opacity-70"
+              title={onAIProviderChange ? 'Switch AI model' : 'Creator controls the AI model'}
+            >
+              <Sparkles className="h-4 w-4" />
+              <span className="hidden sm:inline">{modelLabel}</span>
+              {onAIProviderChange && <ChevronRight className={cn('h-3.5 w-3.5 transition', modelMenuOpen && 'rotate-90')} />}
+            </button>
+            {modelMenuOpen && onAIProviderChange && (
+              <div className="absolute right-0 top-13 z-50 w-64 rounded-2xl border border-violet-100 bg-white p-2 shadow-2xl shadow-violet-200/60">
+                {([
+                  { provider: 'deepseek', label: 'DeepSeek', detail: 'DeepSeek V4 Flash' },
+                  { provider: 'gemini', label: 'Gemini', detail: 'Gemini 2.5 Flash · stable' },
+                ] as const).map((option) => (
+                  <button
+                    key={option.provider}
+                    type="button"
+                    data-testid={`ai-provider-${option.provider}`}
+                    onClick={() => {
+                      setModelMenuOpen(false);
+                      onAIProviderChange(option.provider);
+                    }}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-violet-50',
+                      aiProvider === option.provider && 'bg-violet-50',
+                    )}
+                  >
+                    <span>
+                      <span className="block text-xs font-black text-blue-950">{option.label}</span>
+                      <span className="mt-0.5 block text-[10px] font-semibold text-slate-400">{option.detail}</span>
+                    </span>
+                    <span className={cn('h-2.5 w-2.5 rounded-full', aiProvider === option.provider ? 'bg-emerald-400' : 'bg-slate-200')} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={onRefresh}
             className="h-11 px-4 rounded-2xl bg-white border border-blue-100 text-slate-500 hover:text-blue-600 shadow-sm flex items-center gap-2 text-xs font-bold transition"
@@ -382,7 +461,7 @@ function DebugConsole({ open, onClose }: { open: boolean; onClose: () => void })
           </div>
           <div>
             <h3 className="font-black text-sm">Debug Console</h3>
-            <p className="text-[11px] text-slate-400">前端 fetch、后端 API、DeepSeek 请求与返回</p>
+            <p className="text-[11px] text-slate-400">前端 fetch、后端 API、AI 模型请求与返回</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -573,7 +652,7 @@ function CreatorSetup({
         <p className="text-xs font-black uppercase tracking-[0.3em] text-violet-500 mb-4">Creator setup</p>
         <h2 className="text-3xl font-black mb-4">{existingExperimentTitle ? '开启新的实验项目' : '上传或创建第一个项目'}</h2>
         <p className="text-sm text-slate-500 leading-7">
-          你可以上传已有 HTML 项目，也可以用“快速创建”调用 DeepSeek，像 AI Studio 一样根据描述生成一个在线网页。
+          你可以上传已有 HTML 项目，也可以用“快速创建”调用顶部选中的 AI 模型，像 AI Studio 一样根据描述生成一个在线网页。
         </p>
         {existingExperimentTitle && (
           <div className="mt-6 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
@@ -581,7 +660,7 @@ function CreatorSetup({
           </div>
         )}
         <div className="mt-8 grid grid-cols-2 gap-3 text-center">
-          {['Quick Create with DeepSeek', 'Upload HTML Project'].map((item) => (
+          {['Quick Create with selected AI', 'Upload HTML Project'].map((item) => (
             <div key={item} className="rounded-2xl bg-blue-50 p-4">
               <p className="text-xs font-black text-blue-600">{item}</p>
             </div>
@@ -606,7 +685,7 @@ function CreatorSetup({
           <label className="text-xs font-black uppercase tracking-widest text-slate-400">Creation method</label>
           <div className="mt-2 grid grid-cols-2 gap-3">
             {[
-              { id: 'quick', title: '快速创建', desc: '调用 DeepSeek 生成网页' },
+              { id: 'quick', title: '快速创建', desc: '调用顶部选中的 AI 生成网页' },
               { id: 'upload', title: '上传项目', desc: '上传 .html 文件' },
             ].map((item) => (
               <button
@@ -627,9 +706,9 @@ function CreatorSetup({
 
         {mode === 'quick' && (
           <div className="space-y-3">
-            <TextField label="Quick create prompt for DeepSeek" value={initialPrompt} onChange={setInitialPrompt} rows={5} />
+            <TextField label="Quick create prompt for selected AI" value={initialPrompt} onChange={setInitialPrompt} rows={5} />
             <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
-              快速创建会请求 DeepSeek 生成初始 HTML。若网络或代理不可用，左下角 Debug 控制台会显示具体失败原因。
+              快速创建会请求顶部选中的 AI 生成初始 HTML。若网络或代理不可用，左下角 Debug 控制台会显示具体失败原因。
             </div>
           </div>
         )}
@@ -806,7 +885,7 @@ function StudyRoom({
               <h2 className="font-black text-lg">{liveDraft ? `Live Candidate Draft ${liveDraft.attempt_number}` : 'Current Prototype'}</h2>
               <p className="text-xs text-slate-500">
                 {liveDraft
-                  ? 'Visible to everyone while Creator and DeepSeek debug it. This is not published yet.'
+                  ? 'Visible to everyone while Creator and the selected AI debug it. This is not published yet.'
                   : 'Participants experience this version before each commenting phase.'}
               </p>
             </div>
@@ -986,8 +1065,8 @@ function CreatorControls({
     developing: {
       label: fusionPlan ? 'Generate visible initial draft' : 'Generate AI fusion plan',
       helper: fusionPlan
-        ? 'DeepSeek creates Candidate Draft 1. It becomes visible to every participant immediately, even before debugging.'
-        : 'DeepSeek will create a read-only plan covering the core idea and both supporting ideas.',
+        ? 'The selected AI creates Candidate Draft 1. It becomes visible to every participant immediately, even before debugging.'
+        : 'The selected AI will create a read-only plan covering the core idea and both supporting ideas.',
       run: () => (fusionPlan ? studyApi.createInitialDraft() : studyApi.generateFusionPlan()),
       icon: <Code2 />,
     },
@@ -1487,7 +1566,7 @@ function DevelopmentChatPanel({
             >
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">
-                  {item.role === 'creator' ? 'Creator' : item.role === 'assistant' ? 'DeepSeek' : 'System'}
+                  {item.role === 'creator' ? 'Creator' : item.role === 'assistant' ? 'AI' : 'System'}
                 </p>
                 {draft && <span className="text-[10px] font-black text-violet-500">Draft {draft.attempt_number}</span>}
               </div>
@@ -1504,7 +1583,7 @@ function DevelopmentChatPanel({
             onChange={(event) => setMessage(event.target.value)}
             disabled={isBusy}
             rows={4}
-            placeholder="Tell DeepSeek what is broken or what still needs to be completed..."
+            placeholder="Tell the selected AI what is broken or what still needs to be completed..."
             className="w-full rounded-2xl border border-violet-100 bg-white p-4 text-sm outline-none focus:border-violet-300 disabled:bg-slate-50"
           />
           <button
@@ -1774,7 +1853,7 @@ function EndedArchive({
                   {selectedMessages.map((message) => (
                     <div key={message.id} className="rounded-xl bg-white p-3 text-xs leading-5 text-slate-600">
                       <span className="font-black text-blue-600">
-                        {message.role === 'creator' ? 'Creator' : message.role === 'assistant' ? 'DeepSeek' : 'System'}:
+                        {message.role === 'creator' ? 'Creator' : message.role === 'assistant' ? 'AI' : 'System'}:
                       </span>{' '}
                       {message.content}
                     </div>

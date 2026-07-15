@@ -11,7 +11,7 @@ Creator uploads/creates one project → participants P01-P20 join → experience
 - Creator budget each round: fixed at `200`.
 - Creator can safely roll back the current phase; investments, settlement rewards, and generated-version state are undone where necessary.
 - A project ends only when more than 75% of joined participants vote to end it. The ended project remains available as a read-only round and version archive.
-- DeepSeek output is saved as a candidate draft first. Every participant can watch the candidate preview and Creator/AI debugging transcript live, but only Creator can send debugging messages, roll back a candidate, or publish it as the official round version.
+- The Creator can switch between DeepSeek and Gemini 2.5 Flash from the page header. AI output is saved as a candidate draft first. Every participant can watch the candidate preview and Creator/AI debugging transcript live, but only Creator can send debugging messages, roll back a candidate, or publish it as the official round version.
 - Starting a new experiment creates a new experiment ID and archives the previous one. Historical experiments keep their participant snapshot, comments, investments, candidate drafts, AI conversation, votes, and versions, and remain available from the in-app archive browser.
 - Ended experiments show a final Participant leaderboard ordered by remaining Coin, with author and investor performance details.
 

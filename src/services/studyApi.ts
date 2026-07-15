@@ -70,6 +70,7 @@ export const studyApi = {
     const query = params.toString();
     return requestStudy(`state${query ? `?${query}` : ''}`);
   },
+  setAIProvider: (provider: 'deepseek' | 'gemini') => requestStudy('ai-provider', { provider }),
   archive: (experimentId: string) => requestStudy(`archive/${encodeURIComponent(experimentId)}`),
   createExperiment: (input: {
     title: string;

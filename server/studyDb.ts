@@ -13,6 +13,8 @@ export type StudyPhase =
   | 'aborted'
   | 'ended';
 
+export type StudyAIProvider = 'deepseek' | 'gemini';
+
 export type StudyState = {
   experiment: any | null;
   participants: any[];
@@ -40,6 +42,7 @@ export type StudyState = {
     investor: any[];
     wealth: any[];
   };
+  aiProvider: StudyAIProvider;
   marketPrivacyActive: boolean;
   endVoteSummary: {
     eligible: number;
@@ -328,6 +331,17 @@ function getActiveExperimentId() {
 
 function setActiveExperimentId(experimentId: string) {
   db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES ('active_experiment_id', ?)`).run(experimentId);
+}
+
+export function getAIProvider(): StudyAIProvider {
+  const stored = db.prepare(`SELECT value FROM app_meta WHERE key = 'ai_provider'`).get() as any;
+  return stored?.value === 'gemini' ? 'gemini' : 'deepseek';
+}
+
+export function setAIProvider(provider: StudyAIProvider) {
+  if (provider !== 'deepseek' && provider !== 'gemini') throw new Error('AI provider must be DeepSeek or Gemini.');
+  db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES ('ai_provider', ?)`).run(provider);
+  return getStudyState();
 }
 
 function activeExperiment(experimentId?: string) {
@@ -677,6 +691,7 @@ export function getStudyState(experimentId?: string): StudyState {
       ideaRevisions: [],
       leaderboard: [],
       leaderboards: { creative: [], investor: [], wealth: [] },
+      aiProvider: getAIProvider(),
       marketPrivacyActive: false,
       endVoteSummary: { eligible: 0, yes: 0, no: 0, pending: 0, requiredYes: 0 },
     };
@@ -792,6 +807,7 @@ export function getStudyState(experimentId?: string): StudyState {
     ideaRevisions,
     leaderboard: leaderboards.wealth,
     leaderboards,
+    aiProvider: getAIProvider(),
     marketPrivacyActive: false,
   };
 }
