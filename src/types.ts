@@ -159,11 +159,19 @@ export interface StudyLeaderboardEntry {
   coins: number;
   top_three_count: number;
   first_place_count: number;
+  second_place_count: number;
+  third_place_count: number;
+  creative_points: number;
+  ideas_submitted: number;
   received_investment: number;
+  unique_idea_investors: number;
   author_earnings: number;
+  investment_principal: number;
   investment_returns: number;
   investment_net: number;
+  investment_roi: number;
   top_three_hits: number;
+  first_place_hits: number;
 }
 
 export interface StudyInvestment {
@@ -303,5 +311,10 @@ export interface StudyState {
   experimentHistory: StudyExperimentHistoryItem[];
   ideaRevisions: StudyIdeaRevision[];
   leaderboard: StudyLeaderboardEntry[];
+  leaderboards: {
+    creative: StudyLeaderboardEntry[];
+    investor: StudyLeaderboardEntry[];
+    wealth: StudyLeaderboardEntry[];
+  };
   marketPrivacyActive: boolean;
 }

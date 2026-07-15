@@ -35,6 +35,11 @@ export type StudyState = {
   experimentHistory: any[];
   ideaRevisions: any[];
   leaderboard: any[];
+  leaderboards: {
+    creative: any[];
+    investor: any[];
+    wealth: any[];
+  };
   marketPrivacyActive: boolean;
   endVoteSummary: {
     eligible: number;
@@ -400,9 +405,10 @@ function prepareInvestmentPhase(experimentId: string, roundNumber: number) {
   `).run(timestamp, experimentId, roundNumber);
 }
 
-function buildLeaderboard(experimentId: string, participantRows: any[]) {
+function buildLeaderboards(experimentId: string, participantRows: any[]) {
   const receivedInvestment = db.prepare(`
-    SELECT COALESCE(SUM(i.amount), 0) AS total
+    SELECT COALESCE(SUM(i.amount), 0) AS total,
+           COUNT(DISTINCT i.participant_code) AS unique_investors
     FROM comments c
     JOIN investments i ON i.comment_id = c.id
     WHERE c.experiment_id = ? AND c.participant_code = ? AND c.deleted_at IS NULL
@@ -417,13 +423,27 @@ function buildLeaderboard(experimentId: string, participantRows: any[]) {
   const selectionStats = db.prepare(`
     SELECT
       COUNT(*) AS top_three_count,
-      COALESCE(SUM(CASE WHEN s.selection_rank = 1 THEN 1 ELSE 0 END), 0) AS first_place_count
+      COALESCE(SUM(CASE WHEN s.selection_rank = 1 THEN 1 ELSE 0 END), 0) AS first_place_count,
+      COALESCE(SUM(CASE WHEN s.selection_rank = 2 THEN 1 ELSE 0 END), 0) AS second_place_count,
+      COALESCE(SUM(CASE WHEN s.selection_rank = 3 THEN 1 ELSE 0 END), 0) AS third_place_count,
+      COALESCE(SUM(CASE s.selection_rank WHEN 1 THEN 3 WHEN 2 THEN 2 WHEN 3 THEN 1 ELSE 0 END), 0) AS creative_points
     FROM selected_ideas s
     JOIN comments c ON c.id = s.comment_id
     WHERE s.experiment_id = ? AND c.participant_code = ?
   `);
-  const successfulInvestments = db.prepare(`
+  const ideaCount = db.prepare(`
     SELECT COUNT(*) AS count
+    FROM comments
+    WHERE experiment_id = ? AND participant_code = ? AND deleted_at IS NULL
+  `);
+  const investmentStats = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS principal
+    FROM investments
+    WHERE experiment_id = ? AND participant_code = ? AND actor_type = 'participant'
+  `);
+  const successfulInvestments = db.prepare(`
+    SELECT COUNT(*) AS count,
+           COALESCE(SUM(CASE WHEN s.selection_rank = 1 THEN 1 ELSE 0 END), 0) AS first_place_hits
     FROM investments i
     JOIN selected_ideas s
       ON s.experiment_id = i.experiment_id
@@ -436,6 +456,9 @@ function buildLeaderboard(experimentId: string, participantRows: any[]) {
     .filter((participant) => participant.joined_at)
     .map((participant) => {
       const selection = selectionStats.get(experimentId, participant.code) as any;
+      const support = receivedInvestment.get(experimentId, participant.code) as any;
+      const investment = investmentStats.get(experimentId, participant.code) as any;
+      const hits = successfulInvestments.get(experimentId, participant.code) as any;
       const authorEarnings = Number(
         (coinEventTotal.get(experimentId, participant.code, JSON.stringify(['idea_support_reward', 'idea_rank_bonus'])) as any)
           ?.total || 0,
@@ -443,15 +466,8 @@ function buildLeaderboard(experimentId: string, participantRows: any[]) {
       const investmentReturns = Number(
         (coinEventTotal.get(experimentId, participant.code, JSON.stringify(['investment_return'])) as any)?.total || 0,
       );
-      const investmentNet = Number(
-        (
-          coinEventTotal.get(
-            experimentId,
-            participant.code,
-            JSON.stringify(['investment', 'investment_return', 'investment_refund_on_rollback']),
-          ) as any
-        )?.total || 0,
-      );
+      const investmentPrincipal = Number(investment?.principal || 0);
+      const investmentNet = investmentReturns - investmentPrincipal;
       return {
         rank: 0,
         participant_code: participant.code,
@@ -459,35 +475,68 @@ function buildLeaderboard(experimentId: string, participantRows: any[]) {
         coins: Number(participant.coins || 0),
         top_three_count: Number(selection?.top_three_count || 0),
         first_place_count: Number(selection?.first_place_count || 0),
-        received_investment: Number((receivedInvestment.get(experimentId, participant.code) as any)?.total || 0),
+        second_place_count: Number(selection?.second_place_count || 0),
+        third_place_count: Number(selection?.third_place_count || 0),
+        creative_points: Number(selection?.creative_points || 0),
+        ideas_submitted: Number((ideaCount.get(experimentId, participant.code) as any)?.count || 0),
+        received_investment: Number(support?.total || 0),
+        unique_idea_investors: Number(support?.unique_investors || 0),
         author_earnings: authorEarnings,
+        investment_principal: investmentPrincipal,
         investment_returns: investmentReturns,
         investment_net: investmentNet,
-        top_three_hits: Number((successfulInvestments.get(experimentId, participant.code) as any)?.count || 0),
+        investment_roi: investmentPrincipal > 0 ? Number(((investmentNet / investmentPrincipal) * 100).toFixed(1)) : 0,
+        top_three_hits: Number(hits?.count || 0),
+        first_place_hits: Number(hits?.first_place_hits || 0),
       };
-    })
-    .sort(
-      (a, b) =>
-        b.coins - a.coins ||
-        b.investment_net - a.investment_net ||
-        b.first_place_count - a.first_place_count ||
-        b.top_three_count - a.top_three_count ||
-        a.participant_code.localeCompare(b.participant_code),
-    );
+    });
 
-  let displayedRank = 0;
-  let previous: any = null;
-  return rows.map((row, index) => {
-    const tied =
-      previous &&
-      previous.coins === row.coins &&
-      previous.investment_net === row.investment_net &&
-      previous.first_place_count === row.first_place_count &&
-      previous.top_three_count === row.top_three_count;
-    if (!tied) displayedRank = index + 1;
-    previous = row;
-    return { ...row, rank: displayedRank };
-  });
+  const rankRows = (source: any[], compare: (a: any, b: any) => number, tieKeys: string[]) => {
+    const sorted = [...source].sort(compare);
+    let displayedRank = 0;
+    let previous: any = null;
+    return sorted.map((row, index) => {
+      const tied = previous && tieKeys.every((key) => previous[key] === row[key]);
+      if (!tied) displayedRank = index + 1;
+      previous = row;
+      return { ...row, rank: displayedRank };
+    });
+  };
+
+  const creative = rankRows(
+    rows.filter((row) => row.ideas_submitted > 0),
+    (a, b) =>
+      b.creative_points - a.creative_points ||
+      b.received_investment - a.received_investment ||
+      b.first_place_count - a.first_place_count ||
+      b.top_three_count - a.top_three_count ||
+      b.unique_idea_investors - a.unique_idea_investors ||
+      a.participant_code.localeCompare(b.participant_code),
+    ['creative_points', 'received_investment', 'first_place_count', 'top_three_count', 'unique_idea_investors'],
+  );
+  const investor = rankRows(
+    rows.filter((row) => row.investment_principal > 0),
+    (a, b) =>
+      b.investment_net - a.investment_net ||
+      b.top_three_hits - a.top_three_hits ||
+      b.first_place_hits - a.first_place_hits ||
+      b.investment_roi - a.investment_roi ||
+      b.investment_principal - a.investment_principal ||
+      a.participant_code.localeCompare(b.participant_code),
+    ['investment_net', 'top_three_hits', 'first_place_hits', 'investment_roi', 'investment_principal'],
+  );
+  const wealth = rankRows(
+    rows,
+    (a, b) =>
+      b.coins - a.coins ||
+      b.investment_net - a.investment_net ||
+      b.first_place_count - a.first_place_count ||
+      b.top_three_count - a.top_three_count ||
+      a.participant_code.localeCompare(b.participant_code),
+    ['coins', 'investment_net', 'first_place_count', 'top_three_count'],
+  );
+
+  return { creative, investor, wealth };
 }
 
 export type StudyViewer = {
@@ -587,6 +636,7 @@ export function filterStudyStateForViewer(state: StudyState, viewer: StudyViewer
           : false,
     ),
     leaderboard: [],
+    leaderboards: { creative: [], investor: [], wealth: [] },
     marketPrivacyActive: !marketLocked,
   };
 }
@@ -626,6 +676,7 @@ export function getStudyState(experimentId?: string): StudyState {
       experimentHistory: history,
       ideaRevisions: [],
       leaderboard: [],
+      leaderboards: { creative: [], investor: [], wealth: [] },
       marketPrivacyActive: false,
       endVoteSummary: { eligible: 0, yes: 0, no: 0, pending: 0, requiredYes: 0 },
     };
@@ -715,7 +766,7 @@ export function getStudyState(experimentId?: string): StudyState {
     pending: Math.max(0, eligible - yes - no),
     requiredYes: eligible > 0 ? Math.floor(eligible * 0.75) + 1 : 0,
   };
-  const leaderboard = buildLeaderboard(experiment.id, participants as any[]);
+  const leaderboards = buildLeaderboards(experiment.id, participants as any[]);
 
   return {
     experiment,
@@ -739,7 +790,8 @@ export function getStudyState(experimentId?: string): StudyState {
     currentDraft,
     experimentHistory: history,
     ideaRevisions,
-    leaderboard,
+    leaderboard: leaderboards.wealth,
+    leaderboards,
     marketPrivacyActive: false,
   };
 }

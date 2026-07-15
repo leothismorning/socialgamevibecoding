@@ -1690,7 +1690,7 @@ function EndedArchive({
         </div>
       </section>
 
-      {!isAborted && <FinalCoinLeaderboard entries={state.leaderboard} />}
+      {!isAborted && <FinalLeaderboards leaderboards={state.leaderboards} />}
 
       <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
         <Card title="Round progress" icon={<Clock3 />} badge={`${state.versions.length} snapshots`}>
@@ -1863,56 +1863,91 @@ function ArchiveStat({ label, value }: { label: string; value: React.ReactNode }
   );
 }
 
-function FinalCoinLeaderboard({ entries }: { entries: StudyLeaderboardEntry[] }) {
-  if (entries.length === 0) return null;
+function FinalLeaderboards({ leaderboards }: { leaderboards: StudyState['leaderboards'] }) {
+  const boards: Array<{
+    key: keyof StudyState['leaderboards'];
+    title: string;
+    subtitle: string;
+    icon: React.ReactNode;
+    accent: string;
+    primary: (entry: StudyLeaderboardEntry) => React.ReactNode;
+    secondary: (entry: StudyLeaderboardEntry) => React.ReactNode;
+  }> = [
+    {
+      key: 'creative',
+      title: 'Idea Master',
+      subtitle: '3 / 2 / 1 points for each first, second, or third-place Idea',
+      icon: <Sparkles className="h-5 w-5" />,
+      accent: 'text-violet-600 bg-violet-50',
+      primary: (entry) => `${entry.creative_points} pts`,
+      secondary: (entry) => `${entry.top_three_count} Top 3 · ${entry.received_investment} support Coin`,
+    },
+    {
+      key: 'investor',
+      title: 'Best Investor',
+      subtitle: 'Ranked by realized investment net profit',
+      icon: <CircleDollarSign className="h-5 w-5" />,
+      accent: 'text-emerald-600 bg-emerald-50',
+      primary: (entry) => `${entry.investment_net >= 0 ? '+' : ''}${entry.investment_net} Coin`,
+      secondary: (entry) => `${entry.top_three_hits} hits · ${entry.investment_roi >= 0 ? '+' : ''}${entry.investment_roi}% ROI`,
+    },
+    {
+      key: 'wealth',
+      title: 'Wealthiest Player',
+      subtitle: 'Overall ranking by final Coin balance',
+      icon: <Trophy className="h-5 w-5" />,
+      accent: 'text-amber-600 bg-amber-50',
+      primary: (entry) => `${entry.coins} Coin`,
+      secondary: (entry) => `Idea +${entry.author_earnings} · Investment ${entry.investment_net >= 0 ? '+' : ''}${entry.investment_net}`,
+    },
+  ];
+
+  if (leaderboards.wealth.length === 0) return null;
   return (
-    <Card title="Final Coin leaderboard" icon={<Trophy />} badge={`${entries.length} Participants`}>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[860px] border-separate border-spacing-y-2 text-left">
-          <thead>
-            <tr className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-              <th className="px-4 py-2">Rank</th>
-              <th className="px-4 py-2">Participant</th>
-              <th className="px-4 py-2">Final Coin</th>
-              <th className="px-4 py-2">Top 3 Ideas</th>
-              <th className="px-4 py-2">First place</th>
-              <th className="px-4 py-2">Received</th>
-              <th className="px-4 py-2">Author earnings</th>
-              <th className="px-4 py-2">Investment net</th>
-              <th className="px-4 py-2">Top 3 hits</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((entry) => (
-              <tr
-                key={entry.participant_code}
-                className={cn(
-                  'text-sm font-bold text-slate-600',
-                  entry.rank === 1 ? 'bg-amber-50' : 'bg-white/80',
-                )}
-              >
-                <td className="rounded-l-2xl px-4 py-4 text-lg font-black text-blue-950">
-                  {entry.rank === 1 ? '🏆' : `#${entry.rank}`}
-                </td>
-                <td className="px-4 py-4 font-black text-blue-700">{entry.participant_code}</td>
-                <td className="px-4 py-4 text-lg font-black text-amber-600">{entry.coins}</td>
-                <td className="px-4 py-4">{entry.top_three_count}</td>
-                <td className="px-4 py-4">{entry.first_place_count}</td>
-                <td className="px-4 py-4">{entry.received_investment}</td>
-                <td className="px-4 py-4 text-emerald-600">+{entry.author_earnings}</td>
-                <td className={cn('px-4 py-4', entry.investment_net >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
-                  {entry.investment_net >= 0 ? '+' : ''}{entry.investment_net}
-                </td>
-                <td className="rounded-r-2xl px-4 py-4">{entry.top_three_hits}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <section>
+      <div className="mb-4">
+        <p className="text-xs font-black uppercase tracking-[0.24em] text-violet-500">Final awards</p>
+        <h2 className="mt-1 text-2xl font-black text-blue-950">Three ways to win</h2>
+        <p className="mt-2 text-sm text-slate-500">Creative contribution, investment judgment, and final wealth are ranked independently. Creator is excluded.</p>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-3">
+        {boards.map((board) => {
+          const entries = leaderboards[board.key];
+          return (
+            <Card key={board.key} title={board.title} icon={board.icon} badge={`${entries.length} ranked`}>
+              <p className="mb-4 min-h-10 text-xs leading-5 text-slate-400">{board.subtitle}</p>
+              {entries.length === 0 ? (
+                <div className="rounded-2xl bg-slate-50 p-6 text-center text-xs font-bold text-slate-400">No eligible Participants</div>
+              ) : (
+                <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1 custom-scrollbar-light">
+                  {entries.map((entry) => (
+                    <div
+                      key={entry.participant_code}
+                      className={cn(
+                        'flex items-center gap-3 rounded-2xl border px-3 py-3',
+                        entry.rank === 1 ? 'border-amber-200 bg-amber-50/70' : 'border-slate-100 bg-white/80',
+                      )}
+                    >
+                      <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-black', board.accent)}>
+                        #{entry.rank}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-black text-blue-800">{entry.participant_code}</p>
+                        <p className="mt-0.5 truncate text-[10px] font-bold text-slate-400">{board.secondary(entry)}</p>
+                      </div>
+                      <p className="shrink-0 text-sm font-black text-blue-950">{board.primary(entry)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          );
+        })}
       </div>
       <p className="mt-3 text-[11px] leading-5 text-slate-400">
-        Ranking is determined by final Coin. Ties are resolved by investment net, first-place Ideas, then total Top 3 Ideas.
+        Idea Master ties use community support and Top 3 results. Best Investor ties use successful picks and ROI. Wealth ties use investment net and Idea results.
       </p>
-    </Card>
+    </section>
   );
 }
 

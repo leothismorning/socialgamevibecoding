@@ -183,11 +183,25 @@ state = setPhase('ended');
 assert(state.leaderboard.length === 5);
 assert(state.leaderboard.every((entry: any, index: number, rows: any[]) => index === 0 || rows[index - 1].coins >= entry.coins));
 assert.equal(state.leaderboard[0].participant_code, 'P01');
+assert.equal(state.leaderboards.wealth[0].participant_code, 'P01');
+assert.equal(state.leaderboards.creative[0].participant_code, 'P01');
+assert(state.leaderboards.creative.every((entry: any) => entry.ideas_submitted > 0));
+assert(state.leaderboards.investor.every((entry: any) => entry.investment_principal > 0));
+assert(
+  state.leaderboards.investor.every(
+    (entry: any, index: number, rows: any[]) => index === 0 || rows[index - 1].investment_net >= entry.investment_net,
+  ),
+);
+assert.equal(state.leaderboards.wealth.some((entry: any) => entry.participant_code === 'CREATOR'), false);
 
 console.log(
   JSON.stringify({
     status: 'passed',
-    finalLeader: state.leaderboard[0],
+    winners: {
+      creative: state.leaderboards.creative[0],
+      investor: state.leaderboards.investor[0],
+      wealth: state.leaderboards.wealth[0],
+    },
     revisionActions: p01RevisionActions,
     roundOneTopThree: state.selectedIdeas
       .filter((item: any) => item.round_number === 1)
