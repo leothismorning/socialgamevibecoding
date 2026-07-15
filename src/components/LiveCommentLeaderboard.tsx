@@ -1,6 +1,6 @@
 import React from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { Check, CircleDollarSign, Clock3, Trophy } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, CircleDollarSign, Clock3, Minus, Trophy } from 'lucide-react';
 import type { StudyComment, StudyInvestment, StudyPhase, StudySelectedIdea, StudyState } from '../types';
 import { cn } from '../lib/utils';
 import { ParticipantAvatar } from './ParticipantRoster';
@@ -150,6 +150,8 @@ export function LiveCommentLeaderboard({
   const reduceMotion = useReducedMotion();
   const commentsRef = React.useRef(comments);
   const [orderedIds, setOrderedIds] = React.useState<number[]>(() => rankIds(comments, []));
+  const orderedIdsRef = React.useRef(orderedIds);
+  const [rankDeltas, setRankDeltas] = React.useState<Map<number, number>>(() => new Map());
   const [secondsUntilUpdate, setSecondsUntilUpdate] = React.useState(
     () => Math.ceil((RANKING_INTERVAL_MS - (Date.now() % RANKING_INTERVAL_MS)) / 1000),
   );
@@ -166,9 +168,11 @@ export function LiveCommentLeaderboard({
       comments.forEach((comment) => {
         if (!synchronized.includes(comment.id)) synchronized.push(comment.id);
       });
-      return synchronized.length === current.length && synchronized.every((id, index) => id === current[index])
+      const next = synchronized.length === current.length && synchronized.every((id, index) => id === current[index])
         ? current
         : synchronized;
+      orderedIdsRef.current = next;
+      return next;
     });
   }, [comments]);
 
@@ -179,7 +183,12 @@ export function LiveCommentLeaderboard({
       setSecondsUntilUpdate(Math.max(1, remaining));
       if (currentBucket !== rankingBucketRef.current) {
         rankingBucketRef.current = currentBucket;
-        setOrderedIds((current) => rankIds(commentsRef.current, current));
+        const previous = orderedIdsRef.current;
+        const previousPosition = new Map<number, number>(previous.map((id, index) => [id, index] as const));
+        const next = rankIds(commentsRef.current, previous);
+        setRankDeltas(new Map(next.map((id, index) => [id, (previousPosition.get(id) ?? index) - index])));
+        orderedIdsRef.current = next;
+        setOrderedIds(next);
       }
     };
     tick();
@@ -228,13 +237,14 @@ export function LiveCommentLeaderboard({
         <div className="live-comment-board-title">
           <span className="live-comment-board-icon"><Trophy aria-hidden="true" /></span>
           <div>
-            <p className="live-comment-board-kicker">LIVE LEADERBOARD</p>
-            <h2 id="live-comment-board-title">Comments & investment</h2>
+            <p className="live-comment-board-kicker">LIVE INTERACTION</p>
+            <h2 id="live-comment-board-title">实时评论排行榜 · Live Comment Ranking</h2>
           </div>
         </div>
         <div className="live-comment-board-meta">
           <span className="live-coin-balance">剩余金币：<strong>{availableCoins}</strong></span>
-          <span className="rank-refresh-indicator"><Clock3 aria-hidden="true" /> {secondsUntilUpdate}s 后更新排名</span>
+          <span className="rank-live-indicator">实时更新 · Just now</span>
+          <span className="rank-refresh-indicator"><Clock3 aria-hidden="true" /> {secondsUntilUpdate}s · Sorted by votes</span>
         </div>
       </header>
 
@@ -258,6 +268,7 @@ export function LiveCommentLeaderboard({
               const insufficient = !voted && availableCoins < VOTE_COST;
               const disabled = !canVote || ownComment || isBusy || insufficient;
               const selectedIdea = selectionByComment.get(comment.id);
+              const rankDelta = rankDeltas.get(comment.id) ?? 0;
               return (
                 <motion.article
                   layout="position"
@@ -274,6 +285,10 @@ export function LiveCommentLeaderboard({
                     <div className="live-comment-rank" aria-label={`Rank ${index + 1}`}>
                       <small>RANK</small>
                       <strong>{index + 1}</strong>
+                      <span className={cn('live-rank-change', rankDelta > 0 && 'is-up', rankDelta < 0 && 'is-down')}>
+                        {rankDelta > 0 ? <ArrowUp /> : rankDelta < 0 ? <ArrowDown /> : <Minus />}
+                        {rankDelta === 0 ? '—' : Math.abs(rankDelta)}
+                      </span>
                     </div>
                     <span className="live-comment-avatar"><ParticipantAvatar /></span>
                     <div className="live-comment-copy">
@@ -285,11 +300,11 @@ export function LiveCommentLeaderboard({
                       </div>
                       <p>{comment.content}</p>
                     </div>
+                    <div className="live-vote-score" aria-label={`${voteCount(comment)} votes`}>
+                      <strong>{voteCount(comment)}</strong>
+                      <span>VOTES</span>
+                    </div>
                     <div className="live-comment-actions">
-                      <div className="live-vote-score" aria-label={`${voteCount(comment)} votes`}>
-                        <strong>{voteCount(comment)}</strong>
-                        <span>VOTES</span>
-                      </div>
                       <HoldToWithdrawButton
                         voted={voted}
                         disabled={disabled}

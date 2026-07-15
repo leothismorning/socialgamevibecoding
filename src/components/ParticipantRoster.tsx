@@ -25,10 +25,12 @@ export function ParticipantRoster({
   participants,
   minimumOccupancy = 15,
   capacity = 20,
+  compact = false,
 }: {
   participants: StudyParticipant[];
   minimumOccupancy?: number;
   capacity?: number;
+  compact?: boolean;
 }) {
   const joinedByCode = new Map(
     participants.filter((participant) => participant.joined_at).map((participant) => [participant.code, participant]),
@@ -45,11 +47,11 @@ export function ParticipantRoster({
   const ready = occupancy >= minimumOccupancy;
 
   return (
-    <section className="participant-roster" aria-labelledby="participant-roster-title">
+    <section className={cn('participant-roster', compact && 'is-compact')} aria-labelledby="participant-roster-title">
       <div className="participant-roster-heading">
         <div>
           <p className="participant-roster-kicker">ROOM</p>
-          <h2 id="participant-roster-title">Participant seats</h2>
+          <h2 id="participant-roster-title">Joined participants</h2>
         </div>
         <div className={cn('participant-roster-readiness', ready && 'is-ready')}>
           <strong>{occupancy}/{capacity}</strong>

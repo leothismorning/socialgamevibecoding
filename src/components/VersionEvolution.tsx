@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowRight, GitBranch, Upload } from 'lucide-react';
 import type { StudyState } from '../types';
+import { CursorSafeIframe } from './CursorSafeIframe';
 
 export function VersionEvolution({ state }: { state: StudyState }) {
   const versions = state.versions;
@@ -50,6 +51,15 @@ export function VersionEvolution({ state }: { state: StudyState }) {
                     {isCurrent ? 'Current version' : 'Previous version'}
                   </span>
                 </header>
+
+                <div className="version-preview-thumbnail" aria-label={`Preview of ${version.title}`}>
+                  <CursorSafeIframe
+                    title={`${version.title} thumbnail`}
+                    srcDoc={version.code}
+                    className="version-preview-iframe"
+                  />
+                  <span>{isCurrent ? 'CURRENT PATH' : `ROUND ${version.round_number}`}</span>
+                </div>
 
                 <div className="version-meta-grid">
                   <span><GitBranch aria-hidden="true" /> Round {version.round_number}</span>

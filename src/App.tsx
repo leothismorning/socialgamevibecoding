@@ -244,7 +244,7 @@ export default function App() {
   }
 
   return (
-    <Shell identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
+    <Shell workspaceMode identityLabel={identityLabel} error={error} isBusy={isBusy} onRefresh={load} onLeave={leaveIdentity}>
       <StudyRoom
         state={state}
         role={role}
@@ -284,6 +284,7 @@ function Shell({
   identityLabel,
   onRefresh,
   onLeave,
+  workspaceMode = false,
 }: {
   children: React.ReactNode;
   error: string | null;
@@ -291,17 +292,18 @@ function Shell({
   identityLabel?: string;
   onRefresh: () => void;
   onLeave: () => void;
+  workspaceMode?: boolean;
 }) {
   const [debugOpen, setDebugOpen] = React.useState(false);
 
   return (
-    <div className="app-shell min-h-screen bg-[#f7f9ff] text-blue-950 relative overflow-hidden">
+    <div className={cn('app-shell min-h-screen bg-[#f7f9ff] text-blue-950 relative overflow-hidden', workspaceMode && 'is-workspace-shell')}>
       <div className="pointer-events-none absolute -top-28 -left-20 h-80 w-80 rounded-full bg-sky-200/60 blur-3xl" />
       <div className="pointer-events-none absolute top-20 right-10 h-96 w-96 rounded-full bg-violet-200/60 blur-3xl" />
       <div className="pointer-events-none absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-emerald-100/80 blur-3xl" />
 
-      <header className="app-header relative z-10 h-20 px-8 flex items-center justify-between border-b border-white/70 bg-white/55 backdrop-blur-2xl">
-        <div className="flex items-center gap-4">
+      <header className={cn('app-header relative z-10 h-20 px-8 flex items-center justify-between border-b border-white/70 bg-white/55 backdrop-blur-2xl', workspaceMode && 'is-workspace-header')}>
+        <div className={cn('flex items-center gap-4', workspaceMode && 'workspace-header-brand')}>
           <div className="brand-mark h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-violet-600 grid place-items-center text-2xl shadow-xl shadow-violet-200">
             🏝️
           </div>
@@ -775,34 +777,87 @@ function StudyRoom({
   }
 
   return (
-    <div className="study-room max-w-[1800px] mx-auto space-y-6">
-      <div className="study-stats grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <TopStat icon={<Sparkles />} label={experiment.title} value={`Round ${experiment.current_round}/${experiment.max_rounds}`} />
-        <TopStat icon={<Clock3 />} label={phase.subtitle} value={phase.title} tone={phase.tone} />
-        <TopStat icon={<Users />} label="Joined participants" value={`${roomOccupancy}/${ROOM_CAPACITY}`} />
-        <TopStat
-          icon={<CircleDollarSign />}
-          label={role === 'creator' ? 'Creator coins' : `${participantCode || 'Participant'} coins`}
-          value={`${role === 'creator' ? experiment.creator_coins : me?.coins ?? 0}`}
-        />
-        <TopStat
-          icon={<Trophy />}
-          label="Selected ideas"
-          value={`${state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round).length}/3`}
-        />
-      </div>
+    <div className="study-room study-layout-shell max-w-[1920px] mx-auto">
+      <aside className="study-info-sidebar custom-scrollbar-light" aria-label="Project and room information">
+        <section className="sidebar-project-identity">
+          <span className="sidebar-project-mark" aria-hidden="true"><Sparkles /></span>
+          <div>
+            <p>Vibecoding Study</p>
+            <h1>{experiment.title}</h1>
+            <span>Creator · {experiment.creator_name}</span>
+          </div>
+        </section>
 
-      <ParticipantRoster
-        participants={state.participants}
-        minimumOccupancy={MINIMUM_ROOM_OCCUPANCY}
-        capacity={ROOM_CAPACITY}
-      />
+        <section className="sidebar-round-card" aria-label={`Current round ${experiment.current_round} of ${experiment.max_rounds}`}>
+          <span className="sidebar-live-dot" aria-hidden="true" />
+          <div>
+            <small>CURRENT ROUND</small>
+            <strong>Round {experiment.current_round}/{experiment.max_rounds}</strong>
+          </div>
+          <span className={cn('sidebar-phase-badge', phase.tone)}>{phase.title}</span>
+        </section>
 
-      <div className="workbench-primary-grid grid items-start xl:grid-cols-[minmax(0,1fr)_480px] gap-6">
+        <section className="sidebar-description-card">
+          <p className="sidebar-section-kicker">PROJECT DESCRIPTION</p>
+          <h2>本轮项目说明</h2>
+          <p>{experiment.brief}</p>
+          <span>{phase.subtitle}</span>
+        </section>
+
+        <section className="sidebar-room-info">
+          <div className="sidebar-section-heading">
+            <div>
+              <p className="sidebar-section-kicker">ROOM INFO</p>
+              <h2>房间信息</h2>
+            </div>
+            <span>{roomOccupancy}/{ROOM_CAPACITY}</span>
+          </div>
+          <dl>
+            <div><dt>Mode</dt><dd>Public room</dd></div>
+            <div><dt>Players</dt><dd>{MINIMUM_ROOM_OCCUPANCY}–{ROOM_CAPACITY}</dd></div>
+            <div><dt>Duration</dt><dd>Host controlled</dd></div>
+            <div><dt>Start</dt><dd>{MINIMUM_ROOM_OCCUPANCY} people</dd></div>
+          </dl>
+        </section>
+
+        <ParticipantRoster
+          participants={state.participants}
+          minimumOccupancy={MINIMUM_ROOM_OCCUPANCY}
+          capacity={ROOM_CAPACITY}
+          compact
+        />
+
+        <section className="sidebar-session-stats" aria-label="Current session statistics">
+          <div><CircleDollarSign aria-hidden="true" /><span>Coins</span><strong>{role === 'creator' ? experiment.creator_coins : me?.coins ?? 0}</strong></div>
+          <div><Trophy aria-hidden="true" /><span>Selected</span><strong>{state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round).length}/3</strong></div>
+        </section>
+
+        <div className="sidebar-flow-control">
+          <CreatorControls
+            role={role}
+            phase={experiment.phase}
+            isBusy={isBusy}
+            commentCount={currentComments.length}
+            selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
+            fusionPlan={state.fusionPlan}
+            currentDraft={state.currentDraft}
+            endVoteSummary={state.endVoteSummary}
+            tiedComments={tiedComments}
+            tieRankScores={tieRankScores}
+            roomOccupancy={roomOccupancy}
+            minimumRoomOccupancy={MINIMUM_ROOM_OCCUPANCY}
+            onRun={onRun}
+            onAbortExperiment={onAbortExperiment}
+          />
+        </div>
+      </aside>
+
+      <main className="study-main-column">
         <section className="prototype-frame workbench-preview flex min-h-0 flex-col rounded-[2rem] bg-white/80 border border-white shadow-xl shadow-blue-100 overflow-hidden">
           <div className="h-16 px-6 flex items-center justify-between border-b border-blue-50">
             <div>
-              <h2 className="font-black text-lg">{liveDraft ? `Live Candidate Draft ${liveDraft.attempt_number}` : 'Current Prototype'}</h2>
+              <p className="content-section-kicker">PRIMARY EXPERIENCE</p>
+              <h2 className="font-black text-lg">{liveDraft ? `Live Candidate Draft ${liveDraft.attempt_number}` : '当前原型 · Current Prototype'}</h2>
               <p className="text-xs text-slate-500">
                 {liveDraft
                   ? 'Visible to everyone while Creator and DeepSeek debug it. This is not published yet.'
@@ -824,23 +879,7 @@ function StudyRoom({
           </div>
         </section>
 
-        <aside className="workbench-feedback-stack custom-scrollbar-light min-h-0 space-y-4">
-          <CreatorControls
-            role={role}
-            phase={experiment.phase}
-            isBusy={isBusy}
-            commentCount={currentComments.length}
-            selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
-            fusionPlan={state.fusionPlan}
-            currentDraft={state.currentDraft}
-            endVoteSummary={state.endVoteSummary}
-            tiedComments={tiedComments}
-            tieRankScores={tieRankScores}
-            roomOccupancy={roomOccupancy}
-            minimumRoomOccupancy={MINIMUM_ROOM_OCCUPANCY}
-            onRun={onRun}
-            onAbortExperiment={onAbortExperiment}
-          />
+        <div className="study-stage-panels">
           {experiment.phase === 'developing' && state.currentDraft && (
             <DevelopmentChatPanel
               state={state}
@@ -859,6 +898,9 @@ function StudyRoom({
               isBusy={isBusy}
             />
           )}
+        </div>
+
+        <section className="study-comments-section" aria-label="Live comment ranking">
           <div className="feedback-market-group">
             <LiveCommentLeaderboard
               role={role}
@@ -884,12 +926,12 @@ function StudyRoom({
               composerOnly
             />
           </div>
-        </aside>
-      </div>
+        </section>
 
-      <div className="version-workbench-row">
-        <VersionTimeline state={state} />
-      </div>
+        <section className="study-versions-section" aria-label="Iteration timeline">
+          <VersionTimeline state={state} />
+        </section>
+      </main>
     </div>
   );
 }
@@ -1833,7 +1875,7 @@ function FinalCoinLeaderboard({ entries }: { entries: StudyLeaderboardEntry[] })
 function VersionTimeline({ state }: { state: StudyState }) {
   return (
     <div className="version-timeline-shell self-start">
-      <Card title="Version evolution" icon={<Eye />} badge={`${state.versions.length} versions`}>
+      <Card title="迭代版本 · Iteration Timeline" icon={<Eye />} badge={`${state.versions.length} versions`}>
         <VersionEvolution state={state} />
       </Card>
     </div>
