@@ -11,8 +11,6 @@ import {
   FlaskConical,
   MessageCircle,
   MousePointer2,
-  PanelLeftClose,
-  PanelLeftOpen,
   Play,
   RefreshCw,
   Send,
@@ -21,6 +19,7 @@ import {
   Undo2,
   Trash2,
   Trophy,
+  TreePalm,
   UserRound,
   Users,
   Vote,
@@ -72,6 +71,29 @@ const phaseLabels: Record<StudyPhase, { title: string; subtitle: string; tone: s
 
 const participantCodePattern = /^P(?:[1-9]|1[0-9])$/;
 const ROOM_CAPACITY = 20;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_COLLAPSED_WIDTH = 42;
+const SIDEBAR_WIDTH_STORAGE_KEY = 'study-sidebar-width';
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'study-sidebar-collapsed';
+
+function clampSidebarWidth(width: number) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+function getStoredSidebarWidth() {
+  if (typeof window === 'undefined') return SIDEBAR_DEFAULT_WIDTH;
+  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  return Number.isFinite(storedWidth) && storedWidth > 0
+    ? clampSidebarWidth(storedWidth)
+    : SIDEBAR_DEFAULT_WIDTH;
+}
+
+function getStoredSidebarCollapsed() {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+}
 const COMMENT_CHARACTER_LIMIT = 280;
 
 function getParticipantClientId() {
@@ -306,7 +328,7 @@ function Shell({
       <header className={cn('app-header relative z-10 h-20 px-8 flex items-center justify-between border-b border-white/70 bg-white/55 backdrop-blur-2xl', workspaceMode && 'is-workspace-header')}>
         <div className={cn('flex items-center gap-4', workspaceMode && 'workspace-header-brand')}>
           <div className="brand-mark h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-violet-600 grid place-items-center text-2xl shadow-xl shadow-violet-200">
-            🏝️
+            <TreePalm className="h-6 w-6" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-xl font-black tracking-tight">Vibecoding Study</h1>
@@ -746,7 +768,75 @@ function StudyRoom({
   onNewExperiment: () => void;
   onAbortExperiment: () => void;
 }) {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(getStoredSidebarCollapsed);
+  const [sidebarWidth, setSidebarWidth] = React.useState(getStoredSidebarWidth);
+  const [isSidebarResizing, setIsSidebarResizing] = React.useState(false);
+  const layoutRef = React.useRef<HTMLDivElement>(null);
+  const sidebarWidthRef = React.useRef(sidebarWidth);
+
+  React.useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth;
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
+
+  React.useEffect(() => () => {
+    document.documentElement.classList.remove('is-sidebar-resize-hover', 'is-resizing-sidebar');
+  }, []);
+
+  React.useEffect(() => {
+    if (!isSidebarResizing) return;
+
+    const root = document.documentElement;
+    root.classList.add('is-resizing-sidebar');
+
+    const updateWidth = (event: PointerEvent) => {
+      event.preventDefault();
+      const layout = layoutRef.current;
+      if (!layout) return;
+      const nextWidth = clampSidebarWidth(event.clientX - layout.getBoundingClientRect().left);
+      sidebarWidthRef.current = nextWidth;
+      layout.style.setProperty('--sidebar-width', `${nextWidth}px`);
+    };
+
+    const finishResize = () => {
+      setSidebarWidth(sidebarWidthRef.current);
+      setIsSidebarResizing(false);
+    };
+
+    window.addEventListener('pointermove', updateWidth, { passive: false });
+    window.addEventListener('pointerup', finishResize);
+    window.addEventListener('pointercancel', finishResize);
+    window.addEventListener('blur', finishResize);
+
+    return () => {
+      root.classList.remove('is-resizing-sidebar');
+      window.removeEventListener('pointermove', updateWidth);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
+      window.removeEventListener('blur', finishResize);
+    };
+  }, [isSidebarResizing]);
+
+  const resizeSidebarWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isSidebarCollapsed) return;
+    const step = event.shiftKey ? 24 : 8;
+    let nextWidth = sidebarWidthRef.current;
+
+    if (event.key === 'ArrowLeft') nextWidth -= step;
+    else if (event.key === 'ArrowRight') nextWidth += step;
+    else if (event.key === 'Home') nextWidth = SIDEBAR_MIN_WIDTH;
+    else if (event.key === 'End') nextWidth = SIDEBAR_MAX_WIDTH;
+    else return;
+
+    event.preventDefault();
+    nextWidth = clampSidebarWidth(nextWidth);
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth(nextWidth);
+  };
 
   if (!state.experiment) {
     return (
@@ -780,7 +870,17 @@ function StudyRoom({
   }
 
   return (
-    <div className={cn('study-room study-layout-shell max-w-[1920px] mx-auto', isSidebarCollapsed && 'is-sidebar-collapsed')}>
+    <div
+      ref={layoutRef}
+      className={cn(
+        'study-room study-layout-shell max-w-[1920px] mx-auto',
+        isSidebarCollapsed && 'is-sidebar-collapsed',
+        isSidebarResizing && 'is-sidebar-resizing',
+      )}
+      style={{
+        '--sidebar-width': `${isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px`,
+      } as React.CSSProperties}
+    >
       <aside className="study-info-sidebar" aria-label="Project and room information">
         <button
           type="button"
@@ -790,8 +890,29 @@ function StudyRoom({
           aria-controls="study-info-sidebar-content"
           onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
         >
-          {isSidebarCollapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
+          <span aria-hidden="true">{isSidebarCollapsed ? '›' : '‹'}</span>
         </button>
+        <div
+          className="sidebar-resize-handle"
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemax={SIDEBAR_MAX_WIDTH}
+          aria-valuenow={sidebarWidth}
+          tabIndex={isSidebarCollapsed ? -1 : 0}
+          onKeyDown={resizeSidebarWithKeyboard}
+          onPointerEnter={() => document.documentElement.classList.add('is-sidebar-resize-hover')}
+          onPointerLeave={() => document.documentElement.classList.remove('is-sidebar-resize-hover')}
+          onPointerDown={(event) => {
+            if (isSidebarCollapsed || event.button !== 0) return;
+            event.preventDefault();
+            sidebarWidthRef.current = sidebarWidth;
+            setIsSidebarResizing(true);
+          }}
+        >
+          <span aria-hidden="true" />
+        </div>
         <span className="sidebar-collapsed-mark" aria-hidden="true"><Sparkles /></span>
         <div
           id="study-info-sidebar-content"
@@ -870,6 +991,8 @@ function StudyRoom({
           </div>
         </div>
       </aside>
+
+      {isSidebarResizing && <div className="sidebar-resize-guard" aria-hidden="true" />}
 
       <main className="study-main-column">
         <section className="prototype-frame workbench-preview flex min-h-0 flex-col rounded-[2rem] bg-white/80 border border-white shadow-xl shadow-blue-100 overflow-hidden">
@@ -1861,7 +1984,10 @@ function FinalCoinLeaderboard({ entries }: { entries: StudyLeaderboardEntry[] })
                 )}
               >
                 <td className="rounded-l-2xl px-4 py-4 text-lg font-black text-blue-950">
-                  {entry.rank === 1 ? '🏆' : `#${entry.rank}`}
+                  <span className="inline-flex items-center gap-1.5">
+                    {entry.rank === 1 && <Trophy className="h-4 w-4" aria-hidden="true" />}
+                    {entry.rank}
+                  </span>
                 </td>
                 <td className="px-4 py-4 font-black text-blue-700">{entry.participant_code}</td>
                 <td className="px-4 py-4 text-lg font-black text-amber-600">{entry.coins}</td>
