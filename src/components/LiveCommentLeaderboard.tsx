@@ -1,6 +1,6 @@
 import React from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { ArrowDown, ArrowUp, Check, CircleDollarSign, Clock3, Minus, Trophy } from 'lucide-react';
+import { ArrowDown, ArrowUp, CircleDollarSign, Clock3, Minus, Trophy } from 'lucide-react';
 import type { StudyComment, StudyInvestment, StudyPhase, StudySelectedIdea, StudyState } from '../types';
 import { cn } from '../lib/utils';
 import { ParticipantAvatar } from './ParticipantRoster';
@@ -8,18 +8,29 @@ import { ParticipantAvatar } from './ParticipantRoster';
 type Role = 'creator' | 'participant';
 
 const RANKING_INTERVAL_MS = 30_000;
-const VOTE_COST = 20;
-const HOLD_DURATION_MS = 720;
+const INVESTMENT_LEVELS = [0, 20, 40, 60, 80, 100] as const;
+type InvestmentLevel = (typeof INVESTMENT_LEVELS)[number];
+const INVEST_STEP = 20;
+const MAX_INVESTMENT: InvestmentLevel = 100;
 
-function voteCount(comment: StudyComment) {
-  return Math.max(0, Number(comment.investor_count || 0));
+function normalizeInvestment(value: number): InvestmentLevel {
+  return INVESTMENT_LEVELS.includes(value as InvestmentLevel) ? value as InvestmentLevel : 0;
+}
+
+function getNextInvestment(current: InvestmentLevel): InvestmentLevel {
+  const index = INVESTMENT_LEVELS.indexOf(current);
+  return INVESTMENT_LEVELS[(index + 1) % INVESTMENT_LEVELS.length];
+}
+
+function investmentTotal(comment: StudyComment) {
+  return Math.max(0, Number(comment.invested || 0));
 }
 
 function rankIds(comments: StudyComment[], previousIds: number[]) {
   const previousPosition = new Map(previousIds.map((id, index) => [id, index]));
   return [...comments]
     .sort((a, b) =>
-      voteCount(b) - voteCount(a) ||
+      investmentTotal(b) - investmentTotal(a) ||
       (previousPosition.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (previousPosition.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime() ||
       a.id - b.id,
@@ -27,97 +38,61 @@ function rankIds(comments: StudyComment[], previousIds: number[]) {
     .map((comment) => comment.id);
 }
 
-function HoldToWithdrawButton({
-  voted,
+function InvestmentCycleButton({
+  amount,
   disabled,
-  pending,
   insufficient,
-  onVote,
-  onWithdraw,
+  feedbackKey,
+  reachedMaximum,
+  onInvest,
 }: {
-  voted: boolean;
+  amount: InvestmentLevel;
   disabled: boolean;
-  pending: boolean;
   insufficient: boolean;
-  onVote: () => void;
-  onWithdraw: () => void;
+  feedbackKey: number;
+  reachedMaximum: boolean;
+  onInvest: () => void;
 }) {
-  const [holding, setHolding] = React.useState(false);
-  const timerRef = React.useRef<number | null>(null);
-  const firedRef = React.useRef(false);
-
-  const cancelHold = React.useCallback(() => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = null;
-    setHolding(false);
-  }, []);
-
-  const startHold = React.useCallback(() => {
-    if (!voted || disabled || pending || timerRef.current !== null) return;
-    firedRef.current = false;
-    setHolding(true);
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      firedRef.current = true;
-      setHolding(false);
-      onWithdraw();
-    }, HOLD_DURATION_MS);
-  }, [disabled, onWithdraw, pending, voted]);
-
-  React.useEffect(() => cancelHold, [cancelHold]);
+  const nextAmount = getNextInvestment(amount);
 
   return (
     <button
       type="button"
       className={cn(
         'investment-vote-button',
-        voted && 'is-voted',
-        holding && 'is-holding',
+        amount > 0 && 'has-investment',
+        amount === MAX_INVESTMENT && 'is-max-investment',
+        reachedMaximum && 'just-reached-maximum',
         insufficient && 'is-insufficient',
       )}
-      disabled={disabled || pending}
-      aria-pressed={voted}
+      style={{ '--investment-progress': amount / MAX_INVESTMENT } as React.CSSProperties}
+      disabled={disabled}
       aria-label={
-        voted
-          ? '已投票，长按撤回投票'
-          : insufficient
-            ? '剩余金币不足 20，无法投票'
-            : '投资 20 金币为这条评论投 1 票'
+        insufficient
+          ? `当前已投资 ${amount} 金币，余额不足 20 金币`
+          : amount === MAX_INVESTMENT
+            ? '当前已投资 100 金币，再次点击清零并返还 100 金币'
+            : `当前已投资 ${amount} 金币，点击切换至 ${nextAmount} 金币`
       }
-      title={voted ? '长按 0.72 秒撤回投票' : undefined}
-      onPointerDown={(event) => {
-        if (voted) {
-          event.currentTarget.setPointerCapture?.(event.pointerId);
-          startHold();
-        }
-      }}
-      onPointerUp={cancelHold}
-      onPointerCancel={cancelHold}
-      onPointerLeave={cancelHold}
-      onKeyDown={(event) => {
-        if (voted && (event.key === 'Enter' || event.key === ' ')) {
-          event.preventDefault();
-          startHold();
-        }
-      }}
-      onKeyUp={(event) => {
-        if (voted && (event.key === 'Enter' || event.key === ' ')) cancelHold();
-      }}
-      onContextMenu={(event) => event.preventDefault()}
-      onClick={(event) => {
-        if (firedRef.current) {
-          firedRef.current = false;
-          event.preventDefault();
-          return;
-        }
-        if (!voted) onVote();
-      }}
+      title={amount === MAX_INVESTMENT ? 'Click again to reset' : undefined}
+      onClick={onInvest}
     >
-      <span className="vote-button-icon" aria-hidden="true">
-        {voted ? <Check /> : <CircleDollarSign />}
+      <span key={`coin-${feedbackKey}`} className={cn('vote-button-icon', feedbackKey > 0 && 'is-clicked')} aria-hidden="true">
+        <CircleDollarSign />
       </span>
-      <span>{pending ? '处理中' : voted ? '已投票' : insufficient ? '金币不足' : 'Invest'}</span>
-      <span className="vote-hold-progress" aria-hidden="true" />
+      <span className="investment-button-label" aria-live="polite">
+        <AnimatePresence initial={false} mode="popLayout">
+          <motion.span
+            key={amount}
+            initial={{ opacity: 0, y: 7, scale: amount === 0 ? 0.82 : 1 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -7, scale: amount === 100 ? 0.78 : 1 }}
+            transition={{ duration: 0.19, ease: 'easeOut' }}
+          >
+            {amount}
+          </motion.span>
+        </AnimatePresence>
+      </span>
     </button>
   );
 }
@@ -131,9 +106,9 @@ export function LiveCommentLeaderboard({
   investmentLocked,
   availableCoins,
   selectedIdeas,
-  isBusy,
-  onRun,
   invest,
+  onInvestmentState,
+  onInvestmentError,
 }: {
   role: Role;
   participantCode: string;
@@ -143,9 +118,9 @@ export function LiveCommentLeaderboard({
   investmentLocked: boolean;
   availableCoins: number;
   selectedIdeas: StudySelectedIdea[];
-  isBusy: boolean;
-  onRun: (action: () => Promise<StudyState>) => void;
   invest: (commentId: number, amount: number) => Promise<StudyState>;
+  onInvestmentState: (state: StudyState) => void;
+  onInvestmentError: (message: string) => void;
 }) {
   const reduceMotion = useReducedMotion();
   const commentsRef = React.useRef(comments);
@@ -156,9 +131,15 @@ export function LiveCommentLeaderboard({
     () => Math.ceil((RANKING_INTERVAL_MS - (Date.now() % RANKING_INTERVAL_MS)) / 1000),
   );
   const rankingBucketRef = React.useRef(Math.floor(Date.now() / RANKING_INTERVAL_MS));
-  const [pendingIds, setPendingIds] = React.useState<Set<number>>(() => new Set());
-  const [success, setSuccess] = React.useState<{ id: number; label: string; key: number } | null>(null);
-  const successTimerRef = React.useRef<number | null>(null);
+  const [feedbacks, setFeedbacks] = React.useState<Map<number, { label: string; key: number }>>(() => new Map());
+  const feedbackTimersRef = React.useRef<Map<number, number>>(new Map());
+  const feedbackSequenceRef = React.useRef(0);
+  const optimisticAmountsRef = React.useRef<Map<number, InvestmentLevel>>(new Map());
+  const [optimisticAmounts, setOptimisticAmounts] = React.useState<Map<number, InvestmentLevel>>(() => new Map());
+  const [optimisticCoins, setOptimisticCoins] = React.useState(availableCoins);
+  const optimisticCoinsRef = React.useRef(availableCoins);
+  const requestQueuesRef = React.useRef<Map<number, Promise<void>>>(new Map());
+  const activeRequestCountRef = React.useRef(0);
 
   React.useEffect(() => {
     commentsRef.current = comments;
@@ -197,8 +178,18 @@ export function LiveCommentLeaderboard({
   }, []);
 
   React.useEffect(() => () => {
-    if (successTimerRef.current !== null) window.clearTimeout(successTimerRef.current);
+    feedbackTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    feedbackTimersRef.current.clear();
   }, []);
+
+  React.useEffect(() => {
+    if (activeRequestCountRef.current === 0) {
+      optimisticCoinsRef.current = availableCoins;
+      setOptimisticCoins(availableCoins);
+      optimisticAmountsRef.current = new Map();
+      setOptimisticAmounts(new Map());
+    }
+  }, [availableCoins, investments]);
 
   const commentById = new Map(comments.map((comment) => [comment.id, comment]));
   const orderedComments = orderedIds.map((id) => commentById.get(id)).filter(Boolean) as StudyComment[];
@@ -209,25 +200,54 @@ export function LiveCommentLeaderboard({
       .map((investment) => [investment.comment_id, investment]),
   );
   const selectionByComment = new Map(selectedIdeas.map((idea) => [idea.comment_id, idea]));
-  const canVote = phase === 'investing' && !investmentLocked;
+  const canInvest = phase === 'investing' && !investmentLocked;
 
-  const submitVote = (commentId: number, amount: number) => {
-    if (pendingIds.has(commentId)) return;
-    setPendingIds((current) => new Set(current).add(commentId));
-    onRun(async () => {
+  const submitInvestment = (commentId: number, authoritativeAmount: InvestmentLevel) => {
+    const currentAmount = optimisticAmountsRef.current.get(commentId) ?? authoritativeAmount;
+    const nextAmount = getNextInvestment(currentAmount);
+    const delta = nextAmount - currentAmount;
+    if (delta > optimisticCoinsRef.current) {
+      onInvestmentError('剩余金币不足 20，无法继续增加投资。');
+      return;
+    }
+
+    optimisticAmountsRef.current = new Map(optimisticAmountsRef.current).set(commentId, nextAmount);
+    setOptimisticAmounts(new Map(optimisticAmountsRef.current));
+    optimisticCoinsRef.current -= delta;
+    setOptimisticCoins(optimisticCoinsRef.current);
+    feedbackSequenceRef.current += 1;
+    const feedback = { label: nextAmount === 0 ? '已清零' : '+20', key: feedbackSequenceRef.current };
+    setFeedbacks((current) => new Map(current).set(commentId, feedback));
+    const previousTimer = feedbackTimersRef.current.get(commentId);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+    feedbackTimersRef.current.set(commentId, window.setTimeout(() => {
+      setFeedbacks((current) => {
+        const updated = new Map(current);
+        updated.delete(commentId);
+        return updated;
+      });
+      feedbackTimersRef.current.delete(commentId);
+    }, 560));
+
+    activeRequestCountRef.current += 1;
+    const previousQueue = requestQueuesRef.current.get(commentId) ?? Promise.resolve();
+    const nextQueue = previousQueue.then(async () => {
       try {
-        const next = await invest(commentId, amount);
-        setSuccess({ id: commentId, label: amount === 0 ? '已撤回' : '+1', key: Date.now() });
-        if (successTimerRef.current !== null) window.clearTimeout(successTimerRef.current);
-        successTimerRef.current = window.setTimeout(() => setSuccess(null), 900);
-        return next;
+        const next = await invest(commentId, nextAmount);
+        onInvestmentState(next);
+      } catch (error) {
+        optimisticAmountsRef.current = new Map(optimisticAmountsRef.current).set(commentId, currentAmount);
+        setOptimisticAmounts(new Map(optimisticAmountsRef.current));
+        optimisticCoinsRef.current += delta;
+        setOptimisticCoins(optimisticCoinsRef.current);
+        onInvestmentError(error instanceof Error ? error.message : 'Investment failed.');
       } finally {
-        setPendingIds((current) => {
-          const updated = new Set(current);
-          updated.delete(commentId);
-          return updated;
-        });
+        activeRequestCountRef.current = Math.max(0, activeRequestCountRef.current - 1);
       }
+    });
+    requestQueuesRef.current.set(commentId, nextQueue);
+    void nextQueue.finally(() => {
+      if (requestQueuesRef.current.get(commentId) === nextQueue) requestQueuesRef.current.delete(commentId);
     });
   };
 
@@ -242,14 +262,14 @@ export function LiveCommentLeaderboard({
           </div>
         </div>
         <div className="live-comment-board-meta">
-          <span className="live-coin-balance">剩余金币：<strong>{availableCoins}</strong></span>
+          <span className="live-coin-balance">剩余金币：<strong>{optimisticCoins}</strong></span>
           <span className="rank-live-indicator">实时更新 · Just now</span>
-          <span className="rank-refresh-indicator"><Clock3 aria-hidden="true" /> {secondsUntilUpdate}s · Sorted by votes</span>
+          <span className="rank-refresh-indicator"><Clock3 aria-hidden="true" /> {secondsUntilUpdate}s · Sorted by invested coins</span>
         </div>
       </header>
 
       <p className="live-comment-board-rules">
-        用户通过投资为评论投票；每次投资记为 1 票，榜单每 30 秒按票数稳定更新。
+        每次点击追加 20 金币，单条评论最多投入 100 金币；榜单每 30 秒按累计投资金币稳定更新。
       </p>
 
       <div className="live-comment-list custom-scrollbar-light" aria-live="polite">
@@ -263,12 +283,13 @@ export function LiveCommentLeaderboard({
           <AnimatePresence initial={false}>
             {orderedComments.map((comment, index) => {
               const ownComment = role === 'participant' && (comment.is_own || comment.participant_code === participantCode);
-              const voted = Boolean(ownInvestmentByComment.get(comment.id));
-              const pending = pendingIds.has(comment.id);
-              const insufficient = !voted && availableCoins < VOTE_COST;
-              const disabled = !canVote || ownComment || isBusy || insufficient;
+              const authoritativeInvestment = normalizeInvestment(Number(ownInvestmentByComment.get(comment.id)?.amount || 0));
+              const myInvestment = optimisticAmounts.get(comment.id) ?? authoritativeInvestment;
+              const insufficient = myInvestment < MAX_INVESTMENT && optimisticCoins < INVEST_STEP;
+              const disabled = !canInvest || ownComment;
               const selectedIdea = selectionByComment.get(comment.id);
               const rankDelta = rankDeltas.get(comment.id) ?? 0;
+              const feedback = feedbacks.get(comment.id);
               return (
                 <motion.article
                   layout="position"
@@ -278,7 +299,7 @@ export function LiveCommentLeaderboard({
                     'live-comment-row interactive-surface',
                     index < 3 && `is-top-${index + 1}`,
                     ownComment && 'is-own-comment',
-                    success?.id === comment.id && 'is-vote-success',
+                    feedback && 'is-vote-success',
                   )}
                 >
                   <div className="interactive-surface-content live-comment-row-content">
@@ -300,23 +321,23 @@ export function LiveCommentLeaderboard({
                       </div>
                       <p>{comment.content}</p>
                     </div>
-                    <div className="live-vote-score" aria-label={`${voteCount(comment)} votes`}>
-                      <strong>{voteCount(comment)}</strong>
-                      <span>VOTES</span>
+                    <div className="live-vote-score" aria-label={`${investmentTotal(comment)} invested coins`}>
+                      <strong>{investmentTotal(comment)}</strong>
+                      <span>COINS</span>
                     </div>
                     <div className="live-comment-actions">
-                      <HoldToWithdrawButton
-                        voted={voted}
+                      <InvestmentCycleButton
+                        amount={myInvestment}
                         disabled={disabled}
-                        pending={pending}
                         insufficient={insufficient}
-                        onVote={() => submitVote(comment.id, VOTE_COST)}
-                        onWithdraw={() => submitVote(comment.id, 0)}
+                        feedbackKey={feedback?.key ?? 0}
+                        reachedMaximum={Boolean(feedback) && myInvestment === MAX_INVESTMENT}
+                        onInvest={() => submitInvestment(comment.id, authoritativeInvestment)}
                       />
                       {ownComment && <small className="own-comment-note">自己的评论不可投票</small>}
                     </div>
-                    {success?.id === comment.id && (
-                      <span key={success.key} className="live-vote-feedback" aria-hidden="true">{success.label}</span>
+                    {feedback && (
+                      <span key={feedback.key} className="live-vote-feedback" aria-hidden="true">{feedback.label}</span>
                     )}
                   </div>
                 </motion.article>

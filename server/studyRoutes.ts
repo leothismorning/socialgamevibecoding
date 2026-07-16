@@ -231,7 +231,7 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
       const ideaList = selectedIdeas
         .map(
           (idea) =>
-            `${idea.selection_rank}. ${idea.selection_role === 'core' ? 'CORE IDEA' : 'SUPPORTING IDEA'} by ${idea.participant_code} (${idea.investor_count} votes): ${idea.content}`,
+            `${idea.selection_rank}. ${idea.selection_role === 'core' ? 'CORE IDEA' : 'SUPPORTING IDEA'} by ${idea.participant_code} (${idea.invested} invested coins): ${idea.content}`,
         )
         .join('\n');
       const prompt = `Create an implementation fusion plan for the three automatically selected ideas below.

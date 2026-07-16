@@ -107,7 +107,7 @@ function getParticipantClientId() {
 function getRankedComments(comments: StudyComment[]) {
   const originalOrder = new Map(comments.map((comment, index) => [comment.id, index]));
   return [...comments].sort((a, b) =>
-    Number(b.investor_count || 0) - Number(a.investor_count || 0) ||
+    Number(b.invested || 0) - Number(a.invested || 0) ||
     Number(originalOrder.get(a.id)) - Number(originalOrder.get(b.id))
   );
 }
@@ -276,6 +276,8 @@ export default function App() {
         tiedComments={tiedComments}
         tieRankScores={tieRankScores}
         onRun={run}
+        onInvestmentState={setState}
+        onInvestmentError={setError}
         onNewExperiment={() => setShowCreatorSetup(true)}
         onAbortExperiment={() =>
           run(async () => {
@@ -755,6 +757,8 @@ function StudyRoom({
   tiedComments,
   tieRankScores,
   onRun,
+  onInvestmentState,
+  onInvestmentError,
   onNewExperiment,
   onAbortExperiment,
 }: {
@@ -765,6 +769,8 @@ function StudyRoom({
   tiedComments: StudyComment[];
   tieRankScores: number[];
   onRun: (action: () => Promise<StudyState>) => void;
+  onInvestmentState: (state: StudyState) => void;
+  onInvestmentError: (message: string) => void;
   onNewExperiment: () => void;
   onAbortExperiment: () => void;
 }) {
@@ -1053,9 +1059,9 @@ function StudyRoom({
               investmentLocked={investmentLocked}
               availableCoins={role === 'creator' ? experiment.creator_coins : me?.coins || 0}
               selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
-              onRun={onRun}
-              isBusy={isBusy}
               invest={(commentId, amount) => studyApi.invest(role, participantCode, commentId, amount)}
+              onInvestmentState={onInvestmentState}
+              onInvestmentError={onInvestmentError}
             />
             <CommentPanel
               role={role}
@@ -1255,7 +1261,7 @@ function CreatorControls({
           <div className="mb-3">
             <p className="text-xs font-black text-amber-700">Tie resolution</p>
             <p className="mt-1 text-[11px] leading-5 text-amber-700/80">
-              Creator can only choose between ideas with the same vote total. Higher-voted ideas remain locked.
+              Creator can only choose between ideas with the same invested-coin total. Higher-invested ideas remain locked.
             </p>
           </div>
           <div className="space-y-3">

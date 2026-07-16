@@ -47,6 +47,8 @@ export type StudyState = {
 };
 
 const now = () => new Date().toISOString();
+const INVESTMENT_LEVELS = [0, 20, 40, 60, 80, 100] as const;
+type InvestmentLevel = (typeof INVESTMENT_LEVELS)[number];
 
 const dbPath = process.env.STUDY_DB_PATH
   ? path.resolve(process.env.STUDY_DB_PATH)
@@ -1064,16 +1066,16 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
     if (!isCreator && comment.participant_code === cleanCode) throw new Error('Participants cannot invest in their own comment.');
 
     const value = Math.floor(Number(amount));
-    if (![0, 20].includes(value)) {
-      throw new Error('A comment vote must be either 20 coins or withdrawn to 0.');
+    if (!INVESTMENT_LEVELS.includes(value as InvestmentLevel)) {
+      throw new Error('Invalid comment investment level.');
     }
     const previous = db
       .prepare(`SELECT * FROM investments WHERE experiment_id = ? AND round_number = ? AND participant_code = ? AND comment_id = ?`)
       .get(experiment.id, experiment.current_round, cleanCode, commentId) as any;
     const previousAmount = Number(previous?.amount || 0);
-    const expectedAmount = previousAmount > 0 ? 0 : 20;
+    const expectedAmount = previousAmount >= 100 ? 0 : previousAmount + 20;
     if (value !== expectedAmount) {
-      const error: any = new Error(previousAmount > 0 ? 'You have already voted for this comment.' : 'This vote changed elsewhere. Try again.');
+      const error: any = new Error('This investment changed elsewhere. Refresh and try again.');
       error.status = 409;
       throw error;
     }
@@ -1095,7 +1097,7 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
     }
     const delta = value - previousAmount;
     const availableCoins = isCreator ? Number(experiment.creator_coins) : Number(participant.coins);
-    if (delta > availableCoins) throw new Error('Not enough coins for another 20-coin reaction.');
+    if (delta > availableCoins) throw new Error('Not enough coins to add another 20 coins.');
 
     const timestamp = now();
     if (value === 0) {
@@ -1104,6 +1106,8 @@ export function investCoins(actorType: 'participant' | 'creator', participantCod
       db.prepare(`
         INSERT INTO investments (experiment_id, round_number, participant_code, comment_id, amount, created_at, actor_type)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(experiment_id, round_number, participant_code, comment_id)
+        DO UPDATE SET amount = excluded.amount, created_at = excluded.created_at, actor_type = excluded.actor_type
       `).run(experiment.id, experiment.current_round, cleanCode, commentId, value, timestamp, actorType);
     }
     if (isCreator) {
@@ -1269,16 +1273,16 @@ export function selectTopIdeas(commentIds?: number[]) {
       LEFT JOIN investments i ON i.comment_id = c.id
       WHERE c.experiment_id = ? AND c.round_number = ? AND c.deleted_at IS NULL
       GROUP BY c.id
-      ORDER BY investor_count DESC, c.created_at ASC, c.id ASC
+      ORDER BY invested DESC, c.created_at ASC, c.id ASC
     `)
     .all(experiment.id, experiment.current_round) as any[];
 
-  if (totals.length < 3) throw new Error('At least three ideas are required before the voting result can be locked.');
-  const rankScores = totals.slice(0, 3).map((comment) => Number(comment.investor_count || 0));
+  if (totals.length < 3) throw new Error('At least three ideas are required before the investment result can be locked.');
+  const rankScores = totals.slice(0, 3).map((comment) => Number(comment.invested || 0));
   const relevantScores = new Set(rankScores);
-  const tieComments = totals.filter((comment) => relevantScores.has(Number(comment.investor_count || 0)));
+  const tieComments = totals.filter((comment) => relevantScores.has(Number(comment.invested || 0)));
   const hasRelevantTie = [...relevantScores].some(
-    (score) => totals.filter((comment) => Number(comment.investor_count || 0) === score).length > 1,
+    (score) => totals.filter((comment) => Number(comment.invested || 0) === score).length > 1,
   );
 
   if ((!commentIds || commentIds.length === 0) && hasRelevantTie) {
@@ -1300,7 +1304,7 @@ export function selectTopIdeas(commentIds?: number[]) {
     }
     selected = commentIds.map((commentId, index) => {
       const comment = totals.find((item) => item.id === commentId);
-      if (!comment || Number(comment.investor_count || 0) !== rankScores[index]) {
+      if (!comment || Number(comment.invested || 0) !== rankScores[index]) {
         throw new Error('Creator may only reorder or choose ideas tied at that ranking position.');
       }
       return comment;
