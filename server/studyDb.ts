@@ -930,6 +930,85 @@ export function joinStudy(clientId: string) {
   return { ...getStudyState(), viewerParticipantCode: participantCode };
 }
 
+const changeParticipantNumber = db.transaction((rawClientId: string, rawParticipantCode: string) => {
+  const experiment = activeExperiment();
+  if (!experiment) throw new Error('Creator must start an experiment before participants can choose a number.');
+  if (experiment.phase === 'ended' || experiment.phase === 'aborted') {
+    throw new Error('Participant numbers cannot be changed after the experiment closes.');
+  }
+
+  const clientId = rawClientId.trim();
+  const participantCode = rawParticipantCode.trim().toUpperCase();
+  if (!clientId || clientId.length > 160) throw new Error('A valid participant session is required.');
+  if (!/^P(?:0[1-9]|1[0-9]|20)$/.test(participantCode)) {
+    throw new Error('Participant number must be P01-P20.');
+  }
+
+  const session = db.prepare(`
+    SELECT participant_code, joined_at FROM participant_sessions
+    WHERE experiment_id = ? AND client_id = ?
+  `).get(experiment.id, clientId) as any;
+  if (!session) throw new Error('Join the experiment before choosing a participant number.');
+
+  const currentCode = String(session.participant_code);
+  const timestamp = now();
+  if (currentCode === participantCode) {
+    db.prepare(`UPDATE participant_sessions SET last_seen_at = ? WHERE experiment_id = ? AND client_id = ?`).run(
+      timestamp,
+      experiment.id,
+      clientId,
+    );
+    return participantCode;
+  }
+
+  const occupiedSession = db.prepare(`
+    SELECT client_id FROM participant_sessions
+    WHERE experiment_id = ? AND participant_code = ? AND client_id <> ?
+  `).get(experiment.id, participantCode, clientId) as any;
+  const targetParticipant = db.prepare(`SELECT * FROM participants WHERE code = ?`).get(participantCode) as any;
+  if (!targetParticipant) throw new Error('Participant number must be P01-P20.');
+  if (occupiedSession || targetParticipant.joined_at) {
+    throw new Error(`${participantCode} is already in use.`);
+  }
+
+  const currentParticipant = db.prepare(`SELECT * FROM participants WHERE code = ?`).get(currentCode) as any;
+  const activity = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM comments WHERE experiment_id = ? AND participant_code = ?) +
+      (SELECT COUNT(*) FROM investments WHERE experiment_id = ? AND participant_code = ?) +
+      (SELECT COUNT(*) FROM end_votes WHERE experiment_id = ? AND participant_code = ?) AS count
+  `).get(
+    experiment.id,
+    currentCode,
+    experiment.id,
+    currentCode,
+    experiment.id,
+    currentCode,
+  ) as any;
+  if (Number(activity?.count || 0) > 0 || Number(currentParticipant?.coins || 0) !== 0) {
+    throw new Error('Your participant number is locked because this identity already has game activity or Coin.');
+  }
+
+  db.prepare(`
+    UPDATE participant_sessions
+    SET participant_code = ?, last_seen_at = ?
+    WHERE experiment_id = ? AND client_id = ?
+  `).run(participantCode, timestamp, experiment.id, clientId);
+  db.prepare(`
+    UPDATE participants SET coins = 0, joined_at = NULL, last_seen_at = NULL WHERE code = ?
+  `).run(currentCode);
+  db.prepare(`
+    UPDATE participants SET coins = 0, joined_at = ?, last_seen_at = ? WHERE code = ?
+  `).run(session.joined_at || timestamp, timestamp, participantCode);
+
+  return participantCode;
+});
+
+export function selectParticipantNumber(clientId: string, participantCode: string) {
+  const assignedCode = changeParticipantNumber.immediate(clientId, participantCode);
+  return { ...getStudyState(), viewerParticipantCode: assignedCode };
+}
+
 export function leaveStudy(clientId: string) {
   const experiment = activeExperiment();
   const cleanClientId = clientId.trim();

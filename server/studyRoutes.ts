@@ -16,6 +16,7 @@ import {
   publishDevelopmentDraft,
   saveDevelopmentDraft,
   saveFusionPlan,
+  selectParticipantNumber,
   selectTopIdeas,
   setAIProvider,
   setPhase,
@@ -168,6 +169,18 @@ Only add the HTML structure, CSS, JavaScript, responsiveness, and accessibility 
   app.post('/api/study/leave', (req, res) => {
     try {
       sendState(res, leaveStudy(String(req.body?.clientId || '')));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/study/participant-number', (req, res) => {
+    try {
+      const selected = selectParticipantNumber(
+        String(req.body?.clientId || ''),
+        String(req.body?.participantCode || ''),
+      );
+      sendState(res, selected, { role: 'participant', participantCode: selected.viewerParticipantCode });
     } catch (error) {
       sendError(res, error);
     }

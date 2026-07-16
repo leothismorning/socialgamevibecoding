@@ -4,6 +4,8 @@ Single-project CHI experiment prototype for collaborative vibecoding. The curren
 
 Creator uploads/creates one project → participants P01-P20 join → experience → each participant submits one editable Idea and earns 100 Coin → anonymous sealed investment → automatic top-three selection (creator resolves ties only) → atomic author/investor settlement → AI fusion plan → visible initial candidate → transparent multi-turn AI Studio debugging → Creator publishes the working candidate → preview next version → continue or propose a project-end vote.
 
+Participant identity is scoped per browser tab: refreshing a tab keeps its number, while a new tab receives a separate automatic number. Before earning Coin or creating game activity, a Participant may open the identity menu and switch to any unoccupied P01-P20 number.
+
 - Participant Coin carries across rounds. A first valid Idea submission in each round awards `100 Coin`; editing or restoring the same Idea does not award it again.
 - Participant investment is capped at `150 Coin` per round and `50 Coin` per Idea, in increments of `10 Coin`. Self-investment is blocked.
 - During investing, authors, live totals, rankings, other investors, and other balances are withheld at the API layer. Idea order is randomized per viewer and remains stable for that round.

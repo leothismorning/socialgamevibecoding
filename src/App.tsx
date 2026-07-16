@@ -79,6 +79,46 @@ const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_COLLAPSED_WIDTH = 42;
 const SIDEBAR_WIDTH_STORAGE_KEY = 'study-sidebar-width';
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'study-sidebar-collapsed';
+const IDENTITY_TAB_ID_KEY = 'study-identity-tab-id';
+const LEGACY_IDENTITY_OWNER_KEY = 'study-identity-migration-owner-v1';
+
+function getIdentityTabId() {
+  const stored = sessionStorage.getItem(IDENTITY_TAB_ID_KEY);
+  if (stored) return stored;
+  const created = crypto.randomUUID();
+  sessionStorage.setItem(IDENTITY_TAB_ID_KEY, created);
+  return created;
+}
+
+function readIdentityValue(key: string) {
+  const stored = sessionStorage.getItem(key);
+  if (stored) return stored;
+
+  const tabId = getIdentityTabId();
+  let migrationOwner = localStorage.getItem(LEGACY_IDENTITY_OWNER_KEY);
+  if (!migrationOwner) {
+    localStorage.setItem(LEGACY_IDENTITY_OWNER_KEY, tabId);
+    migrationOwner = localStorage.getItem(LEGACY_IDENTITY_OWNER_KEY);
+  }
+  if (migrationOwner !== tabId) return '';
+
+  const legacy = localStorage.getItem(key) || '';
+  if (legacy) {
+    sessionStorage.setItem(key, legacy);
+    localStorage.removeItem(key);
+  }
+  return legacy;
+}
+
+function writeIdentityValue(key: string, value: string) {
+  sessionStorage.setItem(key, value);
+  localStorage.removeItem(key);
+}
+
+function removeIdentityValue(key: string) {
+  sessionStorage.removeItem(key);
+  localStorage.removeItem(key);
+}
 
 function clampSidebarWidth(width: number) {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
@@ -99,10 +139,10 @@ function getStoredSidebarCollapsed() {
 const COMMENT_CHARACTER_LIMIT = 280;
 
 function getParticipantClientId() {
-  const stored = localStorage.getItem('participant-client-id');
+  const stored = readIdentityValue('participant-client-id');
   if (stored) return stored;
   const created = crypto.randomUUID();
-  localStorage.setItem('participant-client-id', created);
+  writeIdentityValue('participant-client-id', created);
   return created;
 }
 
@@ -117,9 +157,9 @@ function getRankedComments(comments: StudyComment[]) {
 export default function App() {
   useGlobalPointerSpotlight();
   const [state, setState] = React.useState<StudyState | null>(null);
-  const [role, setRole] = React.useState<Role | null>(() => (localStorage.getItem('study-role') as Role | null) || null);
+  const [role, setRole] = React.useState<Role | null>(() => (readIdentityValue('study-role') as Role | null) || null);
   const [participantCode, setParticipantCode] = React.useState(() => {
-    const stored = localStorage.getItem('participant-code') || '';
+    const stored = readIdentityValue('participant-code');
     return participantCodePattern.test(stored) ? stored : '';
   });
   const [participantClientId] = React.useState(getParticipantClientId);
@@ -162,11 +202,23 @@ export default function App() {
 
   const chooseRole = (nextRole: Role) => {
     setRole(nextRole);
-    localStorage.setItem('study-role', nextRole);
+    writeIdentityValue('study-role', nextRole);
   };
 
   const changeAIProvider = (provider: StudyAIProvider) => {
     void run(() => studyApi.setAIProvider(provider));
+  };
+
+  const chooseParticipantNumber = (nextCode: string) => {
+    if (!participantCodePattern.test(nextCode) || nextCode === participantCode) return;
+    void run(async () => {
+      const next = await studyApi.selectParticipantNumber(participantClientId, nextCode);
+      const assignedCode = next.viewerParticipantCode;
+      if (!assignedCode) throw new Error('The room did not return the selected participant number.');
+      setParticipantCode(assignedCode);
+      writeIdentityValue('participant-code', assignedCode);
+      return next;
+    });
   };
 
   const leaveIdentity = () => {
@@ -175,8 +227,8 @@ export default function App() {
     }
     setRole(null);
     setParticipantCode('');
-    localStorage.removeItem('study-role');
-    localStorage.removeItem('participant-code');
+    removeIdentityValue('study-role');
+    removeIdentityValue('participant-code');
   };
 
   const openArchive = async (experimentId: string) => {
@@ -290,7 +342,7 @@ export default function App() {
               const assignedCode = joined.viewerParticipantCode;
               if (!assignedCode) throw new Error('The room did not return an assigned participant number.');
               setParticipantCode(assignedCode);
-              localStorage.setItem('participant-code', assignedCode);
+              writeIdentityValue('participant-code', assignedCode);
               return joined;
             })
           }
@@ -308,6 +360,11 @@ export default function App() {
       isBusy={isBusy}
       aiProvider={state.aiProvider}
       onAIProviderChange={changeAIProvider}
+      participantCode={role === 'participant' ? participantCode : undefined}
+      participants={state.participants}
+      onParticipantCodeChange={role === 'participant' && !['ended', 'aborted'].includes(state.experiment?.phase || '')
+        ? chooseParticipantNumber
+        : undefined}
       onRefresh={load}
       onLeave={leaveIdentity}
     >
@@ -417,6 +474,88 @@ function AIProviderPicker({
   );
 }
 
+function ParticipantNumberPicker({
+  participantCode,
+  participants,
+  isBusy,
+  onChange,
+}: {
+  participantCode: string;
+  participants: StudyState['participants'];
+  isBusy: boolean;
+  onChange: (participantCode: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const occupied = new Set(
+    participants
+      .filter((participant) => participant.joined_at && participant.code !== participantCode)
+      .map((participant) => participant.code),
+  );
+  const codes = Array.from({ length: PARTICIPANT_CAPACITY }, (_, index) => `P${String(index + 1).padStart(2, '0')}`);
+
+  return (
+    <div className="relative z-[210] shrink-0">
+      <button
+        type="button"
+        data-testid="participant-number-menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        disabled={isBusy}
+        className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/80 px-3 text-xs font-black text-blue-950 shadow-sm transition hover:border-emerald-200 sm:px-4"
+        title="Change participant number"
+      >
+        <UserRound className="h-4 w-4 text-violet-500" />
+        <span className="hidden text-slate-400 xl:inline">当前身份</span>
+        <span>Participant · {participantCode}</span>
+        <ChevronRight className={cn('h-3.5 w-3.5 text-emerald-600 transition', open && 'rotate-90')} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-[calc(100%+0.5rem)] z-[220] w-[min(19rem,calc(100vw-2rem))] rounded-2xl border border-emerald-100 bg-white p-3 shadow-2xl shadow-emerald-200/50">
+          <div className="mb-3">
+            <p className="text-xs font-black text-blue-950">选择参与者号码</p>
+            <p className="mt-1 text-[10px] font-semibold text-slate-400">灰暗号码已被其他参与者占用</p>
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {codes.map((code) => {
+              const isCurrent = code === participantCode;
+              const isOccupied = occupied.has(code);
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  data-testid={`participant-number-${code}`}
+                  disabled={isBusy || isOccupied}
+                  onClick={() => {
+                    if (isCurrent) {
+                      setOpen(false);
+                      return;
+                    }
+                    setOpen(false);
+                    onChange(code);
+                  }}
+                  className={cn(
+                    'rounded-xl border px-2 py-2.5 text-xs font-black transition',
+                    isCurrent && 'border-emerald-400 bg-emerald-50 text-emerald-700',
+                    !isCurrent && !isOccupied && 'border-slate-100 bg-white text-blue-950 hover:border-emerald-300 hover:bg-emerald-50',
+                    isOccupied && 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-300 opacity-50',
+                  )}
+                  title={isCurrent ? 'Current number' : isOccupied ? 'Already in use' : `Switch to ${code}`}
+                >
+                  {code}
+                  <span className="mt-0.5 block text-[8px] font-bold">
+                    {isCurrent ? '当前' : isOccupied ? '已占用' : '可选择'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Shell({
   children,
   error,
@@ -424,6 +563,9 @@ function Shell({
   identityLabel,
   aiProvider,
   onAIProviderChange,
+  participantCode,
+  participants = [],
+  onParticipantCodeChange,
   onRefresh,
   onLeave,
   workspaceMode = false,
@@ -434,6 +576,9 @@ function Shell({
   identityLabel?: string;
   aiProvider: StudyAIProvider;
   onAIProviderChange?: (provider: StudyAIProvider) => void;
+  participantCode?: string;
+  participants?: StudyState['participants'];
+  onParticipantCodeChange?: (participantCode: string) => void;
   onRefresh: () => void;
   onLeave: () => void;
   workspaceMode?: boolean;
@@ -460,7 +605,14 @@ function Shell({
         <div className="flex items-center gap-3">
           <AIProviderPicker aiProvider={aiProvider} isBusy={isBusy} onChange={onAIProviderChange} />
           <ThemeToggle />
-          {identityLabel && (
+          {participantCode && onParticipantCodeChange ? (
+            <ParticipantNumberPicker
+              participantCode={participantCode}
+              participants={participants}
+              isBusy={isBusy}
+              onChange={onParticipantCodeChange}
+            />
+          ) : identityLabel && (
             <div className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/80 px-3 text-xs font-black text-blue-950 shadow-sm sm:px-4">
               <UserRound className="h-4 w-4 text-violet-500" />
               <span className="hidden text-slate-400 xl:inline">当前身份</span>
