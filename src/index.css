@@ -351,8 +351,10 @@ summary:focus-visible {
 
 .app-header {
   position: sticky !important;
+  z-index: 200 !important;
   top: 0;
   height: 72px !important;
+  overflow: visible !important;
   border-color: var(--border-subtle) !important;
   background: rgba(255, 255, 255, .88) !important;
   box-shadow: 0 1px 0 rgba(0, 0, 0, .02);
@@ -388,7 +390,7 @@ summary:focus-visible {
   transform: translateY(-1px);
 }
 
-.app-header button:last-child {
+.app-header > div:last-child > button:last-child {
   border-color: var(--palette-black) !important;
   background: var(--palette-black) !important;
 }

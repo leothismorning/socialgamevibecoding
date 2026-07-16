@@ -14,6 +14,27 @@ type SuiXiangOptions = {
 
 export const SUIXIANG_GPT_MODEL = 'gpt-5.5';
 
+const RETRYABLE_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+const NETWORK_RETRY_DELAYS_MS = [500, 1200];
+
+function isRetryableNetworkError(error: unknown) {
+  const err = error as any;
+  const code = String(err?.cause?.code || err?.code || '').toUpperCase();
+  const message = String(err?.cause?.message || err?.message || '').toLowerCase();
+  return RETRYABLE_NETWORK_CODES.has(code)
+    || message.includes('socket disconnected')
+    || message.includes('before secure tls connection')
+    || message.includes('fetch failed');
+}
+
 export async function generateWithSuiXiangGPT(
   prompt: string,
   model = SUIXIANG_GPT_MODEL,
@@ -43,41 +64,61 @@ export async function generateWithSuiXiangGPT(
     },
   });
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              options.systemPrompt ||
-              'You are an expert web developer. Follow the supplied user requirements exactly and do not invent features, themes, text, branding, games, or controls that were not requested. When requirements are underspecified, produce a minimal neutral implementation instead of fabricating content or product claims. Return only a JSON object with two keys: "text" for a concise explanation and "code" for one complete self-contained HTML document with all required CSS and JavaScript. Do not wrap the JSON in Markdown fences.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        response_format: { type: 'json_object' },
-        max_completion_tokens: options.maxTokens || 8192,
-      }),
-    });
-  } catch (error) {
-    const detail = errorDetail(error);
-    addDebugLog({
-      kind: 'ai',
-      phase: 'error',
-      title: 'Sui-Xiang GPT-5.5 network request failed',
-      durationMs: Math.round(performance.now() - startedAt),
-      detail: { endpoint, model, ...detail },
-    });
-    const reason = [detail.causeCode, detail.causeMessage || detail.message].filter(Boolean).join(': ');
-    throw new Error(reason ? `Sui-Xiang GPT-5.5 network request failed: ${reason}` : 'Sui-Xiang GPT-5.5 network request failed.');
+  let upstream: Response | null = null;
+  const totalAttempts = NETWORK_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    try {
+      upstream = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content:
+                options.systemPrompt ||
+                'You are an expert web developer. Follow the supplied user requirements exactly and do not invent features, themes, text, branding, games, or controls that were not requested. When requirements are underspecified, produce a minimal neutral implementation instead of fabricating content or product claims. Return only a JSON object with two keys: "text" for a concise explanation and "code" for one complete self-contained HTML document with all required CSS and JavaScript. Do not wrap the JSON in Markdown fences.',
+            },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+          max_completion_tokens: options.maxTokens || 8192,
+        }),
+      });
+      break;
+    } catch (error) {
+      const detail = errorDetail(error);
+      const canRetry = isRetryableNetworkError(error) && attempt < totalAttempts;
+      if (canRetry) {
+        const retryInMs = NETWORK_RETRY_DELAYS_MS[attempt - 1];
+        addDebugLog({
+          kind: 'ai',
+          phase: 'info',
+          title: 'Sui-Xiang GPT-5.5 connection interrupted; retrying',
+          durationMs: Math.round(performance.now() - startedAt),
+          detail: { endpoint, model, attempt, totalAttempts, retryInMs, ...detail },
+        });
+        await new Promise((resolve) => setTimeout(resolve, retryInMs));
+        continue;
+      }
+
+      addDebugLog({
+        kind: 'ai',
+        phase: 'error',
+        title: 'Sui-Xiang GPT-5.5 network request failed',
+        durationMs: Math.round(performance.now() - startedAt),
+        detail: { endpoint, model, attempt, totalAttempts, ...detail },
+      });
+      const reason = [detail.causeCode, detail.causeMessage || detail.message].filter(Boolean).join(': ');
+      throw new Error(reason ? `Sui-Xiang GPT-5.5 network request failed after ${attempt} attempt(s): ${reason}` : 'Sui-Xiang GPT-5.5 network request failed.');
+    }
   }
+
+  if (!upstream) throw new Error('Sui-Xiang GPT-5.5 network request failed without a response.');
 
   const data: any = await upstream.json().catch(() => null);
   if (!upstream.ok) {

@@ -210,7 +210,7 @@ export default function App() {
         isBusy={isBusy}
         identityLabel={identityLabel}
         aiProvider={state.aiProvider}
-        onAIProviderChange={role === 'creator' ? changeAIProvider : undefined}
+        onAIProviderChange={changeAIProvider}
         onRefresh={() => openArchive(archiveState.experiment!.id)}
         onLeave={() => {
           setArchiveState(null);
@@ -278,6 +278,7 @@ export default function App() {
         error={error}
         isBusy={isBusy}
         aiProvider={state.aiProvider}
+        onAIProviderChange={changeAIProvider}
         onRefresh={load}
         onLeave={leaveIdentity}
       >
@@ -306,7 +307,7 @@ export default function App() {
       error={error}
       isBusy={isBusy}
       aiProvider={state.aiProvider}
-      onAIProviderChange={role === 'creator' ? changeAIProvider : undefined}
+      onAIProviderChange={changeAIProvider}
       onRefresh={load}
       onLeave={leaveIdentity}
     >
