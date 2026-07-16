@@ -60,7 +60,7 @@ export async function generateWithGemini(
         systemInstruction: {
           parts: [{
             text: options.systemPrompt ||
-              'You are an expert web developer creating study-ready web prototypes. Return only a JSON object with two keys: "text" for a concise explanation and "code" for a complete self-contained HTML document. Use Tailwind CSS via CDN when useful. Do not wrap the JSON in Markdown fences.',
+              'You are an expert web developer. Follow the supplied user requirements exactly and do not invent features, themes, text, branding, games, or controls that were not requested. When requirements are underspecified, produce a minimal neutral implementation instead of fabricating content or product claims. Return only a JSON object with two keys: "text" for a concise explanation and "code" for one complete self-contained HTML document with all required CSS and JavaScript. Do not wrap the JSON in Markdown fences.',
           }],
         },
         contents: [{ role: 'user', parts: [{ text: prompt }] }],

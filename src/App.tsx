@@ -19,6 +19,7 @@ import {
   Undo2,
   Trash2,
   Trophy,
+  TreePalm,
   UserRound,
   Users,
   Vote,
@@ -39,14 +40,21 @@ import {
   StudyEndVote,
   StudyEndVoteSummary,
   StudyFusionPlan,
-  StudyInvestment,
-  StudyAIProvider,
   StudyLeaderboardEntry,
   StudyPhase,
   StudySelectedIdea,
+  StudyAIProvider,
   StudyState,
 } from './types';
 import { cn } from './lib/utils';
+import { RoleSelection } from './components/RoleSelection';
+import { InteractiveSurface } from './components/InteractiveSurface';
+import { useGlobalPointerSpotlight } from './hooks/useGlobalPointerSpotlight';
+import { VersionEvolution } from './components/VersionEvolution';
+import { ThemeToggle } from './theme';
+import { CursorSafeIframe } from './components/CursorSafeIframe';
+import { ParticipantRoster } from './components/ParticipantRoster';
+import { LiveCommentLeaderboard } from './components/LiveCommentLeaderboard';
 
 type Role = 'creator' | 'participant';
 
@@ -62,12 +70,59 @@ const phaseLabels: Record<StudyPhase, { title: string; subtitle: string; tone: s
   ended: { title: 'Ended', subtitle: 'Study session completed', tone: 'bg-slate-900 text-white' },
 };
 
-const participantCodes = Array.from({ length: 20 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`);
+const participantCodePattern = /^P(?:0[1-9]|1[0-9]|20)$/;
+const PARTICIPANT_CAPACITY = 20;
+const ROOM_CAPACITY = PARTICIPANT_CAPACITY + 1;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_COLLAPSED_WIDTH = 42;
+const SIDEBAR_WIDTH_STORAGE_KEY = 'study-sidebar-width';
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'study-sidebar-collapsed';
+
+function clampSidebarWidth(width: number) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+function getStoredSidebarWidth() {
+  if (typeof window === 'undefined') return SIDEBAR_DEFAULT_WIDTH;
+  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  return Number.isFinite(storedWidth) && storedWidth > 0
+    ? clampSidebarWidth(storedWidth)
+    : SIDEBAR_DEFAULT_WIDTH;
+}
+
+function getStoredSidebarCollapsed() {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+}
+const COMMENT_CHARACTER_LIMIT = 280;
+
+function getParticipantClientId() {
+  const stored = localStorage.getItem('participant-client-id');
+  if (stored) return stored;
+  const created = crypto.randomUUID();
+  localStorage.setItem('participant-client-id', created);
+  return created;
+}
+
+function getRankedComments(comments: StudyComment[]) {
+  const originalOrder = new Map(comments.map((comment, index) => [comment.id, index]));
+  return [...comments].sort((a, b) =>
+    Number(b.invested || 0) - Number(a.invested || 0) ||
+    Number(originalOrder.get(a.id)) - Number(originalOrder.get(b.id))
+  );
+}
 
 export default function App() {
+  useGlobalPointerSpotlight();
   const [state, setState] = React.useState<StudyState | null>(null);
   const [role, setRole] = React.useState<Role | null>(() => (localStorage.getItem('study-role') as Role | null) || null);
-  const [participantCode, setParticipantCode] = React.useState(() => localStorage.getItem('participant-code') || '');
+  const [participantCode, setParticipantCode] = React.useState(() => {
+    const stored = localStorage.getItem('participant-code') || '';
+    return participantCodePattern.test(stored) ? stored : '';
+  });
+  const [participantClientId] = React.useState(getParticipantClientId);
   const [error, setError] = React.useState<string | null>(null);
   const [isBusy, setIsBusy] = React.useState(false);
   const [tiedComments, setTiedComments] = React.useState<StudyComment[]>([]);
@@ -110,7 +165,14 @@ export default function App() {
     localStorage.setItem('study-role', nextRole);
   };
 
+  const changeAIProvider = (provider: StudyAIProvider) => {
+    void run(() => studyApi.setAIProvider(provider));
+  };
+
   const leaveIdentity = () => {
+    if (role === 'participant') {
+      void studyApi.leave(participantClientId).catch(() => undefined);
+    }
     setRole(null);
     setParticipantCode('');
     localStorage.removeItem('study-role');
@@ -129,16 +191,12 @@ export default function App() {
     }
   };
 
-  const changeAIProvider = (provider: StudyAIProvider) => {
-    run(() => studyApi.setAIProvider(provider));
-  };
-
   if (!state) {
     return <LoadingScreen />;
   }
 
   const identityLabel = role === 'creator'
-    ? 'Creator / Host'
+    ? 'Creator'
     : role === 'participant'
       ? participantCode
         ? `Participant · ${participantCode}`
@@ -169,21 +227,30 @@ export default function App() {
   }
 
   if (!role) {
-    return <RoleGate state={state} onChoose={chooseRole} onViewArchive={openArchive} />;
+    return (
+      <RoleGate
+        state={state}
+        isBusy={isBusy}
+        onChoose={chooseRole}
+        onViewArchive={openArchive}
+        onAIProviderChange={changeAIProvider}
+      />
+    );
   }
 
   if (role === 'creator' && (!state.experiment || showCreatorSetup)) {
     return (
       <Shell
         identityLabel={identityLabel}
-        aiProvider={state.aiProvider}
-        onAIProviderChange={changeAIProvider}
         error={error}
         isBusy={isBusy}
+        aiProvider={state.aiProvider}
+        onAIProviderChange={changeAIProvider}
         onRefresh={load}
         onLeave={leaveIdentity}
       >
         <CreatorSetup
+          aiProvider={state.aiProvider}
           existingExperimentTitle={state.experiment?.title}
           onCancel={state.experiment ? () => setShowCreatorSetup(false) : undefined}
           onSubmit={(input) =>
@@ -208,18 +275,21 @@ export default function App() {
     return (
       <Shell
         identityLabel={identityLabel}
-        aiProvider={state.aiProvider}
         error={error}
         isBusy={isBusy}
+        aiProvider={state.aiProvider}
         onRefresh={load}
         onLeave={leaveIdentity}
       >
         <ParticipantGate
-          onJoin={(code) =>
+          experimentId={state.experiment?.id}
+          onJoin={() =>
             run(async () => {
-              const joined = await studyApi.join(code);
-              setParticipantCode(code);
-              localStorage.setItem('participant-code', code);
+              const joined = await studyApi.join(participantClientId);
+              const assignedCode = joined.viewerParticipantCode;
+              if (!assignedCode) throw new Error('The room did not return an assigned participant number.');
+              setParticipantCode(assignedCode);
+              localStorage.setItem('participant-code', assignedCode);
               return joined;
             })
           }
@@ -231,11 +301,12 @@ export default function App() {
 
   return (
     <Shell
+      workspaceMode
       identityLabel={identityLabel}
-      aiProvider={state.aiProvider}
-      onAIProviderChange={role === 'creator' ? changeAIProvider : undefined}
       error={error}
       isBusy={isBusy}
+      aiProvider={state.aiProvider}
+      onAIProviderChange={role === 'creator' ? changeAIProvider : undefined}
       onRefresh={load}
       onLeave={leaveIdentity}
     >
@@ -247,6 +318,8 @@ export default function App() {
         tiedComments={tiedComments}
         tieRankScores={tieRankScores}
         onRun={run}
+        onInvestmentState={setState}
+        onInvestmentError={setError}
         onNewExperiment={() => setShowCreatorSetup(true)}
         onAbortExperiment={() =>
           run(async () => {
@@ -262,11 +335,83 @@ export default function App() {
 
 function LoadingScreen() {
   return (
-    <div className="min-h-screen grid place-items-center bg-[#f7f9ff] text-blue-950">
-      <div className="rounded-[2rem] bg-white/80 border border-white p-8 shadow-2xl shadow-blue-100 flex items-center gap-4">
+    <div className="loading-screen min-h-screen grid place-items-center bg-[#f7f9ff] text-blue-950">
+      <div className="loading-panel rounded-[2rem] bg-white/80 border border-white p-8 shadow-2xl shadow-blue-100 flex items-center gap-4">
         <RefreshCw className="h-5 w-5 animate-spin text-violet-500" />
         <span className="text-sm font-bold tracking-wide">Loading study system...</span>
       </div>
+    </div>
+  );
+}
+
+const aiProviderOptions = [
+  { provider: 'deepseek', label: 'DeepSeek Flash', detail: 'DeepSeek V4 Flash' },
+  { provider: 'deepseek-pro', label: 'DeepSeek Pro', detail: 'DeepSeek V4 Pro' },
+  { provider: 'gemini', label: 'Gemini', detail: 'Gemini 2.5 Flash' },
+  { provider: 'glm', label: 'GLM', detail: 'GLM-5.2 · agent mode' },
+  { provider: 'gpt5', label: 'GPT-5.5', detail: 'GPT-5.5 · Sui-Xiang gateway' },
+] as const;
+
+function aiProviderLabel(provider: StudyAIProvider) {
+  if (provider === 'deepseek-pro') return 'DeepSeek Pro';
+  if (provider === 'gemini') return 'Gemini 2.5 Flash';
+  if (provider === 'glm') return 'GLM-5.2';
+  if (provider === 'gpt5') return 'GPT-5.5';
+  return 'DeepSeek Flash';
+}
+
+function AIProviderPicker({
+  aiProvider,
+  isBusy,
+  onChange,
+}: {
+  aiProvider: StudyAIProvider;
+  isBusy: boolean;
+  onChange?: (provider: StudyAIProvider) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const canChange = Boolean(onChange);
+
+  return (
+    <div className="relative z-[90] shrink-0">
+      <button
+        type="button"
+        data-testid="ai-provider-menu"
+        aria-expanded={open}
+        onClick={() => canChange && setOpen((value) => !value)}
+        disabled={!canChange || isBusy}
+        className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/90 px-4 text-xs font-black text-violet-700 shadow-sm transition hover:border-violet-200 disabled:cursor-default disabled:opacity-70"
+        title={canChange ? 'Switch AI model' : 'Creator controls the AI model'}
+      >
+        <Sparkles className="h-4 w-4" />
+        <span className="hidden sm:inline">{aiProviderLabel(aiProvider)}</span>
+        {canChange && <ChevronRight className={cn('h-3.5 w-3.5 transition', open && 'rotate-90')} />}
+      </button>
+      {open && canChange && (
+        <div className="absolute right-0 top-[calc(100%+0.5rem)] z-[100] w-[min(17rem,calc(100vw-2rem))] rounded-2xl border border-violet-100 bg-white p-2 shadow-2xl shadow-violet-200/60">
+          {aiProviderOptions.map((option) => (
+            <button
+              key={option.provider}
+              type="button"
+              data-testid={`ai-provider-${option.provider}`}
+              onClick={() => {
+                setOpen(false);
+                onChange?.(option.provider);
+              }}
+              className={cn(
+                'flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-violet-50',
+                aiProvider === option.provider && 'bg-violet-50',
+              )}
+            >
+              <span>
+                <span className="block text-xs font-black text-blue-950">{option.label}</span>
+                <span className="mt-0.5 block text-[10px] font-semibold text-slate-400">{option.detail}</span>
+              </span>
+              <span className={cn('h-2.5 w-2.5 rounded-full', aiProvider === option.provider ? 'bg-emerald-400' : 'bg-slate-200')} />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -280,6 +425,7 @@ function Shell({
   onAIProviderChange,
   onRefresh,
   onLeave,
+  workspaceMode = false,
 }: {
   children: React.ReactNode;
   error: string | null;
@@ -289,21 +435,20 @@ function Shell({
   onAIProviderChange?: (provider: StudyAIProvider) => void;
   onRefresh: () => void;
   onLeave: () => void;
+  workspaceMode?: boolean;
 }) {
   const [debugOpen, setDebugOpen] = React.useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = React.useState(false);
-  const modelLabel = aiProvider === 'gemini' ? 'Gemini 2.5 Flash' : 'DeepSeek';
 
   return (
-    <div className="min-h-screen bg-[#f7f9ff] text-blue-950 relative overflow-hidden">
+    <div className={cn('app-shell min-h-screen bg-[#f7f9ff] text-blue-950 relative overflow-hidden', workspaceMode && 'is-workspace-shell')}>
       <div className="pointer-events-none absolute -top-28 -left-20 h-80 w-80 rounded-full bg-sky-200/60 blur-3xl" />
       <div className="pointer-events-none absolute top-20 right-10 h-96 w-96 rounded-full bg-violet-200/60 blur-3xl" />
       <div className="pointer-events-none absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-emerald-100/80 blur-3xl" />
 
-      <header className="relative z-10 h-20 px-8 flex items-center justify-between border-b border-white/70 bg-white/55 backdrop-blur-2xl">
-        <div className="flex items-center gap-4">
-          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-violet-600 grid place-items-center text-2xl shadow-xl shadow-violet-200">
-            🏝️
+      <header className={cn('app-header relative z-10 h-20 px-8 flex items-center justify-between border-b border-white/70 bg-white/55 backdrop-blur-2xl', workspaceMode && 'is-workspace-header')}>
+        <div className={cn('flex items-center gap-4', workspaceMode && 'workspace-header-brand')}>
+          <div className="brand-mark h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-violet-600 grid place-items-center text-2xl shadow-xl shadow-violet-200">
+            <TreePalm className="h-6 w-6" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-xl font-black tracking-tight">Vibecoding Study</h1>
@@ -312,6 +457,8 @@ function Shell({
         </div>
 
         <div className="flex items-center gap-3">
+          <AIProviderPicker aiProvider={aiProvider} isBusy={isBusy} onChange={onAIProviderChange} />
+          <ThemeToggle />
           {identityLabel && (
             <div className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/80 px-3 text-xs font-black text-blue-950 shadow-sm sm:px-4">
               <UserRound className="h-4 w-4 text-violet-500" />
@@ -319,49 +466,6 @@ function Shell({
               <span>{identityLabel}</span>
             </div>
           )}
-          <div className="relative">
-            <button
-              type="button"
-              data-testid="ai-provider-menu"
-              aria-expanded={modelMenuOpen}
-              onClick={() => onAIProviderChange && setModelMenuOpen((open) => !open)}
-              disabled={!onAIProviderChange || isBusy}
-              className="flex h-11 items-center gap-2 rounded-2xl border border-violet-100 bg-white/80 px-4 text-xs font-black text-violet-700 shadow-sm transition hover:border-violet-200 disabled:cursor-default disabled:opacity-70"
-              title={onAIProviderChange ? 'Switch AI model' : 'Creator controls the AI model'}
-            >
-              <Sparkles className="h-4 w-4" />
-              <span className="hidden sm:inline">{modelLabel}</span>
-              {onAIProviderChange && <ChevronRight className={cn('h-3.5 w-3.5 transition', modelMenuOpen && 'rotate-90')} />}
-            </button>
-            {modelMenuOpen && onAIProviderChange && (
-              <div className="absolute right-0 top-13 z-50 w-64 rounded-2xl border border-violet-100 bg-white p-2 shadow-2xl shadow-violet-200/60">
-                {([
-                  { provider: 'deepseek', label: 'DeepSeek', detail: 'DeepSeek V4 Flash' },
-                  { provider: 'gemini', label: 'Gemini', detail: 'Gemini 2.5 Flash · stable' },
-                ] as const).map((option) => (
-                  <button
-                    key={option.provider}
-                    type="button"
-                    data-testid={`ai-provider-${option.provider}`}
-                    onClick={() => {
-                      setModelMenuOpen(false);
-                      onAIProviderChange(option.provider);
-                    }}
-                    className={cn(
-                      'flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-violet-50',
-                      aiProvider === option.provider && 'bg-violet-50',
-                    )}
-                  >
-                    <span>
-                      <span className="block text-xs font-black text-blue-950">{option.label}</span>
-                      <span className="mt-0.5 block text-[10px] font-semibold text-slate-400">{option.detail}</span>
-                    </span>
-                    <span className={cn('h-2.5 w-2.5 rounded-full', aiProvider === option.provider ? 'bg-emerald-400' : 'bg-slate-200')} />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
           <button
             onClick={onRefresh}
             className="h-11 px-4 rounded-2xl bg-white border border-blue-100 text-slate-500 hover:text-blue-600 shadow-sm flex items-center gap-2 text-xs font-bold transition"
@@ -378,10 +482,10 @@ function Shell({
         </div>
       </header>
 
-      <main className="relative z-10 p-7">{children}</main>
+      <main className="app-main relative z-10 p-7">{children}</main>
 
       {error && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-2xl rounded-2xl bg-rose-50 border border-rose-200 px-5 py-4 text-sm font-semibold text-rose-700 shadow-2xl shadow-rose-100">
+        <div className="error-toast fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-2xl rounded-2xl bg-rose-50 border border-rose-200 px-5 py-4 text-sm font-semibold text-rose-700 shadow-2xl shadow-rose-100">
           {error}
         </div>
       )}
@@ -453,7 +557,7 @@ function DebugConsole({ open, onClose }: { open: boolean; onClose: () => void })
   };
 
   return (
-    <div className="fixed inset-x-4 bottom-4 z-50 rounded-[2rem] bg-slate-950 text-slate-100 shadow-2xl border border-white/10 overflow-hidden">
+    <div className="debug-console fixed inset-x-4 bottom-4 z-50 rounded-[2rem] bg-slate-950 text-slate-100 shadow-2xl border border-white/10 overflow-hidden">
       <header className="h-14 px-5 flex items-center justify-between border-b border-white/10 bg-slate-900">
         <div className="flex items-center gap-3">
           <div className="h-9 w-9 rounded-xl bg-violet-500 grid place-items-center">
@@ -461,7 +565,7 @@ function DebugConsole({ open, onClose }: { open: boolean; onClose: () => void })
           </div>
           <div>
             <h3 className="font-black text-sm">Debug Console</h3>
-            <p className="text-[11px] text-slate-400">前端 fetch、后端 API、AI 模型请求与返回</p>
+            <p className="text-[11px] text-slate-400">前端 fetch、后端 API、所选 AI 模型的请求与返回</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -504,7 +608,7 @@ function DebugConsole({ open, onClose }: { open: boolean; onClose: () => void })
   );
 }
 
-function DebugLogRow({ log }: { log: ClientDebugEntry }) {
+function DebugLogRow({ log }: { key?: React.Key; log: ClientDebugEntry }) {
   const color =
     log.source === 'ai'
       ? 'text-violet-300 bg-violet-500/10 border-violet-500/20'
@@ -538,57 +642,28 @@ function DebugLogRow({ log }: { log: ClientDebugEntry }) {
 
 function RoleGate({
   state,
+  isBusy,
   onChoose,
   onViewArchive,
+  onAIProviderChange,
 }: {
   state: StudyState;
+  isBusy: boolean;
   onChoose: (role: Role) => void;
   onViewArchive: (experimentId: string) => void;
+  onAIProviderChange: (provider: StudyAIProvider) => void;
 }) {
   return (
-    <div className="min-h-screen bg-[#f7f9ff] grid place-items-center p-8 relative overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,.45),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(167,139,250,.38),transparent_32%)]" />
-      <div className="relative w-full max-w-5xl space-y-7">
-      <section className="rounded-[3rem] bg-white/70 backdrop-blur-2xl border border-white p-10 shadow-2xl shadow-blue-200/60">
-        <div className="text-center mb-10">
-          <div className="inline-grid place-items-center h-16 w-16 rounded-3xl bg-gradient-to-br from-sky-400 to-violet-600 text-3xl shadow-xl shadow-violet-200 mb-5">
-            ✨
-          </div>
-          <h1 className="text-4xl font-black text-blue-950">进入协作 Vibecoding 实验</h1>
-          <p className="mt-3 text-slate-500 font-medium">Creator 负责上传项目和推进流程；Participant 使用 P01-P20 参与体验、评论与投资。</p>
-        </div>
-
-        <div className="grid md:grid-cols-2 gap-6">
-          <button
-            onClick={() => onChoose('creator')}
-            className="group text-left rounded-[2rem] bg-white border border-blue-100 p-8 shadow-xl shadow-blue-100/70 hover:-translate-y-1 transition"
-          >
-            <div className="h-14 w-14 rounded-2xl bg-blue-100 text-blue-600 grid place-items-center mb-8">
-              <FlaskConical className="h-7 w-7" />
-            </div>
-            <h2 className="text-2xl font-black mb-3">我是 Creator / Host</h2>
-            <p className="text-sm leading-7 text-slate-500">上传初始项目、推进实验阶段并参与投资；系统自动选择前三名 Idea，仅在平票时由 Creator 裁决。</p>
-            <div className="mt-8 flex items-center gap-2 text-blue-600 font-black text-sm">
-              Start as creator <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition" />
-            </div>
-          </button>
-
-          <button
-            onClick={() => onChoose('participant')}
-            className="group text-left rounded-[2rem] bg-white border border-violet-100 p-8 shadow-xl shadow-violet-100/70 hover:-translate-y-1 transition"
-          >
-            <div className="h-14 w-14 rounded-2xl bg-violet-100 text-violet-600 grid place-items-center mb-8">
-              <Users className="h-7 w-7" />
-            </div>
-            <h2 className="text-2xl font-black mb-3">我是 Participant</h2>
-            <p className="text-sm leading-7 text-slate-500">用实验编号 P01-P20 加入同一个项目，按回合体验、评论、投资，并观察项目如何被集体推动。</p>
-            <div className="mt-8 flex items-center gap-2 text-violet-600 font-black text-sm">
-              Join as participant <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition" />
-            </div>
-          </button>
-        </div>
-      </section>
-      <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
+    <div className="role-selection-page min-h-screen bg-black">
+      <div className="fixed right-24 top-5 z-[100]">
+        <AIProviderPicker aiProvider={state.aiProvider} isBusy={isBusy} onChange={onAIProviderChange} />
+      </div>
+      <ThemeToggle className="theme-toggle-floating" />
+      <RoleSelection
+        onCommit={onChoose}
+      />
+      <div className="role-selection-history mx-auto w-full max-w-5xl px-6 pb-14">
+        <ExperimentHistoryPanel state={state} onViewArchive={onViewArchive} />
       </div>
     </div>
   );
@@ -597,11 +672,13 @@ function RoleGate({
 type CreateMode = 'quick' | 'upload';
 
 function CreatorSetup({
+  aiProvider,
   existingExperimentTitle,
   onCancel,
   onSubmit,
   isBusy,
 }: {
+  aiProvider: StudyAIProvider;
   existingExperimentTitle?: string;
   onCancel?: () => void;
   onSubmit: (input: {
@@ -614,16 +691,15 @@ function CreatorSetup({
   }) => void;
   isBusy: boolean;
 }) {
-  const [title, setTitle] = React.useState('Dream Island');
-  const [brief, setBrief] = React.useState('A soft, playful island exploration prototype for collaborative creative development.');
+  const [title, setTitle] = React.useState('');
+  const [brief, setBrief] = React.useState('');
   const [creatorName, setCreatorName] = React.useState('Creator');
   const [mode, setMode] = React.useState<CreateMode>('quick');
-  const [initialPrompt, setInitialPrompt] = React.useState(
-    'Create a dreamy island exploration web prototype with a playful hero area, soft sky colors, and one simple interaction.',
-  );
+  const [initialPrompt, setInitialPrompt] = React.useState('');
   const [initialCode, setInitialCode] = React.useState('');
   const [uploadedFileName, setUploadedFileName] = React.useState('');
   const [maxRounds, setMaxRounds] = React.useState(4);
+  const selectedModel = aiProviderLabel(aiProvider);
 
   const handleFileUpload = async (file?: File) => {
     if (!file) return;
@@ -635,6 +711,10 @@ function CreatorSetup({
   const submitProject = () => {
     const code = mode === 'upload' ? initialCode : '';
     const prompt = mode === 'quick' ? initialPrompt : '';
+    if (!title.trim()) {
+      window.alert('Please enter a project title.');
+      return;
+    }
     if (mode === 'upload' && !code.trim()) {
       window.alert('请先上传完整 HTML 文件。');
       return;
@@ -647,20 +727,20 @@ function CreatorSetup({
   };
 
   return (
-    <section className="max-w-6xl mx-auto grid lg:grid-cols-[.85fr_1.15fr] gap-7">
-      <div className="rounded-[2.5rem] bg-white/75 backdrop-blur border border-white p-8 shadow-xl shadow-blue-100">
+    <section className="setup-grid max-w-6xl mx-auto grid lg:grid-cols-[.85fr_1.15fr] gap-7">
+      <div className="setup-intro rounded-[2.5rem] bg-white/75 backdrop-blur border border-white p-8 shadow-xl shadow-blue-100">
         <p className="text-xs font-black uppercase tracking-[0.3em] text-violet-500 mb-4">Creator setup</p>
-        <h2 className="text-3xl font-black mb-4">{existingExperimentTitle ? '开启新的实验项目' : '上传或创建第一个项目'}</h2>
+        <h2 className="product-title text-4xl font-black mb-4">{existingExperimentTitle ? '开启新的实验项目' : '上传或创建第一个项目'}</h2>
         <p className="text-sm text-slate-500 leading-7">
-          你可以上传已有 HTML 项目，也可以用“快速创建”调用顶部选中的 AI 模型，像 AI Studio 一样根据描述生成一个在线网页。
+          你可以上传已有 HTML 项目，也可以用“快速创建”调用当前所选模型，像 AI Studio 一样根据描述生成一个在线网页。
         </p>
         {existingExperimentTitle && (
-          <div className="mt-6 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
+          <div className="notice-dark mt-6 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
             当前实验「{existingExperimentTitle}」会完整保存在历史实验中。新实验使用独立参与者、金币、评论和版本数据。
           </div>
         )}
         <div className="mt-8 grid grid-cols-2 gap-3 text-center">
-          {['Quick Create with selected AI', 'Upload HTML Project'].map((item) => (
+          {[`Quick Create with ${selectedModel}`, 'Upload HTML Project'].map((item) => (
             <div key={item} className="rounded-2xl bg-blue-50 p-4">
               <p className="text-xs font-black text-blue-600">{item}</p>
             </div>
@@ -685,30 +765,31 @@ function CreatorSetup({
           <label className="text-xs font-black uppercase tracking-widest text-slate-400">Creation method</label>
           <div className="mt-2 grid grid-cols-2 gap-3">
             {[
-              { id: 'quick', title: '快速创建', desc: '调用顶部选中的 AI 生成网页' },
+              { id: 'quick', title: '快速创建', desc: `调用 ${selectedModel} 生成网页` },
               { id: 'upload', title: '上传项目', desc: '上传 .html 文件' },
             ].map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setMode(item.id as CreateMode)}
-                className={cn(
-                  'rounded-2xl border p-4 text-left transition',
-                  mode === item.id ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200' : 'bg-white border-blue-100 text-slate-500',
-                )}
-              >
-                <p className="text-sm font-black">{item.title}</p>
-                <p className={cn('mt-1 text-[11px] font-semibold', mode === item.id ? 'text-blue-100' : 'text-slate-400')}>{item.desc}</p>
-              </button>
+              <InteractiveSurface key={item.id} strength="surface" className="h-full">
+                <button
+                  type="button"
+                  onClick={() => setMode(item.id as CreateMode)}
+                  className={cn(
+                    'creation-option h-full w-full rounded-2xl border p-4 text-left transition',
+                    mode === item.id ? 'selected bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200' : 'bg-white border-blue-100 text-slate-500',
+                  )}
+                >
+                  <p className="text-sm font-black">{item.title}</p>
+                  <p className={cn('mt-1 text-[11px] font-semibold', mode === item.id ? 'text-blue-100' : 'text-slate-400')}>{item.desc}</p>
+                </button>
+              </InteractiveSurface>
             ))}
           </div>
         </div>
 
         {mode === 'quick' && (
           <div className="space-y-3">
-            <TextField label="Quick create prompt for selected AI" value={initialPrompt} onChange={setInitialPrompt} rows={5} />
-            <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
-              快速创建会请求顶部选中的 AI 生成初始 HTML。若网络或代理不可用，左下角 Debug 控制台会显示具体失败原因。
+            <TextField label={`Quick create prompt for ${selectedModel}`} value={initialPrompt} onChange={setInitialPrompt} rows={5} />
+            <div className="notice-dark rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 leading-6">
+              快速创建会请求 {selectedModel} 生成初始 HTML。若网络或代理不可用，左下角 Debug 控制台会显示具体失败原因。
             </div>
           </div>
         )}
@@ -734,8 +815,8 @@ function CreatorSetup({
           <label className="text-xs font-black uppercase tracking-widest text-slate-400">Max rounds</label>
           <div className="mt-2 flex gap-3">
             {[3, 4].map((round) => (
+              <InteractiveSurface key={round} strength="magnetic">
               <button
-                key={round}
                 type="button"
                 onClick={() => setMaxRounds(round)}
                 className={cn(
@@ -745,6 +826,7 @@ function CreatorSetup({
               >
                 {round} rounds
               </button>
+              </InteractiveSurface>
             ))}
           </div>
         </div>
@@ -760,7 +842,7 @@ function CreatorSetup({
           )}
           <button
             disabled={isBusy}
-            className="flex-1 h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2"
+            className="primary-action flex-1 h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isBusy ? <RefreshCw className="h-5 w-5 animate-spin" /> : <Play className="h-5 w-5 fill-white" />}
             {existingExperimentTitle ? 'Archive current & start new experiment' : 'Create experiment'}
@@ -771,40 +853,39 @@ function CreatorSetup({
   );
 }
 
-function ParticipantGate({ onJoin, isBusy }: { onJoin: (code: string) => void; isBusy: boolean }) {
-  const [code, setCode] = React.useState('P01');
+function ParticipantGate({
+  experimentId,
+  onJoin,
+  isBusy,
+}: {
+  experimentId?: string;
+  onJoin: () => void;
+  isBusy: boolean;
+}) {
+  const requestedExperimentId = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (!experimentId || requestedExperimentId.current === experimentId) return;
+    requestedExperimentId.current = experimentId;
+    onJoin();
+  }, [experimentId, onJoin]);
+
   return (
-    <section className="max-w-3xl mx-auto rounded-[2.5rem] bg-white/80 backdrop-blur border border-white p-10 shadow-2xl shadow-blue-100">
+    <section className="join-panel max-w-3xl mx-auto rounded-[2.5rem] bg-white/80 backdrop-blur border border-white p-10 shadow-2xl shadow-blue-100">
       <div className="text-center mb-8">
-        <div className="inline-grid h-16 w-16 place-items-center rounded-3xl bg-violet-100 text-violet-600 mb-5">
-          <Users className="h-8 w-8" />
+        <div className="inline-grid h-16 w-16 place-items-center rounded-3xl bg-emerald-50 text-emerald-700 mb-5">
+          <Users className={cn('h-8 w-8', isBusy && 'animate-pulse')} />
         </div>
-        <h2 className="text-3xl font-black">选择你的实验编号</h2>
-        <p className="mt-3 text-sm text-slate-500">实验当天可以把 P01-P20 分配给 20 位参与者，不需要完整账号系统。</p>
+        <h2 className="text-3xl font-black">{experimentId ? 'Assigning your participant number' : 'Waiting for the Creator'}</h2>
+        <p className="mt-3 text-sm text-slate-500">
+          {experimentId
+            ? 'The room automatically assigns P01–P20 in join order. This number is kept when you refresh or reconnect.'
+            : 'Your participant number will be assigned automatically when an experiment is created.'}
+        </p>
       </div>
-
-      <div className="grid grid-cols-5 gap-3 mb-8">
-        {participantCodes.map((item) => (
-          <button
-            key={item}
-            onClick={() => setCode(item)}
-            className={cn(
-              'h-12 rounded-2xl border text-sm font-black transition',
-              code === item ? 'bg-violet-600 text-white border-violet-600 shadow-lg shadow-violet-200' : 'bg-white border-violet-100 text-slate-500',
-            )}
-          >
-            {item}
-          </button>
-        ))}
+      <div className="mx-auto h-2 w-48 overflow-hidden rounded-full bg-emerald-50">
+        <div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-[#C7F8FB] via-[#95CDB6] to-[#0FA958]" />
       </div>
-
-      <button
-        onClick={() => onJoin(code)}
-        disabled={isBusy}
-        className="w-full h-14 rounded-2xl bg-gradient-to-r from-violet-500 to-blue-500 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50"
-      >
-        Join as {code}
-      </button>
     </section>
   );
 }
@@ -817,6 +898,8 @@ function StudyRoom({
   tiedComments,
   tieRankScores,
   onRun,
+  onInvestmentState,
+  onInvestmentError,
   onNewExperiment,
   onAbortExperiment,
 }: {
@@ -827,9 +910,81 @@ function StudyRoom({
   tiedComments: StudyComment[];
   tieRankScores: number[];
   onRun: (action: () => Promise<StudyState>) => void;
+  onInvestmentState: (state: StudyState) => void;
+  onInvestmentError: (message: string) => void;
   onNewExperiment: () => void;
   onAbortExperiment: () => void;
 }) {
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(getStoredSidebarCollapsed);
+  const [sidebarWidth, setSidebarWidth] = React.useState(getStoredSidebarWidth);
+  const [isSidebarResizing, setIsSidebarResizing] = React.useState(false);
+  const layoutRef = React.useRef<HTMLDivElement>(null);
+  const sidebarWidthRef = React.useRef(sidebarWidth);
+
+  React.useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth;
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  React.useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
+
+  React.useEffect(() => () => {
+    document.documentElement.classList.remove('is-sidebar-resize-hover', 'is-resizing-sidebar');
+  }, []);
+
+  React.useEffect(() => {
+    if (!isSidebarResizing) return;
+
+    const root = document.documentElement;
+    root.classList.add('is-resizing-sidebar');
+
+    const updateWidth = (event: PointerEvent) => {
+      event.preventDefault();
+      const layout = layoutRef.current;
+      if (!layout) return;
+      const nextWidth = clampSidebarWidth(event.clientX - layout.getBoundingClientRect().left);
+      sidebarWidthRef.current = nextWidth;
+      layout.style.setProperty('--sidebar-width', `${nextWidth}px`);
+    };
+
+    const finishResize = () => {
+      setSidebarWidth(sidebarWidthRef.current);
+      setIsSidebarResizing(false);
+    };
+
+    window.addEventListener('pointermove', updateWidth, { passive: false });
+    window.addEventListener('pointerup', finishResize);
+    window.addEventListener('pointercancel', finishResize);
+    window.addEventListener('blur', finishResize);
+
+    return () => {
+      root.classList.remove('is-resizing-sidebar');
+      window.removeEventListener('pointermove', updateWidth);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
+      window.removeEventListener('blur', finishResize);
+    };
+  }, [isSidebarResizing]);
+
+  const resizeSidebarWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isSidebarCollapsed) return;
+    const step = event.shiftKey ? 24 : 8;
+    let nextWidth = sidebarWidthRef.current;
+
+    if (event.key === 'ArrowLeft') nextWidth -= step;
+    else if (event.key === 'ArrowRight') nextWidth += step;
+    else if (event.key === 'Home') nextWidth = SIDEBAR_MIN_WIDTH;
+    else if (event.key === 'End') nextWidth = SIDEBAR_MAX_WIDTH;
+    else return;
+
+    event.preventDefault();
+    nextWidth = clampSidebarWidth(nextWidth);
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth(nextWidth);
+  };
+
   if (!state.experiment) {
     return (
       <section className="max-w-3xl mx-auto rounded-[2.5rem] bg-white/80 border border-white p-10 text-center shadow-xl shadow-blue-100">
@@ -848,6 +1003,7 @@ function StudyRoom({
   const currentRoundState = state.rounds.find((round) => round.round_number === experiment.current_round);
   const investmentLocked = Boolean(currentRoundState?.investment_locked_v3);
   const joinedParticipants = state.participants.filter((participant) => participant.joined_at);
+  const roomOccupancy = joinedParticipants.length + 1;
   const me = state.participants.find((participant) => participant.code === participantCode);
 
   if (experiment.phase === 'ended' || experiment.phase === 'aborted') {
@@ -861,50 +1017,109 @@ function StudyRoom({
   }
 
   return (
-    <div className="max-w-[1800px] mx-auto space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <TopStat icon={<Sparkles />} label={experiment.title} value={`Round ${experiment.current_round}/${experiment.max_rounds}`} />
-        <TopStat icon={<Clock3 />} label={phase.subtitle} value={phase.title} tone={phase.tone} />
-        <TopStat icon={<Users />} label="Joined participants" value={`${joinedParticipants.length}/20`} />
-        <TopStat
-          icon={<CircleDollarSign />}
-          label={role === 'creator' ? 'Creator coins' : `${participantCode || 'Participant'} coins`}
-          value={`${role === 'creator' ? experiment.creator_coins : me?.coins ?? 0}`}
-        />
-        <TopStat
-          icon={<Trophy />}
-          label="Selected ideas"
-          value={`${state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round).length}/3`}
-        />
-      </div>
+    <div
+      ref={layoutRef}
+      className={cn(
+        'study-room study-layout-shell max-w-[1920px] mx-auto',
+        isSidebarCollapsed && 'is-sidebar-collapsed',
+        isSidebarResizing && 'is-sidebar-resizing',
+      )}
+      style={{
+        '--sidebar-width': `${isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px`,
+      } as React.CSSProperties}
+    >
+      <aside className="study-info-sidebar" aria-label="Project and room information">
+        <button
+          type="button"
+          className="sidebar-collapse-toggle"
+          aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!isSidebarCollapsed}
+          aria-controls="study-info-sidebar-content"
+          onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+        >
+          <span aria-hidden="true">{isSidebarCollapsed ? '›' : '‹'}</span>
+        </button>
+        <div
+          className="sidebar-resize-handle"
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemax={SIDEBAR_MAX_WIDTH}
+          aria-valuenow={sidebarWidth}
+          tabIndex={isSidebarCollapsed ? -1 : 0}
+          onKeyDown={resizeSidebarWithKeyboard}
+          onPointerEnter={() => document.documentElement.classList.add('is-sidebar-resize-hover')}
+          onPointerLeave={() => document.documentElement.classList.remove('is-sidebar-resize-hover')}
+          onPointerDown={(event) => {
+            if (isSidebarCollapsed || event.button !== 0) return;
+            event.preventDefault();
+            sidebarWidthRef.current = sidebarWidth;
+            setIsSidebarResizing(true);
+          }}
+        >
+          <span aria-hidden="true" />
+        </div>
+        <span className="sidebar-collapsed-mark" aria-hidden="true"><Sparkles /></span>
+        <div
+          id="study-info-sidebar-content"
+          className="study-info-sidebar-scroll custom-scrollbar-light"
+          aria-hidden={isSidebarCollapsed}
+          inert={isSidebarCollapsed}
+        >
+          <section className="sidebar-project-identity">
+          <span className="sidebar-project-mark" aria-hidden="true"><Sparkles /></span>
+          <div>
+            <p>Vibecoding Study</p>
+            <h1>{experiment.title}</h1>
+            <span>Creator · {experiment.creator_name}</span>
+          </div>
+          </section>
 
-      <div className="grid xl:grid-cols-[1fr_430px] gap-6">
-        <section className="rounded-[2rem] bg-white/80 border border-white shadow-xl shadow-blue-100 overflow-hidden">
-          <div className="h-16 px-6 flex items-center justify-between border-b border-blue-50">
+          <section className="sidebar-round-card" aria-label={`Current round ${experiment.current_round} of ${experiment.max_rounds}`}>
+          <span className="sidebar-live-dot" aria-hidden="true" />
+          <div>
+            <small>CURRENT ROUND</small>
+            <strong>Round {experiment.current_round}/{experiment.max_rounds}</strong>
+          </div>
+          <span className={cn('sidebar-phase-badge', phase.tone)}>{phase.title}</span>
+          </section>
+
+          <section className="sidebar-description-card">
+          <p className="sidebar-section-kicker">PROJECT DESCRIPTION</p>
+          <h2>本轮项目说明</h2>
+          <p>{experiment.brief}</p>
+          <span>{phase.subtitle}</span>
+          </section>
+
+          <section className="sidebar-room-info">
+          <div className="sidebar-section-heading">
             <div>
-              <h2 className="font-black text-lg">{liveDraft ? `Live Candidate Draft ${liveDraft.attempt_number}` : 'Current Prototype'}</h2>
-              <p className="text-xs text-slate-500">
-                {liveDraft
-                  ? 'Visible to everyone while Creator and the selected AI debug it. This is not published yet.'
-                  : 'Participants experience this version before each commenting phase.'}
-              </p>
+              <p className="sidebar-section-kicker">ROOM INFO</p>
+              <h2>房间信息</h2>
             </div>
-            <div className={cn('px-4 py-2 rounded-2xl text-xs font-black', phase.tone)}>{phase.title}</div>
+            <span>{roomOccupancy}/{ROOM_CAPACITY}</span>
           </div>
-          <div className="h-[620px] bg-white">
-            {liveDraft || currentVersion ? (
-              <iframe
-                title={liveDraft ? 'Live candidate prototype' : 'Current prototype'}
-                srcDoc={(liveDraft || currentVersion)?.code}
-                className="w-full h-full border-0"
-              />
-            ) : (
-              <div className="h-full grid place-items-center text-slate-400">No prototype yet.</div>
-            )}
-          </div>
-        </section>
+          <dl>
+            <div><dt>Mode</dt><dd>Public room</dd></div>
+            <div><dt>Capacity</dt><dd>{ROOM_CAPACITY} people</dd></div>
+            <div><dt>Duration</dt><dd>Creator controlled</dd></div>
+            <div><dt>Start</dt><dd>Anytime</dd></div>
+          </dl>
+          </section>
 
-        <aside className="space-y-6">
+          <ParticipantRoster
+            participants={state.participants}
+            capacity={ROOM_CAPACITY}
+            compact
+          />
+
+          <section className="sidebar-session-stats" aria-label="Current session statistics">
+          <div><CircleDollarSign aria-hidden="true" /><span>Coins</span><strong>{role === 'creator' ? experiment.creator_coins : me?.coins ?? 0}</strong></div>
+          <div><Trophy aria-hidden="true" /><span>Selected</span><strong>{state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round).length}/3</strong></div>
+          </section>
+
+          <div className="sidebar-flow-control">
           <CreatorControls
             role={role}
             phase={experiment.phase}
@@ -916,9 +1131,45 @@ function StudyRoom({
             endVoteSummary={state.endVoteSummary}
             tiedComments={tiedComments}
             tieRankScores={tieRankScores}
+            roomOccupancy={roomOccupancy}
+            aiProvider={state.aiProvider}
             onRun={onRun}
             onAbortExperiment={onAbortExperiment}
           />
+          </div>
+        </div>
+      </aside>
+
+      {isSidebarResizing && <div className="sidebar-resize-guard" aria-hidden="true" />}
+
+      <main className="study-main-column">
+        <section className="prototype-frame workbench-preview flex min-h-0 flex-col rounded-[2rem] bg-white/80 border border-white shadow-xl shadow-blue-100 overflow-hidden">
+          <div className="h-16 px-6 flex items-center justify-between border-b border-blue-50">
+            <div>
+              <p className="content-section-kicker">PRIMARY EXPERIENCE</p>
+              <h2 className="font-black text-lg">{liveDraft ? `Live Candidate Draft ${liveDraft.attempt_number}` : '当前原型 · Current Prototype'}</h2>
+              <p className="text-xs text-slate-500">
+                {liveDraft
+                  ? `Visible to everyone while Creator and ${aiProviderLabel(state.aiProvider)} debug it. This is not published yet.`
+                  : 'Participants experience this version before each commenting phase.'}
+              </p>
+            </div>
+            <div className={cn('px-4 py-2 rounded-2xl text-xs font-black', phase.tone)}>{phase.title}</div>
+          </div>
+          <div className="prototype-canvas min-h-0 flex-1">
+            {liveDraft || currentVersion ? (
+              <CursorSafeIframe
+                title={liveDraft ? 'Live candidate prototype' : 'Current prototype'}
+                srcDoc={(liveDraft || currentVersion)?.code}
+                className="w-full h-full border-0"
+              />
+            ) : (
+              <div className="h-full grid place-items-center text-slate-400">No prototype yet.</div>
+            )}
+          </div>
+        </section>
+
+        <div className="study-stage-panels">
           {experiment.phase === 'developing' && state.currentDraft && (
             <DevelopmentChatPanel
               state={state}
@@ -937,35 +1188,41 @@ function StudyRoom({
               isBusy={isBusy}
             />
           )}
-          <CommentPanel
-            role={role}
-            participantCode={participantCode}
-            phase={experiment.phase}
-            comments={currentComments}
-            marketPrivacyActive={state.marketPrivacyActive}
-            onRun={onRun}
-            isBusy={isBusy}
-          />
-        </aside>
-      </div>
+        </div>
 
-      <div className="grid xl:grid-cols-[1.05fr_.95fr] gap-6">
-        <InvestmentPanel
-          role={role}
-          participantCode={participantCode}
-          phase={experiment.phase}
-          comments={currentComments}
-          investments={state.investments.filter((investment) => investment.round_number === experiment.current_round)}
-          marketPrivacyActive={state.marketPrivacyActive}
-          investmentLocked={investmentLocked}
-          participantCoins={me?.coins || 0}
-          creatorCoins={experiment.creator_coins}
-          selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
-          onRun={onRun}
-          isBusy={isBusy}
-        />
-        <VersionTimeline state={state} />
-      </div>
+        <section className="study-comments-section" aria-label="Live comment ranking">
+          <div className="feedback-market-group">
+            <LiveCommentLeaderboard
+              role={role}
+              participantCode={participantCode}
+              phase={experiment.phase}
+              comments={currentComments}
+              investments={state.investments.filter((investment) => investment.round_number === experiment.current_round)}
+              investmentLocked={investmentLocked}
+              availableCoins={role === 'creator' ? experiment.creator_coins : me?.coins || 0}
+              selectedIdeas={state.selectedIdeas.filter((idea) => idea.round_number === experiment.current_round)}
+              marketPrivacyActive={state.marketPrivacyActive}
+              invest={(commentId, amount) => studyApi.invest(role, participantCode, commentId, amount)}
+              onInvestmentState={onInvestmentState}
+              onInvestmentError={onInvestmentError}
+            />
+            <CommentPanel
+              role={role}
+              participantCode={participantCode}
+              phase={experiment.phase}
+              comments={currentComments}
+              marketPrivacyActive={state.marketPrivacyActive}
+              onRun={onRun}
+              isBusy={isBusy}
+              composerOnly
+            />
+          </div>
+        </section>
+
+        <section className="study-versions-section" aria-label="Iteration timeline">
+          <VersionTimeline state={state} />
+        </section>
+      </main>
     </div>
   );
 }
@@ -1003,6 +1260,8 @@ function CreatorControls({
   endVoteSummary,
   tiedComments,
   tieRankScores,
+  roomOccupancy,
+  aiProvider,
   onRun,
   onAbortExperiment,
 }: {
@@ -1016,6 +1275,8 @@ function CreatorControls({
   endVoteSummary: StudyEndVoteSummary;
   tiedComments: StudyComment[];
   tieRankScores: number[];
+  roomOccupancy: number;
+  aiProvider: StudyAIProvider;
   onRun: (action: () => Promise<StudyState>) => void;
   onAbortExperiment: () => void;
 }) {
@@ -1025,7 +1286,7 @@ function CreatorControls({
   React.useEffect(() => {
     const used = new Set<number>();
     const defaults = tieRankScores.map((score) => {
-      const match = tiedComments.find((comment) => Number(comment.invested || 0) === score && !used.has(comment.id));
+      const match = tiedComments.find((comment) => Number(comment.investor_count || 0) === score && !used.has(comment.id));
       if (match) used.add(match.id);
       return match?.id || 0;
     });
@@ -1034,8 +1295,8 @@ function CreatorControls({
 
   if (role !== 'creator') {
     return (
-      <Card title="Host controls" icon={<MousePointer2 />}>
-        <p className="text-sm text-slate-500 leading-7">Creator/Host controls the phase transitions. Your participant view updates automatically.</p>
+      <Card title="Creator controls" icon={<MousePointer2 />}>
+        <p className="text-sm text-slate-500 leading-7">The Creator controls the phase transitions. Your participant view updates automatically.</p>
       </Card>
     );
   }
@@ -1043,7 +1304,7 @@ function CreatorControls({
   const actions: Partial<Record<StudyPhase, { label: string; helper: string; run: () => Promise<StudyState>; icon: React.ReactNode }>> = {
     experience: {
       label: 'Start commenting',
-      helper: 'Participants can now submit timed comments.',
+      helper: `${roomOccupancy}/${ROOM_CAPACITY} people joined. The Creator can start anytime.`,
       run: () => studyApi.setPhase('commenting'),
       icon: <MessageCircle />,
     },
@@ -1065,8 +1326,8 @@ function CreatorControls({
     developing: {
       label: fusionPlan ? 'Generate visible initial draft' : 'Generate AI fusion plan',
       helper: fusionPlan
-        ? 'The selected AI creates Candidate Draft 1. It becomes visible to every participant immediately, even before debugging.'
-        : 'The selected AI will create a read-only plan covering the core idea and both supporting ideas.',
+        ? `${aiProviderLabel(aiProvider)} creates Candidate Draft 1. It becomes visible to every participant immediately, even before debugging.`
+        : `${aiProviderLabel(aiProvider)} will create a read-only plan that combines the three selected ideas.`,
       run: () => (fusionPlan ? studyApi.createInitialDraft() : studyApi.generateFusionPlan()),
       icon: <Code2 />,
     },
@@ -1081,7 +1342,7 @@ function CreatorControls({
           <button
             disabled={isBusy}
             onClick={() => onRun(() => studyApi.nextRound())}
-            className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 font-black text-white shadow-xl shadow-violet-200 disabled:opacity-50"
+            className="primary-action flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 font-black text-white shadow-xl shadow-violet-200 disabled:opacity-50"
           >
             <ChevronRight className="h-5 w-5" />
             Start next round
@@ -1108,9 +1369,12 @@ function CreatorControls({
       ) : action ? (
         <>
           <button
-            disabled={isBusy || (phase === 'investing' && commentCount < 3)}
+            disabled={
+              isBusy ||
+              (phase === 'investing' && commentCount < 3)
+            }
             onClick={() => onRun(action.run)}
-            className="w-full h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2 [&_svg]:h-5 [&_svg]:w-5"
+            className="primary-action w-full h-14 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 text-white font-black shadow-xl shadow-violet-200 disabled:opacity-50 flex items-center justify-center gap-2 [&_svg]:h-5 [&_svg]:w-5"
           >
             {isBusy ? <RefreshCw className="animate-spin" /> : action.icon}
             {action.label}
@@ -1138,18 +1402,18 @@ function CreatorControls({
       )}
 
       {tiedComments.length > 0 && tieRankScores.length === 3 && (
-        <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+        <div className="notice-dark mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <div className="mb-3">
             <p className="text-xs font-black text-amber-700">Tie resolution</p>
             <p className="mt-1 text-[11px] leading-5 text-amber-700/80">
-              Creator can only choose between ideas with the same coin total. Higher-voted ideas remain locked.
+              Creator can only choose between ideas with the same invested-coin total. Higher-invested ideas remain locked.
             </p>
           </div>
           <div className="space-y-3">
             {tieRankScores.map((score, index) => (
               <label key={`${score}-${index}`} className="block">
                 <span className="mb-1 block text-[11px] font-black text-slate-500">
-                  Rank #{index + 1} · {index === 0 ? 'Core' : 'Supporting'} · {score} coins
+                  Rank #{index + 1} · {index === 0 ? 'Core' : 'Supporting'} · {score} votes
                 </span>
                 <select
                   value={tieChoices[index] || ''}
@@ -1164,7 +1428,7 @@ function CreatorControls({
                 >
                   <option value="">Choose tied idea</option>
                   {tiedComments
-                    .filter((comment) => Number(comment.invested || 0) === score)
+                    .filter((comment) => Number(comment.investor_count || 0) === score)
                     .map((comment) => (
                       <option
                         key={comment.id}
@@ -1207,7 +1471,7 @@ function CreatorControls({
                 <span className="text-xs font-black text-blue-700">
                   #{idea.selection_rank} · {idea.selection_role === 'core' ? 'Core' : 'Supporting'} · {idea.participant_code}
                 </span>
-                <span className="text-[11px] font-black text-amber-600">{idea.invested} coins</span>
+                <span className="text-[11px] font-black text-amber-600">{idea.investor_count} votes</span>
               </div>
               <p className="mt-2 text-xs leading-5 text-slate-600">{idea.content}</p>
             </div>
@@ -1273,6 +1537,7 @@ function CommentPanel({
   marketPrivacyActive,
   onRun,
   isBusy,
+  composerOnly = false,
 }: {
   role: Role;
   participantCode: string;
@@ -1281,6 +1546,7 @@ function CommentPanel({
   marketPrivacyActive: boolean;
   onRun: (action: () => Promise<StudyState>) => void;
   isBusy: boolean;
+  composerOnly?: boolean;
 }) {
   const [content, setContent] = React.useState('');
   const canComment = role === 'participant' && phase === 'commenting';
@@ -1288,6 +1554,10 @@ function CommentPanel({
     ? comments.find((comment) => comment.participant_code === participantCode || comment.is_own)
     : undefined;
   const loadedIdeaId = React.useRef<number | null>(null);
+  const rankByCommentId = React.useMemo(
+    () => new Map(getRankedComments(comments).map((comment, index) => [comment.id, index + 1])),
+    [comments],
+  );
 
   React.useEffect(() => {
     if (myIdea && loadedIdeaId.current !== myIdea.id) {
@@ -1313,175 +1583,68 @@ function CommentPanel({
     });
   };
 
+  const composer = (
+    <div className={composerOnly ? 'unified-comment-composer' : 'mt-4'}>
+      {myIdea && canComment && (
+        <div className="mb-3 flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+          <div>
+            <p className="text-xs font-black text-emerald-700">Your round Idea · 100 Coin awarded</p>
+            <p className="mt-1 text-[11px] text-emerald-600">You can edit it until investing begins. Updates do not award more Coin.</p>
+          </div>
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={remove}
+            className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-[11px] font-black text-rose-600 disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+      <textarea
+        value={content}
+        onChange={(event) => setContent(event.target.value.slice(0, COMMENT_CHARACTER_LIMIT))}
+        disabled={!canComment || isBusy}
+        maxLength={COMMENT_CHARACTER_LIMIT}
+        placeholder={canComment ? '写下你希望下一版怎么改...' : '评论阶段开放后才可以提交'}
+        rows={5}
+        className="comment-composer w-full resize-none overflow-y-auto rounded-2xl border border-blue-100 bg-white/80 p-4 text-sm outline-none focus:border-blue-300 disabled:bg-slate-50 disabled:text-slate-400"
+      />
+      <div className="comment-composer-count" aria-live="polite">
+        <span>{content.trim() ? '已输入' : '评论内容'}</span>
+        <strong>{content.length}/{COMMENT_CHARACTER_LIMIT}</strong>
+      </div>
+      <button
+        onClick={submit}
+        disabled={!canComment || !content.trim() || isBusy}
+        className="primary-action mt-3 w-full h-12 rounded-2xl bg-blue-600 text-white font-black disabled:bg-slate-200 disabled:text-slate-400 flex items-center justify-center gap-2"
+      >
+        <Send className="h-4 w-4" />
+        {myIdea ? 'Update Idea' : 'Submit Idea · earn 100 Coin'}
+      </button>
+    </div>
+  );
+
+  if (composerOnly) return composer;
+
   return (
     <Card title="Round comments" icon={<MessageCircle />} badge={`${comments.length} ideas`}>
-      <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1 custom-scrollbar-light">
+      <div className="comment-scroll-region min-h-0 space-y-3 overflow-y-auto pr-1 custom-scrollbar-light">
         {comments.length === 0 ? (
           <div className="rounded-2xl bg-slate-50 p-5 text-center text-sm text-slate-400">No comments in this round yet.</div>
         ) : (
-          comments.map((comment) => <CommentCard key={comment.id} comment={comment} hideMarketInfo={marketPrivacyActive} />)
+          comments.map((comment) => (
+            <CommentCard
+              key={comment.id}
+              comment={comment}
+              rank={rankByCommentId.get(comment.id)}
+              hideMarketInfo={marketPrivacyActive}
+            />
+          ))
         )}
       </div>
 
-      <div className="mt-4">
-        {myIdea && canComment && (
-          <div className="mb-3 flex items-center justify-between rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-            <div>
-              <p className="text-xs font-black text-emerald-700">Your round Idea · 100 Coin awarded</p>
-              <p className="mt-1 text-[11px] text-emerald-600">You can edit it until investing begins. Updates do not award more Coin.</p>
-            </div>
-            <button
-              type="button"
-              disabled={isBusy}
-              onClick={remove}
-              className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-[11px] font-black text-rose-600 disabled:opacity-50"
-            >
-              Delete
-            </button>
-          </div>
-        )}
-        <textarea
-          value={content}
-          onChange={(event) => setContent(event.target.value)}
-          disabled={!canComment || isBusy}
-          placeholder={canComment ? '写下你希望下一版怎么改...' : '评论阶段开放后才可以提交'}
-          rows={3}
-          className="w-full rounded-2xl border border-blue-100 bg-white/80 p-4 text-sm outline-none focus:border-blue-300 disabled:bg-slate-50 disabled:text-slate-400"
-        />
-        <button
-          onClick={submit}
-          disabled={!canComment || !content.trim() || isBusy}
-          className="mt-3 w-full h-12 rounded-2xl bg-blue-600 text-white font-black disabled:bg-slate-200 disabled:text-slate-400 flex items-center justify-center gap-2"
-        >
-          <Send className="h-4 w-4" />
-          {myIdea ? 'Update Idea' : 'Submit Idea · earn 100 Coin'}
-        </button>
-      </div>
-    </Card>
-  );
-}
-
-function InvestmentPanel({
-  role,
-  participantCode,
-  phase,
-  comments,
-  investments,
-  marketPrivacyActive,
-  investmentLocked,
-  participantCoins,
-  creatorCoins,
-  selectedIdeas,
-  onRun,
-  isBusy,
-}: {
-  role: Role;
-  participantCode: string;
-  phase: StudyPhase;
-  comments: StudyComment[];
-  investments: StudyInvestment[];
-  marketPrivacyActive: boolean;
-  investmentLocked: boolean;
-  participantCoins: number;
-  creatorCoins: number;
-  selectedIdeas: StudySelectedIdea[];
-  onRun: (action: () => Promise<StudyState>) => void;
-  isBusy: boolean;
-}) {
-  const [amounts, setAmounts] = React.useState<Record<number, number>>({});
-  const isInvestmentPhase = phase === 'investing';
-  const canInvest = isInvestmentPhase && !investmentLocked;
-  const sortedComments = marketPrivacyActive
-    ? [...comments]
-    : [...comments].sort((a, b) => Number(b.invested || 0) - Number(a.invested || 0));
-  const availableCoins = role === 'creator' ? creatorCoins : participantCoins;
-  const selectionByComment = new Map(selectedIdeas.map((idea) => [idea.comment_id, idea]));
-  const investmentCode = role === 'creator' ? 'CREATOR' : participantCode;
-  const ownInvestments = investments.filter((investment) => investment.participant_code === investmentCode);
-  const committedThisRound = ownInvestments.reduce((sum, investment) => sum + Number(investment.amount || 0), 0);
-  const roundLimit = role === 'creator' ? 200 : 150;
-  const remainingCapacity = Math.max(0, roundLimit - committedThisRound);
-
-  return (
-    <Card
-      title="Investment board"
-      icon={<CircleDollarSign />}
-      badge={canInvest ? `${availableCoins} available · ${remainingCapacity} round capacity` : 'locked'}
-    >
-      <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
-        Submit one Idea to earn 100 Coin. Participant investment is capped at 150 per round and 50 per Idea, in steps of 10. Unspent Coin carries forward. Creator resets to 200.
-        {marketPrivacyActive && <span className="mt-1 block font-black">Authors, live totals, other investors, and rankings stay hidden until investing closes.</span>}
-        {investmentLocked && <span className="mt-1 block font-black">The market is locked. Results are revealed while Creator resolves the final ranking.</span>}
-      </div>
-      <div className="grid md:grid-cols-2 gap-4">
-        {sortedComments.length === 0 ? (
-          <div className="md:col-span-2 rounded-2xl bg-slate-50 p-8 text-center text-sm text-slate-400">Comments will become investment options after commenting.</div>
-        ) : (
-          sortedComments.map((comment, index) => {
-            const ownComment = role === 'participant' && (comment.is_own || comment.participant_code === participantCode);
-            const selectedIdea = selectionByComment.get(comment.id);
-            const existingInvestment = ownInvestments.find((investment) => investment.comment_id === comment.id);
-            const amount = amounts[comment.id] ?? Number(existingInvestment?.amount || 10);
-            const delta = amount - Number(existingInvestment?.amount || 0);
-            const exceedsBalance = delta > availableCoins;
-            const exceedsRoundLimit = committedThisRound - Number(existingInvestment?.amount || 0) + amount > roundLimit;
-            return (
-              <div
-                key={comment.id}
-                className={cn(
-                  'rounded-2xl border p-4 bg-white/80 transition',
-                  comment.selected ? 'border-violet-300 shadow-lg shadow-violet-100' : 'border-blue-100',
-                )}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-black text-blue-600">
-                    {marketPrivacyActive
-                      ? `${comment.is_own ? 'Your Idea' : 'Anonymous Idea'} ${index + 1}`
-                      : `#${index + 1} · ${comment.participant_code}`}
-                  </span>
-                  <span className="text-xs font-black text-amber-600">
-                    {marketPrivacyActive ? (existingInvestment ? `Your stake: ${existingInvestment.amount}` : 'Market total hidden') : `${comment.invested || 0} coins`}
-                  </span>
-                </div>
-                <p className="text-sm text-slate-600 leading-6 min-h-[72px]">{comment.content}</p>
-                {selectedIdea && (
-                  <div className="mt-3 inline-flex items-center gap-1 rounded-xl bg-violet-100 text-violet-600 px-3 py-1 text-xs font-black">
-                    <BadgeCheck className="h-3 w-3" />
-                    #{selectedIdea.selection_rank} {selectedIdea.selection_role === 'core' ? 'Core idea' : 'Supporting idea'}
-                  </div>
-                )}
-                <div className="mt-4 flex gap-2">
-                  <select
-                    value={amount}
-                    onChange={(event) => setAmounts((prev) => ({ ...prev, [comment.id]: Number(event.target.value) }))}
-                    disabled={!canInvest || ownComment || isBusy}
-                    className="w-24 rounded-xl border border-blue-100 px-3 text-sm font-bold outline-none disabled:bg-slate-50"
-                  >
-                    {[10, 20, 30, 40, 50].map((value) => <option key={value} value={value}>{value}</option>)}
-                  </select>
-                  <button
-                    disabled={!canInvest || ownComment || isBusy || exceedsBalance || exceedsRoundLimit}
-                    onClick={() =>
-                      onRun(() => studyApi.invest(role, participantCode, comment.id, amount))
-                    }
-                    className="flex-1 h-11 rounded-xl bg-gradient-to-r from-amber-400 to-violet-500 text-white text-xs font-black disabled:bg-none disabled:bg-slate-200 disabled:text-slate-400"
-                  >
-                    {ownComment
-                      ? 'Own Idea'
-                      : exceedsBalance
-                        ? 'Not enough Coin'
-                        : exceedsRoundLimit
-                          ? 'Round limit reached'
-                          : existingInvestment
-                            ? `Update stake to ${amount}`
-                            : `Invest ${amount}`}
-                  </button>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
+      {composer}
     </Card>
   );
 }
@@ -1556,7 +1719,7 @@ function DevelopmentChatPanel({
             <div
               key={item.id}
               className={cn(
-                'rounded-2xl border p-3',
+                'message-card rounded-2xl border p-3',
                 item.role === 'creator'
                   ? 'ml-6 border-blue-100 bg-blue-50'
                   : item.role === 'assistant'
@@ -1566,7 +1729,7 @@ function DevelopmentChatPanel({
             >
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">
-                  {item.role === 'creator' ? 'Creator' : item.role === 'assistant' ? 'AI' : 'System'}
+                  {item.role === 'creator' ? 'Creator' : item.role === 'assistant' ? aiProviderLabel(state.aiProvider) : 'System'}
                 </p>
                 {draft && <span className="text-[10px] font-black text-violet-500">Draft {draft.attempt_number}</span>}
               </div>
@@ -1583,14 +1746,14 @@ function DevelopmentChatPanel({
             onChange={(event) => setMessage(event.target.value)}
             disabled={isBusy}
             rows={4}
-            placeholder="Tell the selected AI what is broken or what still needs to be completed..."
+            placeholder={`Tell ${aiProviderLabel(state.aiProvider)} what is broken or what still needs to be completed...`}
             className="w-full rounded-2xl border border-violet-100 bg-white p-4 text-sm outline-none focus:border-violet-300 disabled:bg-slate-50"
           />
           <button
             type="button"
             disabled={isBusy || !message.trim()}
             onClick={submit}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-500 to-blue-600 text-sm font-black text-white disabled:opacity-40"
+            className="primary-action flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-500 to-blue-600 text-sm font-black text-white disabled:opacity-40"
           >
             {isBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             Send & generate next draft
@@ -1722,7 +1885,7 @@ function EndedArchive({
 
   return (
     <div className="mx-auto max-w-[1800px] space-y-6">
-      <section className="overflow-hidden rounded-[2.5rem] bg-gradient-to-r from-slate-950 via-blue-950 to-violet-950 p-8 text-white shadow-2xl shadow-blue-200">
+      <section className="archive-hero overflow-hidden rounded-[2.5rem] bg-gradient-to-r from-slate-950 via-blue-950 to-violet-950 p-8 text-white shadow-2xl shadow-blue-200">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-black">
@@ -1806,7 +1969,7 @@ function EndedArchive({
           </div>
         </Card>
 
-        <section className="overflow-hidden rounded-[2rem] border border-white bg-white/80 shadow-xl shadow-blue-100">
+        <section className="archive-preview overflow-hidden rounded-[2rem] border border-white bg-white/80 shadow-xl shadow-blue-100">
           <div className="border-b border-blue-50 p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -1864,7 +2027,7 @@ function EndedArchive({
           </div>
           <div className="h-[650px] bg-white">
             {selectedVersion ? (
-              <iframe title="Archived project version" srcDoc={selectedVersion.code} className="h-full w-full border-0" />
+              <CursorSafeIframe title="Archived project version" srcDoc={selectedVersion.code} className="h-full w-full border-0" />
             ) : (
               <div className="grid h-full place-items-center text-slate-400">No archived version.</div>
             )}
@@ -1894,11 +2057,11 @@ function ExperimentHistoryPanel({
       </p>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {archives.map((experiment) => (
+          <InteractiveSurface key={experiment.id} strength="surface">
           <button
-            key={experiment.id}
             type="button"
             onClick={() => onViewArchive(experiment.id)}
-            className="rounded-2xl border border-blue-100 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-lg hover:shadow-violet-100"
+            className="archive-item w-full rounded-2xl border border-blue-100 bg-white p-4 text-left transition hover:border-violet-200 hover:shadow-lg hover:shadow-violet-100"
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1918,6 +2081,7 @@ function ExperimentHistoryPanel({
               View archive <ArrowRight className="h-3.5 w-3.5" />
             </p>
           </button>
+          </InteractiveSurface>
         ))}
       </div>
     </Card>
@@ -1926,7 +2090,7 @@ function ExperimentHistoryPanel({
 
 function ArchiveMiniStat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-xl bg-blue-50/70 px-2 py-2">
+    <div className="archive-mini-stat rounded-xl bg-blue-50/70 px-2 py-2">
       <p className="text-sm font-black text-blue-700">{value}</p>
       <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
     </div>
@@ -1948,46 +2112,41 @@ function FinalLeaderboards({ leaderboards }: { leaderboards: StudyState['leaderb
     title: string;
     subtitle: string;
     icon: React.ReactNode;
-    accent: string;
     primary: (entry: StudyLeaderboardEntry) => React.ReactNode;
     secondary: (entry: StudyLeaderboardEntry) => React.ReactNode;
   }> = [
     {
       key: 'creative',
-      title: 'Idea Master',
-      subtitle: '3 / 2 / 1 points for each first, second, or third-place Idea',
+      title: '最佳创意大师',
+      subtitle: '按照Idea入选名次和社区支持表现排名',
       icon: <Sparkles className="h-5 w-5" />,
-      accent: 'text-violet-600 bg-violet-50',
       primary: (entry) => `${entry.creative_points} pts`,
-      secondary: (entry) => `${entry.top_three_count} Top 3 · ${entry.received_investment} support Coin`,
+      secondary: (entry) => `${entry.top_three_count}次进入Top 3 · 收到${entry.received_investment} Coin支持`,
     },
     {
       key: 'investor',
-      title: 'Best Investor',
-      subtitle: 'Ranked by realized investment net profit',
+      title: '最佳投资人',
+      subtitle: '按照已经实现的投资净收益排名',
       icon: <CircleDollarSign className="h-5 w-5" />,
-      accent: 'text-emerald-600 bg-emerald-50',
       primary: (entry) => `${entry.investment_net >= 0 ? '+' : ''}${entry.investment_net} Coin`,
-      secondary: (entry) => `${entry.top_three_hits} hits · ${entry.investment_roi >= 0 ? '+' : ''}${entry.investment_roi}% ROI`,
+      secondary: (entry) => `${entry.top_three_hits}次命中 · ROI ${entry.investment_roi >= 0 ? '+' : ''}${entry.investment_roi}%`,
     },
     {
       key: 'wealth',
-      title: 'Wealthiest Player',
-      subtitle: 'Overall ranking by final Coin balance',
+      title: '富豪',
+      subtitle: '按照实验结束时持有的Coin排名',
       icon: <Trophy className="h-5 w-5" />,
-      accent: 'text-amber-600 bg-amber-50',
       primary: (entry) => `${entry.coins} Coin`,
-      secondary: (entry) => `Idea +${entry.author_earnings} · Investment ${entry.investment_net >= 0 ? '+' : ''}${entry.investment_net}`,
+      secondary: (entry) => `Idea收益 +${entry.author_earnings} · 投资净收益 ${entry.investment_net >= 0 ? '+' : ''}${entry.investment_net}`,
     },
   ];
 
   if (leaderboards.wealth.length === 0) return null;
   return (
-    <section>
-      <div className="mb-4">
+    <section className="space-y-4">
+      <div>
         <p className="text-xs font-black uppercase tracking-[0.24em] text-violet-500">Final awards</p>
-        <h2 className="mt-1 text-2xl font-black text-blue-950">Three ways to win</h2>
-        <p className="mt-2 text-sm text-slate-500">Creative contribution, investment judgment, and final wealth are ranked independently. Creator is excluded.</p>
+        <h2 className="mt-1 text-2xl font-black text-blue-950">三项最终排行榜</h2>
       </div>
       <div className="grid gap-5 xl:grid-cols-3">
         {boards.map((board) => {
@@ -1995,92 +2154,142 @@ function FinalLeaderboards({ leaderboards }: { leaderboards: StudyState['leaderb
           return (
             <Card key={board.key} title={board.title} icon={board.icon} badge={`${entries.length} ranked`}>
               <p className="mb-4 min-h-10 text-xs leading-5 text-slate-400">{board.subtitle}</p>
-              {entries.length === 0 ? (
-                <div className="rounded-2xl bg-slate-50 p-6 text-center text-xs font-bold text-slate-400">No eligible Participants</div>
-              ) : (
-                <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1 custom-scrollbar-light">
-                  {entries.map((entry) => (
-                    <div
-                      key={entry.participant_code}
-                      className={cn(
-                        'flex items-center gap-3 rounded-2xl border px-3 py-3',
-                        entry.rank === 1 ? 'border-amber-200 bg-amber-50/70' : 'border-slate-100 bg-white/80',
-                      )}
-                    >
-                      <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-black', board.accent)}>
-                        #{entry.rank}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-black text-blue-800">{entry.participant_code}</p>
-                        <p className="mt-0.5 truncate text-[10px] font-bold text-slate-400">{board.secondary(entry)}</p>
-                      </div>
-                      <p className="shrink-0 text-sm font-black text-blue-950">{board.primary(entry)}</p>
+              <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1 custom-scrollbar-light">
+                {entries.map((entry) => (
+                  <div
+                    key={entry.participant_code}
+                    className={cn(
+                      'flex items-center gap-3 rounded-2xl border px-3 py-3',
+                      entry.rank === 1 ? 'border-amber-200 bg-amber-50/70' : 'border-slate-100 bg-white/80',
+                    )}
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-sm font-black text-blue-700">
+                      #{entry.rank}
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-black text-blue-950">{entry.participant_code}</p>
+                      <p className="mt-0.5 truncate text-[10px] font-semibold text-slate-400">{board.secondary(entry)}</p>
+                    </div>
+                    <div className="shrink-0 text-right text-sm font-black text-violet-700">{board.primary(entry)}</div>
+                  </div>
+                ))}
+              </div>
             </Card>
           );
         })}
       </div>
-      <p className="mt-3 text-[11px] leading-5 text-slate-400">
-        Idea Master ties use community support and Top 3 results. Best Investor ties use successful picks and ROI. Wealth ties use investment net and Idea results.
-      </p>
     </section>
+  );
+}
+
+function FinalCoinLeaderboard({ entries }: { entries: StudyLeaderboardEntry[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <Card title="Final Coin leaderboard" icon={<Trophy />} badge={`${entries.length} Participants`}>
+      <div className="overflow-x-auto">
+        <table className="leaderboard-table w-full min-w-[860px] border-separate border-spacing-y-2 text-left">
+          <thead>
+            <tr className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+              <th className="px-4 py-2">Rank</th>
+              <th className="px-4 py-2">Participant</th>
+              <th className="px-4 py-2">Final Coin</th>
+              <th className="px-4 py-2">Top 3 Ideas</th>
+              <th className="px-4 py-2">First place</th>
+              <th className="px-4 py-2">Received</th>
+              <th className="px-4 py-2">Author earnings</th>
+              <th className="px-4 py-2">Investment net</th>
+              <th className="px-4 py-2">Top 3 hits</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry) => (
+              <tr
+                key={entry.participant_code}
+                className={cn(
+                  'text-sm font-bold text-slate-600',
+                  entry.rank === 1 ? 'bg-amber-50' : 'bg-white/80',
+                )}
+              >
+                <td className="rounded-l-2xl px-4 py-4 text-lg font-black text-blue-950">
+                  <span className="inline-flex items-center gap-1.5">
+                    {entry.rank === 1 && <Trophy className="h-4 w-4" aria-hidden="true" />}
+                    {entry.rank}
+                  </span>
+                </td>
+                <td className="px-4 py-4 font-black text-blue-700">{entry.participant_code}</td>
+                <td className="px-4 py-4 text-lg font-black text-amber-600">{entry.coins}</td>
+                <td className="px-4 py-4">{entry.top_three_count}</td>
+                <td className="px-4 py-4">{entry.first_place_count}</td>
+                <td className="px-4 py-4">{entry.received_investment}</td>
+                <td className="px-4 py-4 text-emerald-600">+{entry.author_earnings}</td>
+                <td className={cn('px-4 py-4', entry.investment_net >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
+                  {entry.investment_net >= 0 ? '+' : ''}{entry.investment_net}
+                </td>
+                <td className="rounded-r-2xl px-4 py-4">{entry.top_three_hits}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-[11px] leading-5 text-slate-400">
+        Ranking is determined by final Coin. Ties are resolved by investment net, first-place Ideas, then total Top 3 Ideas.
+      </p>
+    </Card>
   );
 }
 
 function VersionTimeline({ state }: { state: StudyState }) {
   return (
-    <Card title="Version evolution" icon={<Eye />} badge={`${state.versions.length} versions`}>
-      <div className="grid md:grid-cols-2 gap-4">
-        {state.versions.map((version) => {
-          const sources = state.versionSources.filter((source) => source.version_id === version.id);
-          const legacySource = version.source_comment_id
-            ? state.comments.find((comment) => comment.id === version.source_comment_id)
-            : null;
-          return (
-            <div key={version.id} className="rounded-2xl border border-blue-100 bg-white/80 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-black text-blue-950">{version.title}</p>
-                <span className="rounded-xl bg-blue-50 text-blue-600 px-3 py-1 text-xs font-black">Round {version.round_number}</span>
-              </div>
-              {sources.length > 0 ? (
-                <div className="space-y-2">
-                  {sources.map((source) => (
-                    <p key={source.comment_id} className="text-xs text-slate-500 leading-5 line-clamp-2">
-                      <span className="font-black text-blue-600">
-                        #{source.selection_rank} {source.selection_role === 'core' ? 'Core' : 'Supporting'} · {source.participant_code}:
-                      </span>{' '}
-                      {source.content}
-                    </p>
-                  ))}
-                </div>
-              ) : legacySource ? (
-                <p className="text-xs text-slate-500 leading-6">
-                  Built from {legacySource.participant_code}: {legacySource.content}
-                </p>
-              ) : (
-                <p className="text-xs text-slate-500 leading-6">Initial creator upload</p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </Card>
+    <div className="version-timeline-shell self-start">
+      <Card title="迭代版本 · Iteration Timeline" icon={<Eye />} badge={`${state.versions.length} versions`}>
+        <VersionEvolution state={state} />
+      </Card>
+    </div>
   );
 }
 
-function CommentCard({ comment, hideMarketInfo = false }: { comment: StudyComment; hideMarketInfo?: boolean }) {
+function ExpandableCommentText({ content, className = '' }: { content: string; className?: string }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const canExpand = content.length > 140;
+
   return (
-    <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
+    <div className={className}>
+      <p className={cn('text-sm leading-6 text-slate-600 break-words', canExpand && !expanded && 'line-clamp-3')}>
+        {content}
+      </p>
+      {canExpand && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-1 text-[11px] font-black text-blue-600 hover:underline"
+          aria-expanded={expanded}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function CommentCard({
+  comment,
+  rank,
+  hideMarketInfo = false,
+}: {
+  key?: React.Key;
+  comment: StudyComment;
+  rank?: number;
+  hideMarketInfo?: boolean;
+}) {
+  return (
+    <div className={cn('comment-card rounded-2xl border border-blue-100 bg-white/80 p-4', rank && `comment-rank-${Math.min(rank, 5)}`)}>
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs font-black text-blue-600">
-          {hideMarketInfo ? (comment.is_own ? 'Your anonymous Idea' : 'Anonymous Idea') : `#${comment.id} · ${comment.participant_code}`}
+          {hideMarketInfo ? (comment.is_own ? 'Your anonymous Idea' : 'Anonymous Idea') : `#${rank ?? '—'} · ${comment.participant_code}`}
         </p>
-        <p className="text-xs font-black text-amber-600">{hideMarketInfo ? 'Investment hidden' : `${comment.invested || 0} coins`}</p>
+        <p className="text-xs font-black text-amber-600">{hideMarketInfo ? 'Voting hidden' : `${comment.investor_count || 0} votes`}</p>
       </div>
-      <p className="text-sm text-slate-600 leading-6">{comment.content}</p>
+      <ExpandableCommentText content={comment.content} />
     </div>
   );
 }
@@ -2097,7 +2306,7 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-[2rem] bg-white/80 border border-white p-6 shadow-xl shadow-blue-100/70">
+    <section className="ui-card rounded-[2rem] bg-white/80 border border-white p-6 shadow-xl shadow-blue-100/70">
       <header className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-blue-50 text-blue-600 grid place-items-center [&_svg]:h-5 [&_svg]:w-5">{icon}</div>
@@ -2112,7 +2321,7 @@ function Card({
 
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <label className="block">
+    <label className="ui-field block">
       <span className="text-xs font-black uppercase tracking-widest text-slate-400">{label}</span>
       <input
         value={value}
@@ -2137,7 +2346,7 @@ function TextField({
   placeholder?: string;
 }) {
   return (
-    <label className="block">
+    <label className="ui-field block">
       <span className="text-xs font-black uppercase tracking-widest text-slate-400">{label}</span>
       <textarea
         value={value}

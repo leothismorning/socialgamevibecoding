@@ -1,4 +1,4 @@
-import { StudyPhase, StudyState } from '../types';
+import { StudyAIProvider, StudyPhase, StudyState } from '../types';
 import { addClientDebug } from './debugClient';
 
 async function requestStudy(path: string, body?: unknown): Promise<StudyState> {
@@ -19,6 +19,7 @@ async function requestStudy(path: string, body?: unknown): Promise<StudyState> {
   try {
     response = await fetch(url, {
       method,
+      cache: 'no-store',
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -70,7 +71,7 @@ export const studyApi = {
     const query = params.toString();
     return requestStudy(`state${query ? `?${query}` : ''}`);
   },
-  setAIProvider: (provider: 'deepseek' | 'gemini') => requestStudy('ai-provider', { provider }),
+  setAIProvider: (provider: StudyAIProvider) => requestStudy('ai-provider', { provider }),
   archive: (experimentId: string) => requestStudy(`archive/${encodeURIComponent(experimentId)}`),
   createExperiment: (input: {
     title: string;
@@ -80,7 +81,8 @@ export const studyApi = {
     initialCode: string;
     maxRounds: number;
   }) => requestStudy('experiment', input),
-  join: (participantCode: string) => requestStudy('join', { participantCode }),
+  join: (clientId: string) => requestStudy('join', { clientId }),
+  leave: (clientId: string) => requestStudy('leave', { clientId }),
   setPhase: (phase: StudyPhase) => requestStudy('phase', { phase }),
   rollbackPhase: () => requestStudy('rollback-phase', {}),
   abortExperiment: () => requestStudy('abort-experiment', {}),

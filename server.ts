@@ -15,9 +15,14 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 dotenv.config({ path: [path.join(rootDir, '.env.local'), path.join(rootDir, '.env')] });
 
+app.set('etag', false);
 app.use(express.json({ limit: '10mb' }));
 
 app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   const startedAt = performance.now();
   addDebugLog({
     kind: 'server',

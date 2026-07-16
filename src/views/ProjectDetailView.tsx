@@ -255,6 +255,7 @@ export const ProjectDetailView = ({
 };
 
 interface CommentItemProps {
+  key?: React.Key;
   comment: Comment;
   currentUser: User;
   activePost: Post;

@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import {
   addComment,
+  addDevelopmentMessage,
   abortExperiment,
   createExperiment,
   deleteComment,
@@ -9,6 +10,7 @@ import {
   getStudyState,
   investCoins,
   joinStudy,
+  leaveStudy,
   rollbackPhase,
   rollbackDevelopmentDraft,
   publishDevelopmentDraft,
@@ -25,6 +27,7 @@ import {
   type StudyViewer,
 } from './studyDb.js';
 import { generateWithAI } from './ai.js';
+import { runDevelopmentAgent } from './developmentAgent.js';
 
 function sendError(res: Response, error: unknown) {
   const anyError = error as any;
@@ -41,21 +44,23 @@ function sendState(res: Response, state: ReturnType<typeof getStudyState>, viewe
 }
 
 const fallbackHtml = (title: string, brief: string) => `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script src="https://cdn.tailwindcss.com"></script>
   <title>${title}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; color: #0f172a; background: #ffffff; }
+    main { width: min(720px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0; }
+    h1 { margin: 0; font-size: clamp(2rem, 7vw, 4rem); line-height: 1.1; }
+    p { margin: 20px 0 0; color: #475569; font-size: 1.05rem; line-height: 1.7; }
+  </style>
 </head>
-<body class="min-h-screen bg-gradient-to-br from-sky-100 via-white to-violet-100 text-slate-900">
-  <main class="min-h-screen grid place-items-center p-10">
-    <section class="max-w-3xl rounded-[2rem] bg-white/80 border border-white shadow-2xl shadow-blue-200/50 p-12 text-center">
-      <div class="text-6xl mb-6">🏝️</div>
-      <h1 class="text-5xl font-black text-blue-950 mb-4">${title}</h1>
-      <p class="text-lg text-slate-600 leading-relaxed">${brief || 'A collaborative vibecoding prototype is ready for the first study round.'}</p>
-      <button class="mt-10 px-8 py-4 rounded-2xl text-white font-bold bg-gradient-to-r from-blue-500 to-violet-600 shadow-xl shadow-violet-300">Start exploring</button>
-    </section>
+<body>
+  <main>
+    <h1>${title}</h1>
+    ${brief ? `<p>${brief}</p>` : ''}
   </main>
 </body>
 </html>`;
@@ -100,21 +105,32 @@ export function registerStudyRoutes(app: Express) {
 
   app.post('/api/study/experiment', async (req: Request, res: Response) => {
     try {
-      const { title = 'Dream Island', brief = '', creatorName = 'Creator', initialPrompt = '', initialCode = '', maxRounds = 4 } =
+      const { title = 'Untitled Project', brief = '', creatorName = 'Creator', initialPrompt = '', initialCode = '', maxRounds = 4 } =
         req.body ?? {};
 
       let code = String(initialCode || '').trim();
       let prompt = String(initialPrompt || '').trim();
 
       if (!code && prompt) {
-        const generated = await generateWithAI(
-          getAIProvider(),
-          `Create the initial playable web prototype for a CHI user-study collaborative vibecoding experiment.
+        const provider = getAIProvider();
+        const basePrompt = `Create one complete self-contained HTML document for the project described below.
 Project title: ${title}
 Project brief: ${brief}
-Initial creator prompt: ${prompt}
-Make it visually soft, dreamlike, game-like, and self-contained.`,
-        );
+Creator request: ${prompt}
+
+Treat the project title, brief, and Creator request as the complete product requirements.
+Do not add features, themes, text, branding, games, AI controls, editing controls, or interactions that are not explicitly requested.
+When a detail is not supplied, choose the smallest neutral implementation rather than inventing content or product claims.
+Only add the HTML structure, CSS, JavaScript, responsiveness, and accessibility behavior technically necessary to implement the supplied requirements.`;
+        const generated = provider === 'glm'
+          ? await runDevelopmentAgent({
+            provider,
+            experimentTitle: String(title),
+            brief: String(brief),
+            creatorPrompt: prompt,
+            mode: 'initial-project',
+          })
+          : await generateWithAI(provider, basePrompt);
         code = generated.code;
       }
 
@@ -142,8 +158,16 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
 
   app.post('/api/study/join', (req, res) => {
     try {
-      const participantCode = String(req.body?.participantCode || '');
-      sendState(res, joinStudy(participantCode), { role: 'participant', participantCode });
+      const joined = joinStudy(String(req.body?.clientId || ''));
+      sendState(res, joined, { role: 'participant', participantCode: joined.viewerParticipantCode });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/study/leave', (req, res) => {
+    try {
+      sendState(res, leaveStudy(String(req.body?.clientId || '')));
     } catch (error) {
       sendError(res, error);
     }
@@ -228,33 +252,21 @@ Make it visually soft, dreamlike, game-like, and self-contained.`,
       );
       if (selectedIdeas.length !== 3) throw new Error('Three ranked ideas are required before generating a fusion plan.');
 
-      const currentVersion =
-        state.versions.find((version) => version.id === state.experiment.current_version_id) || state.versions.at(-1);
-      if (!currentVersion) throw new Error('No current version exists.');
-
       const ideaList = selectedIdeas
-        .map(
-          (idea) =>
-            `${idea.selection_rank}. ${idea.selection_role === 'core' ? 'CORE IDEA' : 'SUPPORTING IDEA'} by ${idea.participant_code} (${idea.invested} coins, ${idea.investor_count} investors): ${idea.content}`,
-        )
+        .map((idea) => `${idea.selection_rank}. ${idea.content}`)
         .join('\n');
-      const prompt = `Create an implementation fusion plan for the three automatically selected ideas below.
-The creator is not allowed to edit, reorder, replace, or omit these ideas.
-The core idea sets the main direction. Both supporting ideas must produce visible, testable changes unless technically impossible.
-Identify conflicts and resolve them by preserving the core idea while incorporating the intent of each supporting idea.
-Do not write or modify HTML yet. Keep the plan concrete and concise.
+      const prompt = `Combine the three automatically selected comments below into one short, fluent development instruction.
+Preserve the concrete meaning of all three comments. Use the first-ranked core comment as the main direction and smoothly incorporate the other two comments.
+Do not evaluate the comments, give advice, explain your reasoning, add new features, or expand beyond what the comments say.
+Do not mention ranks, authors, coins, investors, or the combining process.
+Return one concise paragraph only. Do not write or modify HTML yet.
 
-Experiment: ${state.experiment.title}
-Round: ${state.experiment.current_round}
-Current prototype summary/source length: ${currentVersion.code.length} characters
-
-Selected ideas:
+Selected comments:
 ${ideaList}`;
 
       const generated = await generateWithAI(getAIProvider(), prompt, {
         systemPrompt:
-          'You plan collaborative web-prototype changes for a controlled CHI study. Return only JSON with "text" containing a structured fusion plan and "code" set to an empty string. Do not use Markdown fences. Use the same language as the participant ideas.',
-        maxTokens: 2048,
+          'Act only as a concise text combiner. Return JSON with "text" containing one short, fluent paragraph that combines all three comments without evaluation, recommendations, headings, bullet points, reasoning, or invented details, and "code" set to an empty string. Use the same language as the comments. Do not use Markdown fences.',
       });
       sendState(res, saveFusionPlan(generated.text), { role: 'creator' });
     } catch (error) {
@@ -300,7 +312,22 @@ ${state.fusionPlan.content}
 Existing HTML:
 ${currentVersion.code}`;
 
-      const generated = await generateWithAI(getAIProvider(), prompt);
+      const provider = getAIProvider();
+      const generated = provider === 'glm'
+        ? await runDevelopmentAgent({
+          provider,
+          experimentTitle: state.experiment.title,
+          roundNumber: state.experiment.current_round,
+          selectedIdeas,
+          fusionPlan: state.fusionPlan.content,
+          currentCode: currentVersion.code,
+          mode: 'round-candidate',
+        })
+        : await generateWithAI(provider, prompt);
+      const agentSteps = (generated as any).steps;
+      if (Array.isArray(agentSteps)) {
+        for (const step of agentSteps) addDevelopmentMessage('system', step);
+      }
       sendState(res, saveDevelopmentDraft({ code: generated.code, summary: generated.text }), { role: 'creator' });
     } catch (error) {
       sendError(res, error);
@@ -331,9 +358,9 @@ ${currentVersion.code}`;
         .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
         .join('\n');
 
-      const prompt = `Continue an AI Studio-style debugging conversation for the current candidate web prototype.
-Apply the creator's latest request to the current candidate and return a new complete self-contained HTML document.
+      const prompt = `Apply the Creator's latest development request to the current candidate and return a new complete self-contained HTML document.
 Preserve all three selected ideas and the approved fusion plan. Do not silently remove working features.
+Do not add features, themes, text, branding, games, controls, or interactions that are not present in the current candidate, selected ideas, fusion plan, or Creator's latest request.
 The response summary must clearly state what changed so participants can follow the live debugging process.
 
 Experiment: ${state.experiment.title}
@@ -354,10 +381,27 @@ ${creatorMessage}
 Current candidate HTML (Draft ${state.currentDraft.attempt_number}):
 ${state.currentDraft.code}`;
 
-      const generated = await generateWithAI(getAIProvider(), prompt, {
-        systemPrompt:
-          'You are an AI Studio-style web development partner. Return only JSON with "text" containing a concise public change summary and "code" containing the full updated self-contained HTML. Never return a partial patch or Markdown fences.',
-      });
+      const provider = getAIProvider();
+      const generated = provider === 'glm'
+        ? await runDevelopmentAgent({
+          provider,
+          experimentTitle: state.experiment.title,
+          roundNumber: state.experiment.current_round,
+          selectedIdeas,
+          fusionPlan: state.fusionPlan.content,
+          currentCode: state.currentDraft.code,
+          creatorMessage,
+          recentConversation,
+          mode: 'debug',
+        })
+        : await generateWithAI(provider, prompt, {
+          systemPrompt:
+            'You are an expert web developer. Follow the supplied project state and Creator request exactly without inventing additional product behavior or visual themes. Return only JSON with "text" containing a concise change summary and "code" containing the full updated self-contained HTML. Never return a partial patch or Markdown fences.',
+        });
+      const agentSteps = (generated as any).steps;
+      if (Array.isArray(agentSteps)) {
+        for (const step of agentSteps) addDevelopmentMessage('system', step);
+      }
       sendState(
         res,
         saveDevelopmentDraft({

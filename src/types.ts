@@ -81,7 +81,7 @@ export type StudyPhase =
   | 'aborted'
   | 'ended';
 
-export type StudyAIProvider = 'deepseek' | 'gemini';
+export type StudyAIProvider = 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';
 
 export interface StudyExperiment {
   id: string;
@@ -136,6 +136,7 @@ export interface StudyComment {
   content: string;
   selected: 0 | 1;
   invested: number;
+  investor_count: number;
   created_at: string;
   updated_at?: string;
   deleted_at?: string | null;
@@ -320,4 +321,5 @@ export interface StudyState {
   };
   aiProvider: StudyAIProvider;
   marketPrivacyActive: boolean;
+  viewerParticipantCode?: string;
 }

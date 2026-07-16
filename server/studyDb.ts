@@ -13,7 +13,7 @@ export type StudyPhase =
   | 'aborted'
   | 'ended';
 
-export type StudyAIProvider = 'deepseek' | 'gemini';
+export type StudyAIProvider = 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';
 
 export type StudyState = {
   experiment: any | null;
@@ -44,6 +44,7 @@ export type StudyState = {
   };
   aiProvider: StudyAIProvider;
   marketPrivacyActive: boolean;
+  viewerParticipantCode?: string;
   endVoteSummary: {
     eligible: number;
     yes: number;
@@ -87,6 +88,16 @@ db.exec(`
     coins INTEGER NOT NULL DEFAULT 0,
     joined_at TEXT,
     last_seen_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS participant_sessions (
+    experiment_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    participant_code TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY(experiment_id, client_id),
+    UNIQUE(experiment_id, participant_code)
   );
 
   CREATE TABLE IF NOT EXISTS rounds (
@@ -335,11 +346,17 @@ function setActiveExperimentId(experimentId: string) {
 
 export function getAIProvider(): StudyAIProvider {
   const stored = db.prepare(`SELECT value FROM app_meta WHERE key = 'ai_provider'`).get() as any;
-  return stored?.value === 'gemini' ? 'gemini' : 'deepseek';
+  if (stored?.value === 'deepseek-pro') return 'deepseek-pro';
+  if (stored?.value === 'gemini') return 'gemini';
+  if (stored?.value === 'glm') return 'glm';
+  if (stored?.value === 'gpt5') return 'gpt5';
+  return 'deepseek';
 }
 
 export function setAIProvider(provider: StudyAIProvider) {
-  if (provider !== 'deepseek' && provider !== 'gemini') throw new Error('AI provider must be DeepSeek or Gemini.');
+  if (provider !== 'deepseek' && provider !== 'deepseek-pro' && provider !== 'gemini' && provider !== 'glm' && provider !== 'gpt5') {
+    throw new Error('AI model must be DeepSeek Flash, DeepSeek Pro, Gemini, GLM, or GPT-5.5.');
+  }
   db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES ('ai_provider', ?)`).run(provider);
   return getStudyState();
 }
@@ -820,7 +837,7 @@ export function createExperiment(input: {
   initialPrompt: string;
   maxRounds?: number;
 }) {
-  const title = input.title.trim() || 'Dream Island';
+  const title = input.title.trim() || 'Untitled Project';
   const created = now();
   const maxRounds = Math.min(Math.max(Number(input.maxRounds || 4), 3), 4);
   const experimentId = `exp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -831,6 +848,7 @@ export function createExperiment(input: {
       snapshotParticipants(previousExperiment.id);
     }
     db.prepare(`UPDATE participants SET coins = 0, joined_at = NULL, last_seen_at = NULL`).run();
+    db.prepare(`DELETE FROM participant_sessions`).run();
 
     db.prepare(`
       INSERT INTO experiments (id, title, brief, creator_name, creator_coins, phase, current_round, max_rounds, created_at, updated_at)
@@ -858,15 +876,69 @@ export function createExperiment(input: {
   return getStudyState();
 }
 
-export function joinStudy(code: string) {
-  const participantCode = code.trim().toUpperCase();
-  const participant = db.prepare(`SELECT * FROM participants WHERE code = ?`).get(participantCode) as any;
-  if (!participant) {
-    throw new Error('Participant code must be P01-P20.');
+const allocateParticipant = db.transaction((rawClientId: string) => {
+  const experiment = activeExperiment();
+  if (!experiment) throw new Error('Creator must start an experiment before participants can join.');
+  if (experiment.phase === 'ended' || experiment.phase === 'aborted') {
+    throw new Error('This experiment is no longer accepting participants.');
   }
 
-  const joinedAt = participant.joined_at || now();
-  db.prepare(`UPDATE participants SET joined_at = ?, last_seen_at = ? WHERE code = ?`).run(joinedAt, now(), participantCode);
+  const clientId = rawClientId.trim();
+  if (!clientId || clientId.length > 160) throw new Error('A valid participant session is required.');
+  const timestamp = now();
+  const existing = db.prepare(`
+    SELECT participant_code FROM participant_sessions
+    WHERE experiment_id = ? AND client_id = ?
+  `).get(experiment.id, clientId) as any;
+
+  if (existing?.participant_code) {
+    db.prepare(`UPDATE participant_sessions SET last_seen_at = ? WHERE experiment_id = ? AND client_id = ?`).run(
+      timestamp,
+      experiment.id,
+      clientId,
+    );
+    db.prepare(`
+      UPDATE participants
+      SET joined_at = COALESCE(joined_at, ?), last_seen_at = ?
+      WHERE code = ?
+    `).run(timestamp, timestamp, existing.participant_code);
+    return String(existing.participant_code);
+  }
+
+  const occupied = new Set<string>([
+    ...(db.prepare(`SELECT participant_code FROM participant_sessions WHERE experiment_id = ?`).all(experiment.id) as any[])
+      .map((row) => String(row.participant_code)),
+    ...(db.prepare(`SELECT code FROM participants WHERE joined_at IS NOT NULL`).all() as any[])
+      .map((row) => String(row.code)),
+  ]);
+  const participantCode = Array.from({ length: 20 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`)
+    .find((code) => !occupied.has(code));
+  if (!participantCode) throw new Error('This room is full. A maximum of 20 participants can join.');
+
+  db.prepare(`
+    INSERT INTO participant_sessions (experiment_id, client_id, participant_code, joined_at, last_seen_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(experiment.id, clientId, participantCode, timestamp, timestamp);
+  db.prepare(`
+    UPDATE participants SET joined_at = ?, last_seen_at = ? WHERE code = ?
+  `).run(timestamp, timestamp, participantCode);
+  return participantCode;
+});
+
+export function joinStudy(clientId: string) {
+  const participantCode = allocateParticipant.immediate(clientId);
+  return { ...getStudyState(), viewerParticipantCode: participantCode };
+}
+
+export function leaveStudy(clientId: string) {
+  const experiment = activeExperiment();
+  const cleanClientId = clientId.trim();
+  if (experiment && cleanClientId) {
+    db.prepare(`
+      UPDATE participant_sessions SET last_seen_at = ?
+      WHERE experiment_id = ? AND client_id = ?
+    `).run(now(), experiment.id, cleanClientId);
+  }
   return getStudyState();
 }
 
@@ -1319,7 +1391,7 @@ export function saveFusionPlan(content: string) {
   if (Number(selectedCount.count) !== 3) throw new Error('Three ranked ideas are required before generating a fusion plan.');
 
   const plan = content.trim();
-  if (!plan) throw new Error('DeepSeek returned an empty fusion plan.');
+  if (!plan) throw new Error('The selected AI returned an empty fusion plan.');
   db.prepare(`
     INSERT INTO fusion_plans (experiment_id, round_number, content, status, created_at, confirmed_at)
     VALUES (?, ?, ?, 'draft', ?, NULL)
@@ -1337,7 +1409,7 @@ export function saveDevelopmentDraft(input: { code: string; summary: string; cre
   if (!experiment) throw new Error('Experiment has not been created yet.');
   if (experiment.phase !== 'developing') throw new Error('Candidate drafts can only be created during development.');
   const code = input.code.trim();
-  if (!code) throw new Error('DeepSeek returned an empty candidate version.');
+  if (!code) throw new Error('The selected AI returned an empty candidate version.');
 
   const selectedCount = db
     .prepare(`SELECT COUNT(*) AS count FROM selected_ideas WHERE experiment_id = ? AND round_number = ?`)
@@ -1401,6 +1473,20 @@ export function saveDevelopmentDraft(input: { code: string; summary: string; cre
   });
 
   tx();
+  return getStudyState();
+}
+
+export function addDevelopmentMessage(role: 'system' | 'assistant' | 'creator', content: string) {
+  const experiment = activeExperiment();
+  if (!experiment) throw new Error('Experiment has not been created yet.');
+  if (experiment.phase !== 'developing') throw new Error('Development messages can only be added during development.');
+  const message = content.trim();
+  if (!message) return getStudyState();
+
+  db.prepare(`
+    INSERT INTO development_messages (experiment_id, round_number, role, content, draft_id, created_at)
+    VALUES (?, ?, ?, ?, NULL, ?)
+  `).run(experiment.id, experiment.current_round, role, message, now());
   return getStudyState();
 }
 

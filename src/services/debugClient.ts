@@ -49,7 +49,7 @@ export function subscribeClientDebug(listener: Listener) {
 }
 
 export async function fetchServerDebugLogs(): Promise<ClientDebugEntry[]> {
-  const response = await fetch('/api/debug/logs');
+  const response = await fetch('/api/debug/logs', { cache: 'no-store' });
   const data = await response.json();
   return (data.logs || []).map((log: any) => ({
     id: log.id,
@@ -63,5 +63,5 @@ export async function fetchServerDebugLogs(): Promise<ClientDebugEntry[]> {
 }
 
 export async function clearServerDebugLogs() {
-  await fetch('/api/debug/clear', { method: 'POST' });
+  await fetch('/api/debug/clear', { method: 'POST', cache: 'no-store' });
 }

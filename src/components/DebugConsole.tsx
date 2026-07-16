@@ -123,7 +123,7 @@ export const DebugConsole = ({ isOpen, onClose }: DebugConsoleProps) => {
                             </span>
                           ) : (
                             <span className="flex items-center gap-2">
-                               <span className="text-[9px] text-purple-500 uppercase font-black tracking-widest shrink-0">[DeepSeek]</span>
+                               <span className="text-[9px] text-purple-500 uppercase font-black tracking-widest shrink-0">[AI]</span>
                                <span className="truncate text-purple-200/60 font-mono tracking-tighter opacity-80">{log.prompt?.slice(0, 100).replace(/\s+/g, ' ')}...</span>
                             </span>
                           )}
