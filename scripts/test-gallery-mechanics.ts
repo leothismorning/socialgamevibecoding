@@ -1,11 +1,35 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 
-process.env.STUDY_DB_PATH = path.join(process.cwd(), 'data', `gallery-mechanics-test-${Date.now()}.db`);
+const testDbPath = path.join(process.cwd(), 'data', `gallery-mechanics-test-${Date.now()}.db`);
+process.env.STUDY_DB_PATH = testDbPath;
 process.env.GALLERY_ROUND_DURATION_MS = '1000';
+
+const legacyDb = new Database(testDbPath);
+legacyDb.exec(`
+  CREATE TABLE gallery_sessions (
+    study_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    code TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY (study_id, client_id),
+    UNIQUE (study_id, code)
+  );
+  INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
+  VALUES ('gallery_v2_main', 'legacy-creator-tab', 'creator', 'C01', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+`);
+legacyDb.close();
 
 const gallery = await import('../server/galleryDb.js');
 const { db } = await import('../server/studyDb.js');
+
+const migratedSessionsSchema = db.prepare(`
+  SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'
+`).get() as { sql: string };
+assert.doesNotMatch(migratedSessionsSchema.sql, /UNIQUE\s*\(\s*study_id\s*,\s*code\s*\)/i);
 
 const html = (title: string, version = 'initial') => `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>${title}</title></head>
@@ -20,7 +44,9 @@ const hostClient = 'host-tab';
 const hostState = gallery.joinGallery(hostClient, 'host', 'H01');
 assert.equal(hostState.viewer?.code, 'H01');
 assert.equal(hostState.viewer?.role, 'host');
-expectError(() => gallery.joinGallery('second-host-tab', 'host', 'H01'), /H01 is already occupied/i);
+const secondHostState = gallery.joinGallery('second-host-tab', 'host', 'H01');
+assert.equal(secondHostState.viewer?.code, 'H01');
+assert.equal(secondHostState.sessions.filter((session: any) => session.code === 'H01').length, 2);
 expectError(() => gallery.joinGallery('invalid-creator-tab', 'creator', 'P01'), /valid creator identity/i);
 [2, 0, 1].forEach((index) => {
   const clientId = creatorClients[index];
@@ -44,9 +70,11 @@ creatorClients.forEach((clientId, index) => {
 
 const contributorOne = gallery.joinGallery('contributor-tab-1', 'contributor', 'P01');
 const contributorTwo = gallery.joinGallery('contributor-tab-2', 'contributor', 'P02');
-expectError(() => gallery.joinGallery('duplicate-contributor-tab', 'contributor', 'P02'), /P02 is already occupied/i);
+const duplicateContributor = gallery.joinGallery('duplicate-contributor-tab', 'contributor', 'P02');
 assert.equal(contributorOne.viewer?.code, 'P01');
 assert.equal(contributorTwo.viewer?.code, 'P02');
+assert.equal(duplicateContributor.viewer?.code, 'P02');
+assert.equal(duplicateContributor.sessions.filter((session: any) => session.code === 'P02').length, 2);
 const firstPublishedApp = (contributorOne.apps as any[]).find((app: any) => app.creator_code === 'C01');
 let state = gallery.toggleGalleryAppLike('contributor-tab-1', firstPublishedApp.id, 'showcase');
 assert.equal((state.apps as any[]).find((app: any) => app.id === firstPublishedApp.id)?.viewer_showcase_liked, 1);
@@ -237,5 +265,5 @@ assert.equal(
 const nextCreator = gallery.joinGallery('next-creator-tab', 'creator', 'C01');
 assert.equal(nextCreator.viewer?.code, 'C01');
 
-console.log('Gallery mechanics test passed: self-selected identity numbers, independent Host role, archived experiment rollover, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+console.log('Gallery mechanics test passed: shared self-selected identity numbers, independent Host role, archived experiment rollover, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
 db.close();

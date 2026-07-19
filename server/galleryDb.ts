@@ -49,8 +49,7 @@ db.exec(`
     code TEXT NOT NULL,
     joined_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    PRIMARY KEY (study_id, client_id),
-    UNIQUE (study_id, code)
+    PRIMARY KEY (study_id, client_id)
   );
 
   CREATE TABLE IF NOT EXISTS gallery_apps (
@@ -167,6 +166,37 @@ db.exec(`
   );
 `);
 
+function migrateGallerySessionsToSharedCodes() {
+  const table = db.prepare(`
+    SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'
+  `).get() as { sql?: string } | undefined;
+  if (!/UNIQUE\s*\(\s*study_id\s*,\s*code\s*\)/i.test(table?.sql || '')) return;
+
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE gallery_sessions RENAME TO gallery_sessions_with_unique_code;
+
+      CREATE TABLE gallery_sessions (
+        study_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        code TEXT NOT NULL,
+        joined_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        PRIMARY KEY (study_id, client_id)
+      );
+
+      INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
+      SELECT study_id, client_id, role, code, joined_at, last_seen_at
+      FROM gallery_sessions_with_unique_code;
+
+      DROP TABLE gallery_sessions_with_unique_code;
+    `);
+  })();
+}
+
+migrateGallerySessionsToSharedCodes();
+
 const activeStudySetting = db.prepare(`SELECT value FROM gallery_settings WHERE key = ?`).get(
   ACTIVE_STUDY_SETTING,
 ) as { value?: string } | undefined;
@@ -245,14 +275,6 @@ export function joinGallery(clientId: string, role: GalleryRole, requestedCode: 
   if (existing) {
     if (existing.role !== role) throw new Error(`This tab is already registered as ${existing.role}.`);
     return getGalleryState(cleanClientId);
-  }
-
-  const occupied = new Set(
-    (db.prepare(`SELECT code FROM gallery_sessions WHERE study_id = ?`).all(STUDY_ID) as any[])
-      .map((row) => String(row.code)),
-  );
-  if (occupied.has(cleanCode)) {
-    throw new Error(`${cleanCode} is already occupied. Choose another identity number.`);
   }
 
   const timestamp = now();

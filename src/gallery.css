@@ -104,8 +104,6 @@
 .gallery-seat-grid button:hover:not(:disabled) { color: #573cc4; border-color: #8064eb; transform: translateY(-1px); box-shadow: 0 7px 16px rgba(72, 71, 173, .12); }
 .gallery-seat-grid button strong { font-size: 11px; }
 .gallery-seat-grid button span { color: #738299; font-size: 7px; }
-.gallery-seat-grid button.is-occupied { color: #8e99a8; border-color: #d8dde5; background: #e7ebf0; cursor: not-allowed; filter: grayscale(1); }
-.gallery-seat-grid button.is-occupied span { color: #9ba5b2; }
 
 .gallery-hero { min-height: 310px; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .6fr); align-items: center; gap: 50px; margin-bottom: 34px; padding: 44px clamp(28px, 5vw, 72px); overflow: hidden; border: 1px solid #dbe3f0; border-radius: 32px; background: linear-gradient(125deg, rgba(255,255,255,.95), rgba(238,242,255,.94) 55%, rgba(252,231,243,.82)); box-shadow: 0 22px 65px rgba(55, 71, 116, .08); }
 .gallery-hero h1 { margin: 14px 0 18px; font-size: clamp(38px, 5.2vw, 74px); line-height: .99; letter-spacing: -.065em; background: linear-gradient(100deg, #152444 20%, #5b48df 66%, #d83c93); color: transparent; background-clip: text; }

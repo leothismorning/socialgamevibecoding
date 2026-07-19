@@ -135,7 +135,6 @@ function IdentityPanel({ state, join, busy }: {
 }) {
   const [selectedRole, setSelectedRole] = useState<GalleryRole | null>(null);
   const contributorsOpen = state.publishedAppCount === state.creatorCount;
-  const occupiedCodes = new Set(state.sessions.map((session) => session.code));
   const seatCodes = selectedRole === 'host'
     ? ['H01']
     : selectedRole === 'creator'
@@ -163,22 +162,18 @@ function IdentityPanel({ state, join, busy }: {
         </div>
         {selectedRole && (
           <section className="gallery-seat-picker">
-            <header><strong>选择你的身份编号</strong><span>灰色编号已被占用</span></header>
+            <header><strong>选择你的身份编号</strong><span>任何编号都可以进入</span></header>
             <div className={`gallery-seat-grid is-${selectedRole}`}>
-              {seatCodes.map((code) => {
-                const occupied = occupiedCodes.has(code);
-                return (
-                  <button
-                    key={code}
-                    className={occupied ? 'is-occupied' : ''}
-                    disabled={occupied || Boolean(busy)}
-                    onClick={() => join(selectedRole, code)}
-                  >
-                    <strong>{code}</strong>
-                    <span>{occupied ? '已占用' : '可选择'}</span>
-                  </button>
-                );
-              })}
+              {seatCodes.map((code) => (
+                <button
+                  key={code}
+                  disabled={Boolean(busy)}
+                  onClick={() => join(selectedRole, code)}
+                >
+                  <strong>{code}</strong>
+                  <span>进入身份</span>
+                </button>
+              ))}
             </div>
           </section>
         )}
