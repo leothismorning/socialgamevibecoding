@@ -85,7 +85,11 @@ function playRound(roundNumber: number) {
       () => gallery.cancelGalleryGenerationJob('contributor-tab-1', cancellableJob.id),
       /requires the creator role/i,
     );
-    const afterCancel = gallery.cancelGalleryGenerationJob(creatorClients[1], cancellableJob.id);
+    expectError(
+      () => gallery.cancelGalleryGenerationJob(creatorClients[1], cancellableJob.id),
+      /Only Creator 1/i,
+    );
+    const afterCancel = gallery.cancelGalleryGenerationJob(creatorClients[0], cancellableJob.id);
     const cancelledJob = (afterCancel.generationJobs as any[])
       .find((item: any) => Number(item.id) === Number(cancellableJob.id));
     assert.equal(
@@ -118,6 +122,30 @@ function playRound(roundNumber: number) {
 }
 
 playRound(1);
+const roundOneJob = db.prepare(`
+  SELECT id FROM gallery_generation_jobs
+  WHERE round_number = 1 AND selected_comment_id IS NOT NULL
+  ORDER BY id
+  LIMIT 1
+`).get() as { id: number };
+expectError(
+  () => gallery.redevelopGalleryGenerationJob(creatorClients[1], roundOneJob.id),
+  /Only Creator 1/i,
+);
+state = gallery.redevelopGalleryGenerationJob(creatorClients[0], roundOneJob.id);
+assert.equal(state.study.status, 'round_processing');
+const redevelopJob = gallery.nextGalleryGenerationJob();
+assert.equal(Number(redevelopJob.id), Number(roundOneJob.id));
+assert.match(String(redevelopJob.current_code), /initial/);
+assert.doesNotMatch(String(redevelopJob.current_code), /round-1/);
+db.prepare(`
+  UPDATE gallery_generation_jobs
+  SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+  WHERE id = ?
+`).run(roundOneJob.id);
+assert.equal(gallery.finalizeGalleryRoundIfReady(), true);
+assert.equal(gallery.getGalleryState(creatorClients[0]).study.status, 'round_review');
+
 gallery.startNextGalleryRound(creatorClients[0]);
 playRound(2);
 gallery.startNextGalleryRound(creatorClients[0]);
@@ -141,5 +169,5 @@ expectError(
   /active round/i,
 );
 
-console.log('Gallery mechanics test passed: 3 creators, 3 apps, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+console.log('Gallery mechanics test passed: 3 creators, 3 apps, Host stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
 db.close();

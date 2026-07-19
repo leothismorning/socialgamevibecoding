@@ -559,7 +559,15 @@ export function nextGalleryGenerationJob() {
     FROM gallery_generation_jobs j
     JOIN gallery_apps a ON a.id = j.app_id
     JOIN gallery_comments c ON c.id = j.selected_comment_id
-    JOIN gallery_versions v ON v.id = a.current_version_id
+    JOIN gallery_versions v ON v.id = (
+      SELECT base.id
+      FROM gallery_versions base
+      WHERE base.study_id = j.study_id
+        AND base.app_id = j.app_id
+        AND base.round_number < j.round_number
+      ORDER BY base.round_number DESC, base.version_number DESC, base.id DESC
+      LIMIT 1
+    )
     WHERE j.study_id = ? AND j.status = 'pending'
     ORDER BY j.id
     LIMIT 1
@@ -627,7 +635,11 @@ export function failGalleryGenerationJob(jobId: number, error: unknown) {
 }
 
 export function cancelGalleryGenerationJob(clientId: string, jobId: number) {
-  const viewer = requireSession(clientId, 'creator');
+  const viewer = requireHost(clientId);
+  const currentStudy = study();
+  if (currentStudy.status !== 'round_processing') {
+    throw new Error('AI tasks can only be stopped while the current round is processing.');
+  }
   const job = db.prepare(`
     SELECT j.*, a.creator_code AS app_creator_code, a.title AS app_title
     FROM gallery_generation_jobs j
@@ -635,6 +647,9 @@ export function cancelGalleryGenerationJob(clientId: string, jobId: number) {
     WHERE j.id = ? AND j.study_id = ?
   `).get(jobId, STUDY_ID) as any;
   if (!job) throw new Error('Generation job not found.');
+  if (Number(job.round_number) !== Number(currentStudy.current_round)) {
+    throw new Error('Only the current round AI tasks can be stopped.');
+  }
   if (!['pending', 'running'].includes(String(job.status))) {
     throw new Error('This AI task has already finished.');
   }
@@ -647,15 +662,57 @@ export function cancelGalleryGenerationJob(clientId: string, jobId: number) {
   return getGalleryState(clientId);
 }
 
+export function redevelopGalleryGenerationJob(clientId: string, jobId: number) {
+  requireHost(clientId);
+  const currentStudy = study();
+  if (!['round_processing', 'round_review'].includes(String(currentStudy.status))) {
+    throw new Error('Redevelopment is only available before the next round starts.');
+  }
+  const job = db.prepare(`
+    SELECT j.*, a.title AS app_title
+    FROM gallery_generation_jobs j
+    JOIN gallery_apps a ON a.id = j.app_id
+    WHERE j.id = ? AND j.study_id = ?
+  `).get(jobId, STUDY_ID) as any;
+  if (!job) throw new Error('Generation job not found.');
+  if (Number(job.round_number) !== Number(currentStudy.current_round)) {
+    throw new Error('The next round has already started; this result is locked.');
+  }
+  if (['pending', 'running'].includes(String(job.status))) {
+    throw new Error('Stop the active AI task before requesting redevelopment.');
+  }
+  if (!job.selected_comment_id) {
+    throw new Error('This App did not select a comment in the current round.');
+  }
+
+  const timestamp = now();
+  const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE gallery_generation_jobs
+      SET status = 'pending', attempts = 0, error = NULL,
+          started_at = NULL, completed_at = NULL
+      WHERE id = ?
+    `).run(jobId);
+    db.prepare(`
+      UPDATE gallery_rounds
+      SET status = 'processing', completed_at = NULL
+      WHERE study_id = ? AND round_number = ?
+    `).run(STUDY_ID, currentStudy.current_round);
+    db.prepare(`
+      UPDATE gallery_studies
+      SET status = 'round_processing', updated_at = ?
+      WHERE id = ?
+    `).run(timestamp, STUDY_ID);
+  });
+  tx();
+  return getGalleryState(clientId);
+}
+
 export function retryGalleryGenerationJob(clientId: string, jobId: number) {
   requireHost(clientId);
   const job = db.prepare(`SELECT * FROM gallery_generation_jobs WHERE id = ? AND study_id = ?`).get(jobId, STUDY_ID) as any;
   if (!job || job.status !== 'failed') throw new Error('Only failed generation jobs can be retried.');
-  db.prepare(`UPDATE gallery_generation_jobs SET status = 'pending', attempts = 0, error = NULL, completed_at = NULL WHERE id = ?`).run(
-    jobId,
-  );
-  db.prepare(`UPDATE gallery_studies SET status = 'round_processing', updated_at = ? WHERE id = ?`).run(now(), STUDY_ID);
-  return getGalleryState(clientId);
+  return redevelopGalleryGenerationJob(clientId, jobId);
 }
 
 export function finalizeGalleryRoundIfReady() {

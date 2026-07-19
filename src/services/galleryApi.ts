@@ -50,4 +50,7 @@ export const galleryApi = {
   cancelJob: (clientId: string, jobId: number) => request(`/api/gallery/jobs/${jobId}/cancel`, {
     method: 'POST', body: body({ clientId }),
   }),
+  redevelopJob: (clientId: string, jobId: number) => request(`/api/gallery/jobs/${jobId}/redevelop`, {
+    method: 'POST', body: body({ clientId }),
+  }),
 };

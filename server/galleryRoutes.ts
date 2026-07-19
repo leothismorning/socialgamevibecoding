@@ -12,6 +12,7 @@ import {
   lockExpiredGalleryRound,
   nextGalleryGenerationJob,
   publishCreatorApp,
+  redevelopGalleryGenerationJob,
   retryGalleryGenerationJob,
   saveCreatorDraft,
   saveGalleryComment,
@@ -301,6 +302,16 @@ export function registerGalleryRoutes(app: Express) {
       const jobId = Number(req.params.jobId);
       const state = cancelGalleryGenerationJob(clientIdFrom(req), jobId);
       activeGenerationControllers.get(jobId)?.abort(new Error('Stopped by Creator.'));
+      res.json(state);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/gallery/jobs/:jobId/redevelop', (req, res) => {
+    try {
+      const state = redevelopGalleryGenerationJob(clientIdFrom(req), Number(req.params.jobId));
+      void processGalleryAutomation();
       res.json(state);
     } catch (error) {
       sendError(res, error);

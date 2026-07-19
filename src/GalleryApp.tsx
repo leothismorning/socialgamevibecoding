@@ -20,7 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { galleryApi } from './services/galleryApi';
-import type { GalleryAppRecord, GalleryState, GalleryStatus } from './galleryTypes';
+import type { GalleryAppRecord, GalleryJob, GalleryState, GalleryStatus } from './galleryTypes';
 import './gallery.css';
 
 const CLIENT_KEY = 'gallery-v2-client-id';
@@ -48,6 +48,15 @@ const statusCopy: Record<GalleryStatus, { label: string; detail: string }> = {
 function formatCountdown(milliseconds: number) {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function generationJobStatusLabel(status: GalleryJob['status']) {
+  if (status === 'pending') return '等待启动';
+  if (status === 'running') return '生成中';
+  if (status === 'completed') return '已完成';
+  if (status === 'cancelled') return '已停止';
+  if (status === 'failed') return '生成失败';
+  return '无需生成';
 }
 
 function Preview({ code, title, compact = false }: { code?: string; title: string; compact?: boolean }) {
@@ -486,37 +495,6 @@ export default function GalleryApp() {
           <AppDetail state={state} app={selectedApp} close={() => setSelectedAppId('')} action={action} clientId={clientId} busy={busy} />
         ) : (
           <section className="gallery-home">
-            {state.study.status === 'round_processing'
-              && state.viewer?.role === 'creator'
-              && currentGenerationJobs.length > 0 && (
-              <section className="gallery-ai-stop-panel">
-                <header>
-                  <span><LoaderCircle className="spin" /></span>
-                  <div><strong>AI 正在生成新版本</strong><p>如果请求长时间没有返回，可以停止对应任务；当前版本不会丢失。</p></div>
-                </header>
-                <div className="gallery-ai-stop-jobs">
-                  {currentGenerationJobs.map((job) => {
-                    const active = ['pending', 'running'].includes(job.status);
-                    const statusLabel = job.status === 'pending' ? '等待启动'
-                      : job.status === 'running' ? '生成中'
-                        : job.status === 'completed' ? '已完成'
-                          : job.status === 'cancelled' ? '已停止'
-                            : job.status === 'failed' ? '生成失败' : '无需生成';
-                    return (
-                      <article key={job.id}>
-                        <div><strong>{job.app_title}</strong><span className={`is-${job.status}`}>{statusLabel}</span></div>
-                        {active ? (
-                          <button
-                            disabled={Boolean(busy)}
-                            onClick={() => action(`cancel-job-${job.id}`, () => galleryApi.cancelJob(clientId, job.id))}
-                          ><X /> 停止这个 AI</button>
-                        ) : <em>{statusLabel}</em>}
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
             <div className="gallery-grid" aria-label="公开作品画廊">
               {[0, 1, 2].map((index) => {
                 const app = publishedApps[index];
@@ -528,9 +506,9 @@ export default function GalleryApp() {
               })}
             </div>
 
-            {state.study.status === 'round_processing' && (
+            {state.study.status === 'round_processing' && !isHost && (
               <section className="gallery-processing-panel">
-                <LoaderCircle className="spin" /><div><h3>AI 正在按 App 顺序生成新版本</h3><p>初版与评论已经保留。页面会自动刷新，不需要重复点击。</p></div>
+                <LoaderCircle className="spin" /><div><h3>AI 正在同时生成三个新版本</h3><p>三个 App 独立开发，完成时间可能不同。页面会自动刷新。</p></div>
                 <div>{state.generationJobs.filter((job) => job.round_number === state.study.current_round).map((job) => <span key={job.id} className={`is-${job.status}`}>{job.app_title}<strong>{job.status}</strong></span>)}</div>
               </section>
             )}
@@ -539,11 +517,36 @@ export default function GalleryApp() {
 
         {isHost && !selectedApp && (
           <section className="gallery-host-panel">
-            <div><span className="gallery-eyebrow">HOST CONTROL · C01</span><h3>全局实验控制</h3><p>Host 只负责正式开始、开启下一轮和结束最终投票，不参与抽签选择。</p></div>
-            {state.study.status === 'preparing' && <button disabled={state.publishedAppCount !== 3 || Boolean(busy)} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
-            {state.study.status === 'round_review' && <button disabled={Boolean(busy)} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>开启第 {state.study.current_round + 1} 轮 <ArrowRight /></button>}
-            {state.study.status === 'final_voting' && <button disabled={Boolean(busy)} onClick={() => action('end', () => galleryApi.end(clientId))}><Check /> 结束最终投票</button>}
-            {state.generationJobs.filter((job) => job.status === 'failed').map((job) => <button className="is-danger" key={job.id} onClick={() => action('retry', () => galleryApi.retryJob(clientId, job.id))}>重试 {job.app_title}</button>)}
+            <header>
+              <div><span className="gallery-eyebrow">HOST CONTROL · C01</span><h3>全局实验控制</h3><p>Host 控制实验轮次，并可在进入下一轮前停止或重新开发本轮 App；抽中的评论不会改变。</p></div>
+              <div className="gallery-host-primary-actions">
+                {state.study.status === 'preparing' && <button disabled={state.publishedAppCount !== 3 || Boolean(busy)} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
+                {state.study.status === 'round_review' && <button disabled={Boolean(busy)} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>开启第 {state.study.current_round + 1} 轮 <ArrowRight /></button>}
+                {state.study.status === 'final_voting' && <button disabled={Boolean(busy)} onClick={() => action('end', () => galleryApi.end(clientId))}><Check /> 结束最终投票</button>}
+              </div>
+            </header>
+            {['round_processing', 'round_review'].includes(state.study.status) && currentGenerationJobs.length > 0 && (
+              <div className="gallery-host-job-grid">
+                {currentGenerationJobs.map((job) => {
+                  const active = ['pending', 'running'].includes(job.status);
+                  const canRedevelop = !active && Boolean(job.selected_comment_id);
+                  const statusLabel = generationJobStatusLabel(job.status);
+                  return (
+                    <article key={job.id} className={`is-${job.status}`}>
+                      <div className="gallery-host-job-status">
+                        <div><strong>{job.app_title}</strong><small>{job.app_creator_code}</small></div>
+                        <span>{statusLabel}</span>
+                      </div>
+                      <div className="gallery-host-job-actions">
+                        {active && <button className="is-stop" disabled={Boolean(busy)} onClick={() => action(`cancel-job-${job.id}`, () => galleryApi.cancelJob(clientId, job.id))}><X /> 停止 AI</button>}
+                        {canRedevelop && <button className="is-redevelop" disabled={Boolean(busy)} onClick={() => action(`redevelop-job-${job.id}`, () => galleryApi.redevelopJob(clientId, job.id))}><RefreshCw /> 重新开发</button>}
+                        {!active && !canRedevelop && <em>本轮没有抽中评论</em>}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
       </main>
