@@ -261,6 +261,65 @@ function CreatorStudio({
   );
 }
 
+function EvolutionHistory({ state, app }: { state: GalleryState; app: GalleryAppRecord }) {
+  const rounds = [1, 2, 3].map((roundNumber) => {
+    const lottery = state.lotteries.find(
+      (item) => item.app_id === app.id && Number(item.round_number) === roundNumber,
+    );
+    const versions = state.versions
+      .filter((version) => version.app_id === app.id && Number(version.round_number) === roundNumber)
+      .sort((left, right) => Number(right.version_number) - Number(left.version_number));
+    const version = versions[0];
+    const job = state.generationJobs.find(
+      (item) => item.app_id === app.id && Number(item.round_number) === roundNumber,
+    );
+    return { roundNumber, lottery, versions, version, job };
+  });
+
+  return (
+    <section className="gallery-evolution-history">
+      <header>
+        <div><span className="gallery-eyebrow"><Sparkles /> EVOLUTION HISTORY</span><h3>三轮迭代轨迹</h3></div>
+        <p>每轮展示抽中的评论，以及该评论最终开发出的版本。</p>
+      </header>
+      <div className="gallery-evolution-rounds">
+        {rounds.map(({ roundNumber, lottery, versions, version, job }) => (
+          <article key={roundNumber} className={version ? 'has-version' : 'is-empty'}>
+            <header>
+              <span>R{roundNumber}</span>
+              <div><strong>第 {roundNumber} 轮</strong><small>{version ? `采用 V${Number(version.version_number) + 1}` : '没有生成新版本'}</small></div>
+              {versions.length > 1 && <em>本轮重新开发 {versions.length - 1} 次</em>}
+            </header>
+            <div className="gallery-evolution-content">
+              <section className="gallery-evolution-comment">
+                <div><MessageCircle /><strong>抽中的评论</strong></div>
+                {lottery?.selected_comment ? (
+                  <blockquote>{lottery.selected_comment}</blockquote>
+                ) : (
+                  <p>本轮没有有效评论被抽中，因此 App 沿用上一轮版本。</p>
+                )}
+                {lottery?.selected_author && <small>评论者：{lottery.selected_author}</small>}
+                {version?.summary && <div className="gallery-evolution-summary"><Code2 /><span>{version.summary}</span></div>}
+                {!version && lottery?.selected_comment && (
+                  <div className="gallery-evolution-summary is-warning"><Clock3 /><span>评论已抽中，但没有成功发布新版本。任务状态：{job ? generationJobStatusLabel(job.status) : '未知'}</span></div>
+                )}
+              </section>
+              {version ? (
+                <div className="gallery-evolution-preview">
+                  <div><span>第 {roundNumber} 轮开发结果</span><strong>V{Number(version.version_number) + 1}</strong></div>
+                  <Preview code={version.code} title={`${app.title} 第 ${roundNumber} 轮迭代结果`} />
+                </div>
+              ) : (
+                <div className="gallery-evolution-empty"><Clock3 /><strong>本轮无新页面</strong><p>当前作品继续使用上一轮已经公开的版本。</p></div>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function AppDetail({
   state,
   app,
@@ -378,6 +437,7 @@ function AppDetail({
           )}
         </aside>
       </div>
+      {state.study.status === 'ended' && <EvolutionHistory state={state} app={app} />}
     </section>
   );
 }
