@@ -570,7 +570,7 @@ export function endGalleryRoundEarly(
   return getGalleryState(clientId);
 }
 
-export function nextGalleryGenerationJob() {
+export function nextGalleryGenerationJob(jobId?: number) {
   const job = db.prepare(`
     SELECT j.*, a.title AS app_title, a.brief AS app_brief, a.current_version_id,
            a.creator_code AS app_creator_code,
@@ -589,9 +589,10 @@ export function nextGalleryGenerationJob() {
       LIMIT 1
     )
     WHERE j.study_id = ? AND j.status = 'pending'
+      AND (? IS NULL OR j.id = ?)
     ORDER BY j.id
     LIMIT 1
-  `).get(STUDY_ID) as any;
+  `).get(STUDY_ID, jobId ?? null, jobId ?? null) as any;
   if (!job) return null;
   db.prepare(`
     UPDATE gallery_generation_jobs

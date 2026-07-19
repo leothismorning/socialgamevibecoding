@@ -566,7 +566,7 @@ export default function GalleryApp() {
                   return (
                     <article key={job.id} className={`is-${job.status}`}>
                       <div className="gallery-host-job-status">
-                        <div><strong>{job.app_title}</strong><small>{job.app_creator_code}</small></div>
+                        <div><strong>{job.app_title}</strong><small>{job.app_creator_code} · 独立 Key {Number(job.app_creator_code.slice(1))}</small></div>
                         <span>{statusLabel}</span>
                       </div>
                       <div className="gallery-host-job-actions">

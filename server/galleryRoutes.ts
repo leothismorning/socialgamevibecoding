@@ -49,9 +49,9 @@ let automationBusy = false;
 const activeGenerationControllers = new Map<number, AbortController>();
 const GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
 
-function apiKeyForGalleryJob(job: any) {
-  if (String(job.app_creator_code) === 'C02') return process.env.SUIXIANG_API_KEY_APP2;
-  if (String(job.app_creator_code) === 'C03') return process.env.SUIXIANG_API_KEY_APP3;
+function apiKeyForCreatorCode(creatorCode: unknown) {
+  if (String(creatorCode) === 'C02') return process.env.SUIXIANG_API_KEY_APP2;
+  if (String(creatorCode) === 'C03') return process.env.SUIXIANG_API_KEY_APP3;
   return process.env.SUIXIANG_API_KEY;
 }
 
@@ -79,7 +79,7 @@ async function processGalleryGenerationJob(job: any) {
       currentCode: String(job.current_code || ''),
       creatorMessage: selectedComment,
       signal: controller.signal,
-      apiKey: provider === 'gpt5' ? apiKeyForGalleryJob(job) : undefined,
+      apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(job.app_creator_code) : undefined,
       mode: 'round-candidate',
     });
     completeGalleryGenerationJob(jobId, result.code, result.text);
@@ -91,20 +91,25 @@ async function processGalleryGenerationJob(job: any) {
   }
 }
 
+async function processGalleryGenerationJobUntilSettled(initialJob: any) {
+  const jobId = Number(initialJob.id);
+  let job: any = initialJob;
+  while (job) {
+    await processGalleryGenerationJob(job);
+    job = nextGalleryGenerationJob(jobId);
+  }
+  finalizeGalleryRoundIfReady();
+}
+
 export async function processGalleryAutomation() {
   if (automationBusy) return;
   automationBusy = true;
   try {
     lockExpiredGalleryRound();
-    while (true) {
-      const jobs: any[] = [];
-      let job = nextGalleryGenerationJob();
-      while (job) {
-        jobs.push(job);
-        job = nextGalleryGenerationJob();
-      }
-      if (jobs.length === 0) break;
-      await Promise.allSettled(jobs.map(processGalleryGenerationJob));
+    let job = nextGalleryGenerationJob();
+    while (job) {
+      void processGalleryGenerationJobUntilSettled(job);
+      job = nextGalleryGenerationJob();
     }
     finalizeGalleryRoundIfReady();
   } finally {
@@ -141,18 +146,20 @@ export function registerGalleryRoutes(app: Express) {
   app.post('/api/gallery/apps/generate', async (req, res) => {
     try {
       const clientId = clientIdFrom(req);
-      creatorContext(clientId);
+      const state = creatorContext(clientId);
       const title = String(req.body?.title || '').trim();
       const brief = String(req.body?.brief || '').trim();
       const prompt = String(req.body?.prompt || '').trim();
       if (!title) throw new Error('App title is required.');
       if (!prompt) throw new Error('Describe the App you want the AI to build.');
+      const provider = getAIProvider();
       const result = await runDevelopmentAgent({
-        provider: getAIProvider(),
+        provider,
         experimentTitle: title,
         brief,
         creatorPrompt: prompt,
         creatorMessage: prompt,
+        apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(state.viewer?.code) : undefined,
         mode: 'initial-project',
       });
       res.json(saveCreatorDraft({
@@ -205,14 +212,16 @@ export function registerGalleryRoutes(app: Express) {
         .slice(-8)
         .map((item) => `${item.role}: ${item.content}`)
         .join('\n');
+      const provider = getAIProvider();
       const result = await runDevelopmentAgent({
-        provider: getAIProvider(),
+        provider,
         experimentTitle: String(app.title),
         brief: String(app.brief || ''),
         creatorPrompt: String(app.creator_prompt || ''),
         currentCode: String(app.draft_code),
         creatorMessage: message,
         recentConversation: conversation,
+        apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(state.viewer?.code) : undefined,
         mode: 'debug',
       });
       res.json(saveCreatorDraft({

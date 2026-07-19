@@ -120,6 +120,13 @@ function playRound(roundNumber: number) {
   }
 
   let job = gallery.nextGalleryGenerationJob();
+  if (roundNumber === 1 && job) {
+    const retryJobId = Number(job.id);
+    gallery.failGalleryGenerationJob(retryJobId, new Error('Simulated first-attempt network failure.'));
+    job = gallery.nextGalleryGenerationJob(retryJobId);
+    assert.equal(Number(job.id), retryJobId);
+    assert.equal(Number(job.attempts), 2);
+  }
   let completed = 0;
   while (job) {
     gallery.completeGalleryGenerationJob(
@@ -185,5 +192,5 @@ expectError(
   /active round/i,
 );
 
-console.log('Gallery mechanics test passed: direct gallery likes, Host early round end, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+console.log('Gallery mechanics test passed: direct gallery likes, Host early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
 db.close();
