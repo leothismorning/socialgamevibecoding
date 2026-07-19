@@ -281,6 +281,7 @@
 .gallery-host-primary-actions button { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 16px; color: #fff !important; border: 0; border-radius: 13px; background: linear-gradient(110deg, var(--blue), var(--violet)); font-size: 11px !important; font-weight: 900; cursor: pointer; white-space: nowrap; }
 .gallery-host-primary-actions button svg { width: 16px; }
 .gallery-host-primary-actions button.is-end-round { background: linear-gradient(110deg, #ed7b35, #db3f68); }
+.gallery-host-primary-actions button.is-new-experiment { background: linear-gradient(110deg, #13a36f, #2f7de9); }
 .gallery-host-job-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding-top: 15px; border-top: 1px solid #e4eaf3; }
 .gallery-host-job-grid article { min-width: 0; display: grid; gap: 12px; padding: 13px; border: 1px solid #dfe6f1; border-radius: 14px; background: #f8faff; }
 .gallery-host-job-grid article.is-running { border-color: #c8daf9; background: #f3f7ff; }

@@ -16,13 +16,21 @@ export type GalleryViewer = {
   code: string;
 };
 
-const STUDY_ID = 'gallery_v2_main';
+const LEGACY_STUDY_ID = 'gallery_v2_main';
+const ACTIVE_STUDY_SETTING = 'active_study_id';
+let STUDY_ID = LEGACY_STUDY_ID;
 const CREATOR_COUNT = 3;
 const CONTRIBUTOR_COUNT = 20;
 const DEFAULT_ROUND_DURATION_SECONDS = 15 * 60;
 const now = () => new Date().toISOString();
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS gallery_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS gallery_studies (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'preparing',
@@ -158,6 +166,19 @@ db.exec(`
     UNIQUE (study_id, app_id, round_number)
   );
 `);
+
+const activeStudySetting = db.prepare(`SELECT value FROM gallery_settings WHERE key = ?`).get(
+  ACTIVE_STUDY_SETTING,
+) as { value?: string } | undefined;
+if (activeStudySetting?.value) {
+  STUDY_ID = activeStudySetting.value;
+} else {
+  db.prepare(`INSERT INTO gallery_settings (key, value, updated_at) VALUES (?, ?, ?)`).run(
+    ACTIVE_STUDY_SETTING,
+    STUDY_ID,
+    now(),
+  );
+}
 
 function configuredRoundDurationSeconds() {
   const milliseconds = Number(process.env.GALLERY_ROUND_DURATION_MS || 0);
@@ -789,6 +810,36 @@ export function endGalleryProject(clientId: string) {
     timestamp,
     STUDY_ID,
   );
+  return getGalleryState(clientId);
+}
+
+export function startNewGalleryExperiment(clientId: string) {
+  const host = requireHost(clientId);
+  const currentStudy = study();
+  if (currentStudy.status !== 'ended') {
+    throw new Error('The current experiment must be ended before starting a new one.');
+  }
+
+  const timestamp = now();
+  const nextStudyId = `gallery_${Date.now()}_${randomUUID().slice(0, 8)}`;
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO gallery_studies
+        (id, status, current_round, round_duration_seconds, created_at, updated_at)
+      VALUES (?, 'preparing', 0, ?, ?, ?)
+    `).run(nextStudyId, configuredRoundDurationSeconds(), timestamp, timestamp);
+    db.prepare(`
+      INSERT INTO gallery_settings (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(ACTIVE_STUDY_SETTING, nextStudyId, timestamp);
+    db.prepare(`
+      INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
+      VALUES (?, ?, 'host', 'H01', ?, ?)
+    `).run(nextStudyId, host.clientId, timestamp, timestamp);
+  });
+  tx();
+  STUDY_ID = nextStudyId;
   return getGalleryState(clientId);
 }
 

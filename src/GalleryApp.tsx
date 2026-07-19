@@ -622,6 +622,7 @@ export default function GalleryApp() {
                 {state.study.status === 'round_active' && <button className="is-end-round" disabled={Boolean(busy)} onClick={() => action('end-round', () => galleryApi.endRound(clientId))}><Clock3 /> 提前结束第 {state.study.current_round} 轮</button>}
                 {state.study.status === 'round_review' && <button disabled={Boolean(busy)} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>开启第 {state.study.current_round + 1} 轮 <ArrowRight /></button>}
                 {state.study.status === 'final_voting' && <button disabled={Boolean(busy)} onClick={() => action('end', () => galleryApi.end(clientId))}><Check /> 结束最终投票</button>}
+                {state.study.status === 'ended' && <button className="is-new-experiment" disabled={Boolean(busy)} onClick={() => action('new-experiment', () => galleryApi.newExperiment(clientId))}><RefreshCw /> 开始新的实验</button>}
               </div>
             </header>
             {['round_processing', 'round_review'].includes(state.study.status) && currentGenerationJobs.length > 0 && (

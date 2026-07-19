@@ -201,10 +201,38 @@ expectError(
 state = gallery.endGalleryProject(hostClient);
 assert.equal(state.study.status, 'ended');
 assert.ok(state.apps.every((app: any) => Number(app.final_like_count) === 1));
+const endedStudyId = String(state.study.id);
 expectError(
   () => gallery.saveGalleryComment('contributor-tab-1', state.apps[0].id, 'Too late'),
   /active round/i,
 );
 
-console.log('Gallery mechanics test passed: independent Host role, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+const archivedAppCount = Number(
+  (db.prepare(`SELECT COUNT(*) AS count FROM gallery_apps WHERE study_id = ?`).get(endedStudyId) as any).count,
+);
+const nextExperiment = gallery.startNewGalleryExperiment(hostClient);
+assert.notEqual(nextExperiment.study.id, endedStudyId);
+assert.equal(nextExperiment.study.status, 'preparing');
+assert.equal(nextExperiment.study.current_round, 0);
+assert.equal(nextExperiment.viewer?.role, 'host');
+assert.equal(nextExperiment.viewer?.code, 'H01');
+assert.equal(nextExperiment.apps.length, 0);
+assert.equal(nextExperiment.sessions.length, 1);
+assert.equal(gallery.getGalleryState('contributor-tab-1').viewer, null);
+assert.equal(
+  (db.prepare(`SELECT status FROM gallery_studies WHERE id = ?`).get(endedStudyId) as any).status,
+  'ended',
+);
+assert.equal(
+  Number((db.prepare(`SELECT COUNT(*) AS count FROM gallery_apps WHERE study_id = ?`).get(endedStudyId) as any).count),
+  archivedAppCount,
+);
+assert.equal(
+  (db.prepare(`SELECT value FROM gallery_settings WHERE key = 'active_study_id'`).get() as any).value,
+  nextExperiment.study.id,
+);
+const nextCreator = gallery.joinGallery('next-creator-tab', 'creator');
+assert.equal(nextCreator.viewer?.code, 'C01');
+
+console.log('Gallery mechanics test passed: independent Host role, archived experiment rollover, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
 db.close();

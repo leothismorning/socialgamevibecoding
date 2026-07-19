@@ -18,6 +18,7 @@ import {
   saveCreatorDraft,
   saveGalleryComment,
   startFormalGalleryGame,
+  startNewGalleryExperiment,
   startNextGalleryRound,
   toggleGalleryAppLike,
   toggleGalleryCommentLike,
@@ -347,6 +348,14 @@ export function registerGalleryRoutes(app: Express) {
   app.post('/api/gallery/end', (req, res) => {
     try {
       res.json(endGalleryProject(clientIdFrom(req)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/gallery/new-experiment', (req, res) => {
+    try {
+      res.json(startNewGalleryExperiment(clientIdFrom(req)));
     } catch (error) {
       sendError(res, error);
     }
