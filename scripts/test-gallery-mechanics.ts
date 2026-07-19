@@ -17,16 +17,18 @@ function expectError(task: () => unknown, pattern: RegExp) {
 
 const creatorClients = ['creator-tab-1', 'creator-tab-2', 'creator-tab-3'];
 const hostClient = 'host-tab';
-const hostState = gallery.joinGallery(hostClient, 'host');
+const hostState = gallery.joinGallery(hostClient, 'host', 'H01');
 assert.equal(hostState.viewer?.code, 'H01');
 assert.equal(hostState.viewer?.role, 'host');
-expectError(() => gallery.joinGallery('second-host-tab', 'host'), /Host seat is already occupied/i);
-creatorClients.forEach((clientId, index) => {
-  const state = gallery.joinGallery(clientId, 'creator');
+expectError(() => gallery.joinGallery('second-host-tab', 'host', 'H01'), /H01 is already occupied/i);
+expectError(() => gallery.joinGallery('invalid-creator-tab', 'creator', 'P01'), /valid creator identity/i);
+[2, 0, 1].forEach((index) => {
+  const clientId = creatorClients[index];
+  const state = gallery.joinGallery(clientId, 'creator', `C0${index + 1}`);
   assert.equal(state.viewer?.code, `C0${index + 1}`);
 });
 
-expectError(() => gallery.joinGallery('contributor-too-early', 'contributor'), /after all three Creators/i);
+expectError(() => gallery.joinGallery('contributor-too-early', 'contributor', 'P01'), /after all three Creators/i);
 
 creatorClients.forEach((clientId, index) => {
   gallery.saveCreatorDraft({
@@ -40,8 +42,9 @@ creatorClients.forEach((clientId, index) => {
   gallery.publishCreatorApp(clientId);
 });
 
-const contributorOne = gallery.joinGallery('contributor-tab-1', 'contributor');
-const contributorTwo = gallery.joinGallery('contributor-tab-2', 'contributor');
+const contributorOne = gallery.joinGallery('contributor-tab-1', 'contributor', 'P01');
+const contributorTwo = gallery.joinGallery('contributor-tab-2', 'contributor', 'P02');
+expectError(() => gallery.joinGallery('duplicate-contributor-tab', 'contributor', 'P02'), /P02 is already occupied/i);
 assert.equal(contributorOne.viewer?.code, 'P01');
 assert.equal(contributorTwo.viewer?.code, 'P02');
 const firstPublishedApp = (contributorOne.apps as any[]).find((app: any) => app.creator_code === 'C01');
@@ -231,8 +234,8 @@ assert.equal(
   (db.prepare(`SELECT value FROM gallery_settings WHERE key = 'active_study_id'`).get() as any).value,
   nextExperiment.study.id,
 );
-const nextCreator = gallery.joinGallery('next-creator-tab', 'creator');
+const nextCreator = gallery.joinGallery('next-creator-tab', 'creator', 'C01');
 assert.equal(nextCreator.viewer?.code, 'C01');
 
-console.log('Gallery mechanics test passed: independent Host role, archived experiment rollover, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+console.log('Gallery mechanics test passed: self-selected identity numbers, independent Host role, archived experiment rollover, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
 db.close();

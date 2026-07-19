@@ -226,11 +226,15 @@ function codeRange(role: GalleryRole) {
   return Array.from({ length: count }, (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`);
 }
 
-export function joinGallery(clientId: string, role: GalleryRole) {
+export function joinGallery(clientId: string, role: GalleryRole, requestedCode: string) {
   const cleanClientId = clientId.trim();
+  const cleanCode = requestedCode.trim().toUpperCase();
   if (!cleanClientId || cleanClientId.length > 160) throw new Error('A valid browser-tab session is required.');
   if (role !== 'host' && role !== 'creator' && role !== 'contributor') {
     throw new Error('Role must be Host, Creator, or Contributor.');
+  }
+  if (!codeRange(role).includes(cleanCode)) {
+    throw new Error(`Choose a valid ${role} identity number.`);
   }
 
   if (role === 'contributor' && publishedApps().length < CREATOR_COUNT) {
@@ -247,17 +251,15 @@ export function joinGallery(clientId: string, role: GalleryRole) {
     (db.prepare(`SELECT code FROM gallery_sessions WHERE study_id = ?`).all(STUDY_ID) as any[])
       .map((row) => String(row.code)),
   );
-  const code = codeRange(role).find((candidate) => !occupied.has(candidate));
-  if (!code) {
-    if (role === 'host') throw new Error('The Host seat is already occupied.');
-    throw new Error(role === 'creator' ? 'All three Creator seats are occupied.' : 'All Contributor seats are occupied.');
+  if (occupied.has(cleanCode)) {
+    throw new Error(`${cleanCode} is already occupied. Choose another identity number.`);
   }
 
   const timestamp = now();
   db.prepare(`
     INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(STUDY_ID, cleanClientId, role, code, timestamp, timestamp);
+  `).run(STUDY_ID, cleanClientId, role, cleanCode, timestamp, timestamp);
   return getGalleryState(cleanClientId);
 }
 

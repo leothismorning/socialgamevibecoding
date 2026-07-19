@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { galleryApi } from './services/galleryApi';
-import type { GalleryAppRecord, GalleryJob, GalleryState, GalleryStatus } from './galleryTypes';
+import type { GalleryAppRecord, GalleryJob, GalleryRole, GalleryState, GalleryStatus } from './galleryTypes';
 import './gallery.css';
 
 const CLIENT_KEY = 'gallery-v2-client-id';
@@ -130,11 +130,17 @@ function GalleryCard({
 
 function IdentityPanel({ state, join, busy }: {
   state: GalleryState;
-  join: (role: 'host' | 'creator' | 'contributor') => void;
+  join: (role: GalleryRole, code: string) => void;
   busy: string;
 }) {
+  const [selectedRole, setSelectedRole] = useState<GalleryRole | null>(null);
   const contributorsOpen = state.publishedAppCount === state.creatorCount;
-  const hostOccupied = state.sessions.some((session) => session.role === 'host');
+  const occupiedCodes = new Set(state.sessions.map((session) => session.code));
+  const seatCodes = selectedRole === 'host'
+    ? ['H01']
+    : selectedRole === 'creator'
+      ? ['C01', 'C02', 'C03']
+      : Array.from({ length: 20 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`);
   return (
     <section className="gallery-identity-panel">
       <div>
@@ -142,17 +148,40 @@ function IdentityPanel({ state, join, busy }: {
         <h2>选择本标签页的实验身份</h2>
         <p>每个浏览器标签页只分配一个身份；Host 独立控制实验流程，三位 Creator 分别开发自己的 App。</p>
       </div>
-      <div className="gallery-role-grid">
-        <button disabled={Boolean(busy) || hostOccupied} onClick={() => join('host')}>
-          <ShieldCheck /><strong>Host</strong><span>{hostOccupied ? 'Host 席位已占用' : '控制轮次、倒计时与 AI 任务'}</span>
-        </button>
-        <button disabled={Boolean(busy)} onClick={() => join('creator')}>
-          <UserRound /><strong>Creator</strong><span>开发并发布自己的 App</span>
-        </button>
-        <button disabled={Boolean(busy) || !contributorsOpen} onClick={() => join('contributor')}>
-          <UsersRound /><strong>Contributor</strong>
-          <span>{contributorsOpen ? '体验、评论并点赞' : '三位 Creator 发布后开放'}</span>
-        </button>
+      <div className="gallery-identity-picker">
+        <div className="gallery-role-grid">
+          <button className={selectedRole === 'host' ? 'is-selected' : ''} disabled={Boolean(busy)} onClick={() => setSelectedRole('host')}>
+            <ShieldCheck /><strong>Host</strong><span>选择 H01 控制实验流程</span>
+          </button>
+          <button className={selectedRole === 'creator' ? 'is-selected' : ''} disabled={Boolean(busy)} onClick={() => setSelectedRole('creator')}>
+            <UserRound /><strong>Creator</strong><span>自主选择 C01–C03</span>
+          </button>
+          <button className={selectedRole === 'contributor' ? 'is-selected' : ''} disabled={Boolean(busy) || !contributorsOpen} onClick={() => setSelectedRole('contributor')}>
+            <UsersRound /><strong>Contributor</strong>
+            <span>{contributorsOpen ? '自主选择 P01–P20' : '三位 Creator 发布后开放'}</span>
+          </button>
+        </div>
+        {selectedRole && (
+          <section className="gallery-seat-picker">
+            <header><strong>选择你的身份编号</strong><span>灰色编号已被占用</span></header>
+            <div className={`gallery-seat-grid is-${selectedRole}`}>
+              {seatCodes.map((code) => {
+                const occupied = occupiedCodes.has(code);
+                return (
+                  <button
+                    key={code}
+                    className={occupied ? 'is-occupied' : ''}
+                    disabled={occupied || Boolean(busy)}
+                    onClick={() => join(selectedRole, code)}
+                  >
+                    <strong>{code}</strong>
+                    <span>{occupied ? '已占用' : '可选择'}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
       </div>
     </section>
   );
@@ -564,7 +593,7 @@ export default function GalleryApp() {
         </section>
 
         {error && <div className="gallery-error"><span>{error}</span><button onClick={() => setError('')}><X /></button></div>}
-        {!state.viewer && <IdentityPanel state={state} busy={busy} join={(role) => void action('join', () => galleryApi.join(clientId, role))} />}
+        {!state.viewer && <IdentityPanel state={state} busy={busy} join={(role, code) => void action('join', () => galleryApi.join(clientId, role, code))} />}
 
         {state.viewer?.role === 'creator' && state.study.status === 'preparing' && (
           <CreatorStudio state={state} clientId={clientId} action={action} busy={busy} />

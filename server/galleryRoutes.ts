@@ -132,7 +132,11 @@ export function registerGalleryRoutes(app: Express) {
 
   app.post('/api/gallery/join', (req, res) => {
     try {
-      res.json(joinGallery(clientIdFrom(req), String(req.body?.role || '') as GalleryRole));
+      res.json(joinGallery(
+        clientIdFrom(req),
+        String(req.body?.role || '') as GalleryRole,
+        String(req.body?.code || ''),
+      ));
     } catch (error) {
       sendError(res, error);
     }

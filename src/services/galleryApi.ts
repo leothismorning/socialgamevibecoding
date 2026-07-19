@@ -14,8 +14,8 @@ const body = (value: Record<string, unknown>) => JSON.stringify(value);
 
 export const galleryApi = {
   state: (clientId: string) => request(`/api/gallery/state?clientId=${encodeURIComponent(clientId)}`),
-  join: (clientId: string, role: GalleryRole) => request('/api/gallery/join', {
-    method: 'POST', body: body({ clientId, role }),
+  join: (clientId: string, role: GalleryRole, code: string) => request('/api/gallery/join', {
+    method: 'POST', body: body({ clientId, role, code }),
   }),
   model: (clientId: string, provider: GalleryState['aiProvider']) => request('/api/gallery/ai-provider', {
     method: 'POST', body: body({ clientId, provider }),
