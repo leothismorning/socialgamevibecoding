@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QA Sample App</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; color: #17305e; background: linear-gradient(135deg, #dff7ff, #efe8ff); font-family: system-ui, sans-serif; }
+    main { padding: 3rem; text-align: center; border-radius: 2rem; background: rgba(255, 255, 255, .8); box-shadow: 0 2rem 5rem rgba(50, 62, 130, .16); }
+    button { padding: .8rem 1.2rem; color: white; border: 0; border-radius: 999px; background: #5b55e7; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main><h1>协作灵感实验室</h1><p id="status">这是一个用于界面验收的完整 HTML App。</p><button id="action">体验互动</button></main>
+  <script>document.querySelector('#action').addEventListener('click', () => { document.querySelector('#status').textContent = '互动功能正常。'; });</script>
+</body>
+</html>

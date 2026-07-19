@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
 import { generateWithAI } from './server/ai.js';
 import { addDebugLog, clearDebugLogs, getDebugLogs } from './server/debugLog.js';
+import { registerGalleryRoutes } from './server/galleryRoutes.js';
 import { getAIProvider } from './server/studyDb.js';
 import { registerStudyRoutes } from './server/studyRoutes.js';
 
@@ -58,6 +59,7 @@ app.post('/api/debug/clear', (_req, res) => {
 });
 
 registerStudyRoutes(app);
+registerGalleryRoutes(app);
 
 app.post('/api/ai/generate', async (req, res) => {
   const { prompt } = req.body ?? {};
