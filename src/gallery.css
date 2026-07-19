@@ -101,8 +101,7 @@
 .gallery-rule-card svg { width: 18px; color: var(--violet); }
 
 .gallery-home { padding-top: 6px; }
-.gallery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; }
-.gallery-waterfall-column { min-width: 0; display: flex; flex-direction: column; }
+.gallery-grid { display: flex; flex-direction: column; gap: 0; }
 .gallery-card { width: 100%; min-width: 0; overflow: hidden; margin: 0 0 24px; border: 1px solid #dce5f0; border-radius: 24px; background: #fff; box-shadow: 0 13px 40px rgba(48, 69, 107, .07); transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; animation: gallery-card-arrive .55s both; }
 .gallery-card:nth-child(2) { animation-delay: .08s; }
 .gallery-card:nth-child(3) { animation-delay: .16s; }
@@ -282,7 +281,6 @@
 
 @media (max-width: 900px) {
   .gallery-grid { display: flex; flex-direction: column; gap: 0; }
-  .gallery-waterfall-column { display: contents; }
   .gallery-waterfall-card.is-waterfall-0 .gallery-card-frame,
   .gallery-waterfall-card.is-waterfall-1 .gallery-card-frame,
   .gallery-waterfall-card.is-waterfall-2 .gallery-card-frame { height: 680px; }

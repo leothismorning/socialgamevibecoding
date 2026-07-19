@@ -484,18 +484,14 @@ export default function GalleryApp() {
         ) : (
           <section className="gallery-home">
             <div className="gallery-grid" aria-label="公开作品画廊">
-              {[0, 1].map((column) => (
-                <div className="gallery-waterfall-column" key={column}>
-                  {[0, 1, 2].filter((index) => index % 2 === column).map((index) => {
-                    const app = publishedApps[index];
-                    return app ? (
-                      <GalleryCard key={app.id} app={app} index={index} finalStage={Boolean(finalStage)} open={() => setSelectedAppId(app.id)} />
-                    ) : (
-                      <article className="gallery-card gallery-placeholder" style={{ order: index }} key={`placeholder-${index}`}><LoaderCircle /><strong>等待 Creator 发布</strong><p>这个画廊席位还在开发中。</p></article>
-                    );
-                  })}
-                </div>
-              ))}
+              {[0, 1, 2].map((index) => {
+                const app = publishedApps[index];
+                return app ? (
+                  <GalleryCard key={app.id} app={app} index={index} finalStage={Boolean(finalStage)} open={() => setSelectedAppId(app.id)} />
+                ) : (
+                  <article className="gallery-card gallery-placeholder" style={{ order: index }} key={`placeholder-${index}`}><LoaderCircle /><strong>等待 Creator 发布</strong><p>这个画廊席位还在开发中。</p></article>
+                );
+              })}
             </div>
 
             {state.study.status === 'round_processing' && (
