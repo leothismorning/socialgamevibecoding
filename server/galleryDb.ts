@@ -553,6 +553,7 @@ export function lockExpiredGalleryRound(random: LotteryRandom = (max) => randomI
 export function nextGalleryGenerationJob() {
   const job = db.prepare(`
     SELECT j.*, a.title AS app_title, a.brief AS app_brief, a.current_version_id,
+           a.creator_code AS app_creator_code,
            c.content AS selected_comment, c.author_code AS selected_author,
            v.code AS current_code
     FROM gallery_generation_jobs j
@@ -634,9 +635,6 @@ export function cancelGalleryGenerationJob(clientId: string, jobId: number) {
     WHERE j.id = ? AND j.study_id = ?
   `).get(jobId, STUDY_ID) as any;
   if (!job) throw new Error('Generation job not found.');
-  if (viewer.code !== 'C01' && viewer.code !== job.app_creator_code) {
-    throw new Error('Only the App Creator or Creator 1 / Host can stop this AI task.');
-  }
   if (!['pending', 'running'].includes(String(job.status))) {
     throw new Error('This AI task has already finished.');
   }

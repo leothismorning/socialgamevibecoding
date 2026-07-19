@@ -24,6 +24,7 @@ export type DevelopmentAgentInput = {
   creatorMessage?: string;
   recentConversation?: string;
   signal?: AbortSignal;
+  apiKey?: string;
   mode: 'initial-project' | 'round-candidate' | 'debug';
 };
 
@@ -408,6 +409,7 @@ async function runAgentTextStep(
   prompt: string,
   maxTokens = 3072,
   signal?: AbortSignal,
+  apiKey?: string,
 ) {
   signal?.throwIfAborted();
   addDebugLog({
@@ -420,6 +422,7 @@ async function runAgentTextStep(
     systemPrompt: TEXT_ONLY_SYSTEM,
     maxTokens,
     signal,
+    apiKey,
   });
   return result.text.trim();
 }
@@ -460,6 +463,7 @@ Do not plan Tailwind, Bootstrap, external CSS frameworks, or invented image URLs
 Use the same language as the Creator request and keep the plan under 900 characters.`,
     2048,
     input.signal,
+    input.apiKey,
   );
 
   let body = cleanBodyFragment(await runAgentTextStep(
@@ -480,6 +484,7 @@ Use stable ids that JavaScript can bind and preserve during later repair. Avoid 
 Keep the fragment under 260 lines.`,
     6144,
     input.signal,
+    input.apiKey,
   ));
 
   let structureInspection = inspectAgentArtifacts(body, '');
@@ -502,6 +507,7 @@ Do not include style or script tags. Do not invent image URLs; use empty src plu
 Keep it compact and complete.`,
       6144,
       input.signal,
+      input.apiKey,
     ));
     repairNotes.push(`Agent rewrote HTML to remove ${structureInspection.utilityClasses.length} unsupported utility classes.`);
     structureInspection = inspectAgentArtifacts(body, '');
@@ -541,6 +547,7 @@ Include .agent-toast and .agent-toast.show styles.
 Keep CSS under 320 lines.`,
     6144,
     input.signal,
+    input.apiKey,
   ));
 
   let inspection = inspectAgentArtifacts(body, css);
@@ -562,6 +569,7 @@ Missing classes: ${inspection.missingClasses.join(', ')}
 Generate replacement CSS ONLY, with no style tag. Define every HTML class, preserve only the visual direction present in the supplied requirements or existing project, include required responsive states, and include .agent-toast plus .agent-toast.show. Do not use any external framework or remote background image, and do not introduce a new visual theme.`,
       6144,
       input.signal,
+      input.apiKey,
     ));
     repairNotes.push(`Agent regenerated CSS after detecting ${inspection.missingClasses.length} unstyled HTML classes.`);
     inspection = inspectAgentArtifacts(body, css);
@@ -588,6 +596,7 @@ Define all functions needed by the controls, but avoid relying on inline onclick
 Keep JavaScript under 260 lines.`,
     6144,
     input.signal,
+    input.apiKey,
   ));
 
   const summary = await runAgentTextStep(
@@ -604,6 +613,7 @@ JS length: ${js.length}
 Image assets: ${imageReport.preserved} preserved, ${imageReport.replaced} replaced from Wikimedia, ${imageReport.fallbacks} using embedded fallback.`,
     1024,
     input.signal,
+    input.apiKey,
   );
 
   const code = buildHtml(input, summary, body, css, js);
@@ -639,6 +649,7 @@ Check that the visible layout has styling, images cannot render as broken icons,
 Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwise "FAIL: concrete blocking reason".`,
     2048,
     input.signal,
+    input.apiKey,
   );
   if (!/^PASS\s*:/i.test(integrationAudit.trim())) {
     throw new Error(`The development agent integration gate rejected the draft: ${integrationAudit.slice(0, 500)}`);

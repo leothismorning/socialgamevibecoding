@@ -231,13 +231,23 @@
 .gallery-lottery-result em.is-error { color: #bd3448; }
 .gallery-lottery-result em svg { width: 12px; }
 
-.gallery-ai-stop-panel { position: sticky; z-index: 24; top: 88px; display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px; padding: 16px 18px; color: #6f2940; border: 1px solid #f0c8d5; border-radius: 18px; background: rgba(255, 247, 250, .96); box-shadow: 0 14px 38px rgba(145, 43, 76, .12); backdrop-filter: blur(14px); }
-.gallery-ai-stop-panel > div { display: flex; align-items: center; gap: 12px; }
-.gallery-ai-stop-panel > div:first-child > svg { width: 23px; flex: 0 0 auto; color: #d33f70; }
-.gallery-ai-stop-panel strong { font-size: 13px; }
+.gallery-ai-stop-panel { position: sticky; z-index: 24; top: 88px; margin-bottom: 20px; padding: 16px 18px; color: #6f2940; border: 1px solid #f0c8d5; border-radius: 18px; background: rgba(255, 247, 250, .96); box-shadow: 0 14px 38px rgba(145, 43, 76, .12); backdrop-filter: blur(14px); }
+.gallery-ai-stop-panel > header { display: flex; align-items: center; gap: 12px; margin-bottom: 13px; }
+.gallery-ai-stop-panel > header > span { width: 38px; height: 38px; display: grid; flex: 0 0 auto; place-items: center; color: #d33f70; border-radius: 12px; background: #ffe3ec; }
+.gallery-ai-stop-panel > header svg { width: 21px; }
+.gallery-ai-stop-panel strong { font-size: 12px; }
 .gallery-ai-stop-panel p { margin: 4px 0 0; color: #916176; font-size: 10px; }
-.gallery-ai-stop-panel button { min-height: 39px; display: flex; align-items: center; gap: 7px; padding: 0 13px; color: #fff !important; border: 0; border-radius: 11px; background: #c93662; font-size: 10px !important; font-weight: 900; cursor: pointer; white-space: nowrap; }
-.gallery-ai-stop-panel button svg { width: 15px; }
+.gallery-ai-stop-jobs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.gallery-ai-stop-jobs article { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 11px 12px; border: 1px solid #f1d6df; border-radius: 13px; background: rgba(255,255,255,.78); }
+.gallery-ai-stop-jobs article > div { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.gallery-ai-stop-jobs article strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-ai-stop-jobs article span { padding: 4px 7px; color: #795a66; border-radius: 99px; background: #f2e9ed; font-size: 8px; font-weight: 900; white-space: nowrap; }
+.gallery-ai-stop-jobs article span.is-running { color: #245fc5; background: #eaf2ff; }
+.gallery-ai-stop-jobs article span.is-completed { color: #157447; background: #e9f9f0; }
+.gallery-ai-stop-jobs article span.is-failed { color: #b32d43; background: #fff0f2; }
+.gallery-ai-stop-jobs button { min-height: 34px; display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 0 10px; color: #fff !important; border: 0; border-radius: 9px; background: #c93662; font-size: 9px !important; font-weight: 900; cursor: pointer; white-space: nowrap; }
+.gallery-ai-stop-jobs button svg { width: 13px; }
+.gallery-ai-stop-jobs em { color: #9b7b87; font-size: 9px; font-style: normal; white-space: nowrap; }
 .gallery-host-panel,
 .gallery-processing-panel { display: flex; align-items: center; justify-content: space-between; gap: 26px; margin-top: 24px; padding: 22px 24px; border: 1px solid #dce4f1; border-radius: 21px; background: rgba(255,255,255,.9); box-shadow: 0 12px 40px rgba(52, 70, 108, .06); }
 .gallery-host-panel h3,
@@ -335,8 +345,8 @@
   .gallery-detail-preview { min-height: 520px; }
   .gallery-host-panel,
   .gallery-processing-panel { align-items: flex-start; flex-direction: column; }
-  .gallery-ai-stop-panel { position: static; align-items: flex-start; flex-direction: column; }
-  .gallery-ai-stop-panel > div:last-child { width: 100%; flex-wrap: wrap; }
+  .gallery-ai-stop-panel { position: static; }
+  .gallery-ai-stop-jobs { grid-template-columns: 1fr; }
   .gallery-debug-console article { grid-template-columns: 1fr; }
   .gallery-debug-console pre { grid-column: 1; }
 }

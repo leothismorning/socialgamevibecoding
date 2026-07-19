@@ -47,44 +47,62 @@ let automationBusy = false;
 const activeGenerationControllers = new Map<number, AbortController>();
 const GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
 
+function apiKeyForGalleryJob(job: any) {
+  if (String(job.app_creator_code) === 'C02') return process.env.SUIXIANG_API_KEY_APP2;
+  if (String(job.app_creator_code) === 'C03') return process.env.SUIXIANG_API_KEY_APP3;
+  return process.env.SUIXIANG_API_KEY;
+}
+
+async function processGalleryGenerationJob(job: any) {
+  const jobId = Number(job.id);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error('AI generation timed out after 10 minutes.'));
+  }, GENERATION_TIMEOUT_MS);
+  timeout.unref();
+  activeGenerationControllers.set(jobId, controller);
+
+  try {
+    const selectedComment = String(job.selected_comment || '').trim();
+    const provider = getAIProvider();
+    const result = await runDevelopmentAgent({
+      provider,
+      experimentTitle: String(job.app_title || 'Gallery App'),
+      roundNumber: Number(job.round_number),
+      brief: String(job.app_brief || ''),
+      selectedIdeas: selectedComment
+        ? [{ participant_code: String(job.selected_author || ''), content: selectedComment }]
+        : [],
+      fusionPlan: selectedComment,
+      currentCode: String(job.current_code || ''),
+      creatorMessage: selectedComment,
+      signal: controller.signal,
+      apiKey: provider === 'gpt5' ? apiKeyForGalleryJob(job) : undefined,
+      mode: 'round-candidate',
+    });
+    completeGalleryGenerationJob(jobId, result.code, result.text);
+  } catch (error) {
+    failGalleryGenerationJob(jobId, error);
+  } finally {
+    clearTimeout(timeout);
+    activeGenerationControllers.delete(jobId);
+  }
+}
+
 export async function processGalleryAutomation() {
   if (automationBusy) return;
   automationBusy = true;
   try {
     lockExpiredGalleryRound();
-    let job = nextGalleryGenerationJob();
-    while (job) {
-      const jobId = Number(job.id);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => {
-        controller.abort(new Error('AI generation timed out after 10 minutes.'));
-      }, GENERATION_TIMEOUT_MS);
-      timeout.unref();
-      activeGenerationControllers.set(jobId, controller);
-      try {
-        const selectedComment = String(job.selected_comment || '').trim();
-        const result = await runDevelopmentAgent({
-          provider: getAIProvider(),
-          experimentTitle: String(job.app_title || 'Gallery App'),
-          roundNumber: Number(job.round_number),
-          brief: String(job.app_brief || ''),
-          selectedIdeas: selectedComment
-            ? [{ participant_code: String(job.selected_author || ''), content: selectedComment }]
-            : [],
-          fusionPlan: selectedComment,
-          currentCode: String(job.current_code || ''),
-          creatorMessage: selectedComment,
-          signal: controller.signal,
-          mode: 'round-candidate',
-        });
-        completeGalleryGenerationJob(jobId, result.code, result.text);
-      } catch (error) {
-        failGalleryGenerationJob(jobId, error);
-      } finally {
-        clearTimeout(timeout);
-        activeGenerationControllers.delete(jobId);
+    while (true) {
+      const jobs: any[] = [];
+      let job = nextGalleryGenerationJob();
+      while (job) {
+        jobs.push(job);
+        job = nextGalleryGenerationJob();
       }
-      job = nextGalleryGenerationJob();
+      if (jobs.length === 0) break;
+      await Promise.allSettled(jobs.map(processGalleryGenerationJob));
     }
     finalizeGalleryRoundIfReady();
   } finally {

@@ -429,10 +429,8 @@ export default function GalleryApp() {
   const remaining = currentRound && state?.study.status === 'round_active' ? Date.parse(currentRound.ends_at) - now : 0;
   const isHost = state?.viewer?.code === 'C01';
   const finalStage = state?.study.status === 'final_voting' || state?.study.status === 'ended';
-  const stoppableJobs = state?.generationJobs.filter((job) =>
-    ['pending', 'running'].includes(job.status)
-      && state.viewer?.role === 'creator'
-      && (isHost || job.app_creator_code === state.viewer.code),
+  const currentGenerationJobs = state?.generationJobs.filter(
+    (job) => Number(job.round_number) === Number(state.study.current_round),
   ) || [];
 
   useEffect(() => {
@@ -488,20 +486,34 @@ export default function GalleryApp() {
           <AppDetail state={state} app={selectedApp} close={() => setSelectedAppId('')} action={action} clientId={clientId} busy={busy} />
         ) : (
           <section className="gallery-home">
-            {state.study.status === 'round_processing' && stoppableJobs.length > 0 && (
+            {state.study.status === 'round_processing'
+              && state.viewer?.role === 'creator'
+              && currentGenerationJobs.length > 0 && (
               <section className="gallery-ai-stop-panel">
-                <div>
-                  <LoaderCircle className="spin" />
+                <header>
+                  <span><LoaderCircle className="spin" /></span>
                   <div><strong>AI 正在生成新版本</strong><p>如果请求长时间没有返回，可以停止对应任务；当前版本不会丢失。</p></div>
-                </div>
-                <div>
-                  {stoppableJobs.map((job) => (
-                    <button
-                      key={job.id}
-                      disabled={Boolean(busy)}
-                      onClick={() => action(`cancel-job-${job.id}`, () => galleryApi.cancelJob(clientId, job.id))}
-                    ><X /> 停止 {job.app_title} 的 AI</button>
-                  ))}
+                </header>
+                <div className="gallery-ai-stop-jobs">
+                  {currentGenerationJobs.map((job) => {
+                    const active = ['pending', 'running'].includes(job.status);
+                    const statusLabel = job.status === 'pending' ? '等待启动'
+                      : job.status === 'running' ? '生成中'
+                        : job.status === 'completed' ? '已完成'
+                          : job.status === 'cancelled' ? '已停止'
+                            : job.status === 'failed' ? '生成失败' : '无需生成';
+                    return (
+                      <article key={job.id}>
+                        <div><strong>{job.app_title}</strong><span className={`is-${job.status}`}>{statusLabel}</span></div>
+                        {active ? (
+                          <button
+                            disabled={Boolean(busy)}
+                            onClick={() => action(`cancel-job-${job.id}`, () => galleryApi.cancelJob(clientId, job.id))}
+                          ><X /> 停止这个 AI</button>
+                        ) : <em>{statusLabel}</em>}
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             )}

@@ -11,6 +11,10 @@ export type AIResult = {
   usage: unknown;
 };
 
+export type AIOptions = GeminiOptions & {
+  apiKey?: string;
+};
+
 export const AI_PROVIDER_LABELS: Record<AIProvider, string> = {
   deepseek: 'DeepSeek V4 Flash',
   'deepseek-pro': 'DeepSeek V4 Pro',
@@ -22,7 +26,7 @@ export const AI_PROVIDER_LABELS: Record<AIProvider, string> = {
 export async function generateWithAI(
   provider: AIProvider,
   prompt: string,
-  options: GeminiOptions = {},
+  options: AIOptions = {},
 ): Promise<AIResult> {
   if (provider === 'gemini') return generateWithGemini(prompt, GEMINI_MODEL, options);
   if (provider === 'glm') return generateWithGLM(prompt, GLM_MODEL, options);

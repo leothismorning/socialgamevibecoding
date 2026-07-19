@@ -11,6 +11,7 @@ type SuiXiangOptions = {
   systemPrompt?: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  apiKey?: string;
 };
 
 export const SUIXIANG_GPT_MODEL = 'gpt-5.5';
@@ -42,7 +43,7 @@ export async function generateWithSuiXiangGPT(
   options: SuiXiangOptions = {},
 ): Promise<SuiXiangResult> {
   const startedAt = performance.now();
-  const apiKey = process.env.SUIXIANG_API_KEY;
+  const apiKey = options.apiKey || process.env.SUIXIANG_API_KEY;
   const baseUrl = (process.env.SUIXIANG_BASE_URL || 'https://sui-xiang.com').replace(/\/+$/, '');
   const endpoint = `${baseUrl}/v1/chat/completions`;
 

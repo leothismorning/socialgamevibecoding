@@ -82,10 +82,10 @@ function playRound(roundNumber: number) {
       LIMIT 1
     `).get(roundNumber) as { id: number };
     expectError(
-      () => gallery.cancelGalleryGenerationJob(creatorClients[1], cancellableJob.id),
-      /App Creator or Creator 1/i,
+      () => gallery.cancelGalleryGenerationJob('contributor-tab-1', cancellableJob.id),
+      /requires the creator role/i,
     );
-    const afterCancel = gallery.cancelGalleryGenerationJob(creatorClients[0], cancellableJob.id);
+    const afterCancel = gallery.cancelGalleryGenerationJob(creatorClients[1], cancellableJob.id);
     const cancelledJob = (afterCancel.generationJobs as any[])
       .find((item: any) => Number(item.id) === Number(cancellableJob.id));
     assert.equal(
