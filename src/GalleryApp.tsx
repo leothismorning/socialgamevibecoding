@@ -66,22 +66,28 @@ function GalleryCard({
   app,
   finalStage,
   open,
+  index,
 }: {
   app: GalleryAppRecord;
   finalStage: boolean;
   open: () => void;
+  index: number;
 }) {
   return (
-    <article className="gallery-card">
+    <article className={`gallery-card gallery-waterfall-card is-waterfall-${index % 3}`} style={{ order: index }}>
+      <div className="gallery-card-chrome">
+        <Code2 />
+        <strong>{app.title}</strong>
+        <span>V{Number(app.current_version_number || 0) + 1}</span>
+      </div>
       {finalStage ? (
         <div className="gallery-card-compare">
-          <div><span>初始版</span><Preview compact code={app.initial_code} title={`${app.title} 初始版`} /></div>
-          <div><span>最终版</span><Preview compact code={app.final_code || app.current_code} title={`${app.title} 最终版`} /></div>
+          <div><span>初始版</span><Preview code={app.initial_code} title={`${app.title} 初始版`} /></div>
+          <div><span>最终版</span><Preview code={app.final_code || app.current_code} title={`${app.title} 最终版`} /></div>
         </div>
       ) : (
         <div className="gallery-card-frame">
-          <Preview compact code={app.current_code} title={`${app.title} 当前版本`} />
-          <span className="gallery-version-badge">V{Number(app.current_version_number || 0) + 1}</span>
+          <Preview code={app.current_code} title={`${app.title} 当前版本`} />
         </div>
       )}
       <div className="gallery-card-body">
@@ -300,6 +306,10 @@ function AppDetail({
         </div>
 
         <aside className="gallery-comment-panel">
+          <section className="gallery-initial-prompt">
+            <div><Sparkles /><strong>初版提示词</strong></div>
+            <p>{app.creator_prompt?.trim() || 'Creator 通过上传完整 HTML 创建了初版，没有填写额外提示词。'}</p>
+          </section>
           <div className="gallery-comment-heading">
             <div><MessageCircle /><strong>第 {roundNumber} 轮评论</strong></div>
             <span>{comments.length} 条</span>
@@ -473,24 +483,18 @@ export default function GalleryApp() {
           <AppDetail state={state} app={selectedApp} close={() => setSelectedAppId('')} action={action} clientId={clientId} busy={busy} />
         ) : (
           <section className="gallery-home">
-            <div className="gallery-hero">
-              <div>
-                <span className="gallery-eyebrow">THREE APPS · THREE ROUNDS · ONE EVOLVING GALLERY</span>
-                <h1>让每条好建议，<br />都有机会成为下一版。</h1>
-                <p>浏览 Creator 的作品，进入详情体验 App。每轮评论会通过“点赞加权 + 随机”抽出一条，交给 AI 自动完成下一版开发。</p>
-              </div>
-              <div className="gallery-rule-card">
-                <span><Clock3 /> 每轮 15 分钟</span><span><MessageCircle /> 每人每 App 一条评论</span><span><Heart /> 点赞提高抽中概率</span><span><Sparkles /> AI 自动生成新版本</span>
-              </div>
-            </div>
-
-            <div className="gallery-section-heading">
-              <div><span className="gallery-eyebrow">LIVE APP GALLERY</span><h2>{finalStage ? '初始作品与最终作品' : '当前公开作品'}</h2><p>{publishedApps.length}/3 个 App 已发布</p></div>
-            </div>
-            <div className="gallery-grid">
-              {publishedApps.map((app) => <GalleryCard key={app.id} app={app} finalStage={Boolean(finalStage)} open={() => setSelectedAppId(app.id)} />)}
-              {Array.from({ length: Math.max(0, 3 - publishedApps.length) }, (_, index) => (
-                <article className="gallery-card gallery-placeholder" key={index}><LoaderCircle /><strong>等待 Creator 发布</strong><p>这个画廊席位还在开发中。</p></article>
+            <div className="gallery-grid" aria-label="公开作品画廊">
+              {[0, 1].map((column) => (
+                <div className="gallery-waterfall-column" key={column}>
+                  {[0, 1, 2].filter((index) => index % 2 === column).map((index) => {
+                    const app = publishedApps[index];
+                    return app ? (
+                      <GalleryCard key={app.id} app={app} index={index} finalStage={Boolean(finalStage)} open={() => setSelectedAppId(app.id)} />
+                    ) : (
+                      <article className="gallery-card gallery-placeholder" style={{ order: index }} key={`placeholder-${index}`}><LoaderCircle /><strong>等待 Creator 发布</strong><p>这个画廊席位还在开发中。</p></article>
+                    );
+                  })}
+                </div>
               ))}
             </div>
 

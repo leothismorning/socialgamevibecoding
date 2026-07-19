@@ -702,7 +702,7 @@ export function getGalleryState(clientId = '') {
     .filter((app) => app.status === 'published' || app.creator_code === viewerCode)
     .map((app) => {
       if (app.creator_code === viewerCode) return app;
-      const { draft_code: _draftCode, draft_summary: _draftSummary, creator_prompt: _creatorPrompt, ...publicApp } = app;
+      const { draft_code: _draftCode, draft_summary: _draftSummary, ...publicApp } = app;
       return publicApp;
     });
 
