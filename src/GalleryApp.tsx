@@ -13,6 +13,7 @@ import {
   Play,
   RefreshCw,
   Send,
+  ShieldCheck,
   Sparkles,
   Upload,
   UserRound,
@@ -129,18 +130,22 @@ function GalleryCard({
 
 function IdentityPanel({ state, join, busy }: {
   state: GalleryState;
-  join: (role: 'creator' | 'contributor') => void;
+  join: (role: 'host' | 'creator' | 'contributor') => void;
   busy: string;
 }) {
   const contributorsOpen = state.publishedAppCount === state.creatorCount;
+  const hostOccupied = state.sessions.some((session) => session.role === 'host');
   return (
     <section className="gallery-identity-panel">
       <div>
         <span className="gallery-eyebrow">JOIN THE STUDY</span>
         <h2>选择本标签页的实验身份</h2>
-        <p>每个浏览器标签页只分配一个身份；Creator 共 3 席，Creator 1 同时是 Host。</p>
+        <p>每个浏览器标签页只分配一个身份；Host 独立控制实验流程，三位 Creator 分别开发自己的 App。</p>
       </div>
       <div className="gallery-role-grid">
+        <button disabled={Boolean(busy) || hostOccupied} onClick={() => join('host')}>
+          <ShieldCheck /><strong>Host</strong><span>{hostOccupied ? 'Host 席位已占用' : '控制轮次、倒计时与 AI 任务'}</span>
+        </button>
         <button disabled={Boolean(busy)} onClick={() => join('creator')}>
           <UserRound /><strong>Creator</strong><span>开发并发布自己的 App</span>
         </button>
@@ -342,7 +347,7 @@ function AppDetail({
   const [comment, setComment] = useState(myComment?.content || '');
   const lottery = state.lotteries.find((item) => item.app_id === app.id && item.round_number === roundNumber);
   const job = state.generationJobs.find((item) => item.app_id === app.id && item.round_number === roundNumber);
-  const interactionOpen = state.study.status === 'round_active' && Boolean(state.viewer);
+  const interactionOpen = state.study.status === 'round_active' && Boolean(state.viewer) && state.viewer?.role !== 'host';
   const finalStage = state.study.status === 'final_voting' || state.study.status === 'ended';
 
   useEffect(() => setComment(myComment?.content || ''), [myComment?.id, myComment?.content, app.id, roundNumber]);
@@ -353,6 +358,7 @@ function AppDetail({
       ? app.final_code || app.current_code
       : app.current_code;
   const ownApp = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
+  const hostViewer = state.viewer?.role === 'host';
 
   return (
     <section className="gallery-detail" id="app-detail">
@@ -362,14 +368,14 @@ function AppDetail({
         <div className="gallery-detail-actions">
           <button
             className={app.viewer_showcase_liked ? 'gallery-like-button is-liked' : 'gallery-like-button'}
-            disabled={!state.viewer || ownApp || state.study.status === 'ended' || Boolean(busy)}
-            title={ownApp ? '不能点赞自己的作品' : ''}
+            disabled={!state.viewer || hostViewer || ownApp || state.study.status === 'ended' || Boolean(busy)}
+            title={hostViewer ? 'Host 只控制实验流程，不参与点赞' : ownApp ? '不能点赞自己的作品' : ''}
             onClick={() => action('like-app', () => galleryApi.likeApp(clientId, app.id, 'showcase'))}
           ><Heart /> {app.showcase_like_count} 作品赞</button>
           {finalStage && (
             <button
               className={app.viewer_final_liked ? 'gallery-like-button is-liked final-like' : 'gallery-like-button final-like'}
-              disabled={!state.viewer || ownApp || state.study.status === 'ended' || Boolean(busy)}
+              disabled={!state.viewer || hostViewer || ownApp || state.study.status === 'ended' || Boolean(busy)}
               onClick={() => action('like-final', () => galleryApi.likeApp(clientId, app.id, 'final'))}
             ><Sparkles /> {app.final_like_count} 最终版赞</button>
           )}
@@ -402,7 +408,7 @@ function AppDetail({
               {myComment && <button className="gallery-delete-comment" disabled={Boolean(busy)} onClick={() => action('delete-comment', () => galleryApi.deleteComment(clientId, app.id))}>删除本轮评论</button>}
             </div>
           ) : (
-            <div className="gallery-locked-note"><Clock3 /> {state.study.status === 'preparing' ? '正式实验开始后开放评论。' : '当前评论已锁定。'}</div>
+            <div className="gallery-locked-note"><Clock3 /> {hostViewer ? 'Host 只控制实验流程，不参与评论。' : state.study.status === 'preparing' ? '正式实验开始后开放评论。' : '当前评论已锁定。'}</div>
           )}
 
           <div className="gallery-comment-list">
@@ -509,7 +515,7 @@ export default function GalleryApp() {
   const selectedApp = publishedApps.find((app) => app.id === selectedAppId);
   const currentRound = state?.rounds.find((round) => round.round_number === state.study.current_round);
   const remaining = currentRound && state?.study.status === 'round_active' ? Date.parse(currentRound.ends_at) - now : 0;
-  const isHost = state?.viewer?.code === 'C01';
+  const isHost = state?.viewer?.role === 'host';
   const finalStage = state?.study.status === 'final_voting' || state?.study.status === 'ended';
   const currentGenerationJobs = state?.generationJobs.filter(
     (job) => Number(job.round_number) === Number(state.study.current_round),
@@ -543,7 +549,7 @@ export default function GalleryApp() {
               </select>
             ) : <strong>{state.aiProvider}</strong>}
           </div>
-          {state.viewer ? <div className="gallery-identity"><span>{state.viewer.role}</span><strong>{state.viewer.code}{isHost ? ' · Host' : ''}</strong></div> : <div className="gallery-identity is-guest"><span>Browsing as</span><strong>Guest</strong></div>}
+          {state.viewer ? <div className="gallery-identity"><span>{state.viewer.role}</span><strong>{state.viewer.code}</strong></div> : <div className="gallery-identity is-guest"><span>Browsing as</span><strong>Guest</strong></div>}
           <button className="gallery-icon-button" onClick={() => void refresh()} title="Refresh"><RefreshCw className={busy ? 'spin' : ''} /></button>
         </div>
       </header>
@@ -572,9 +578,10 @@ export default function GalleryApp() {
               {[0, 1, 2].map((index) => {
                 const app = publishedApps[index];
                 const ownApp = state.viewer?.role === 'creator' && state.viewer.code === app?.creator_code;
-                const likeDisabled = !state.viewer || Boolean(ownApp) || state.study.status === 'ended' || Boolean(busy);
+                const likeDisabled = !state.viewer || isHost || Boolean(ownApp) || state.study.status === 'ended' || Boolean(busy);
                 const likeTitle = !state.viewer ? '选择身份后可以点赞'
-                  : ownApp ? '不能点赞自己的作品'
+                  : isHost ? 'Host 只控制实验流程，不参与点赞'
+                    : ownApp ? '不能点赞自己的作品'
                     : state.study.status === 'ended' ? '项目已结束' : '';
                 return app ? (
                   <GalleryCard
@@ -609,7 +616,7 @@ export default function GalleryApp() {
         {isHost && !selectedApp && (
           <section className="gallery-host-panel">
             <header>
-              <div><span className="gallery-eyebrow">HOST CONTROL · C01</span><h3>全局实验控制</h3><p>Host 控制实验轮次，并可在进入下一轮前停止或重新开发本轮 App；抽中的评论不会改变。</p></div>
+              <div><span className="gallery-eyebrow">HOST CONTROL · H01</span><h3>全局实验控制</h3><p>Host 只控制实验轮次、倒计时与 AI 开发任务，不参与 App 创作、评论或点赞。</p></div>
               <div className="gallery-host-primary-actions">
                 {state.study.status === 'preparing' && <button disabled={state.publishedAppCount !== 3 || Boolean(busy)} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
                 {state.study.status === 'round_active' && <button className="is-end-round" disabled={Boolean(busy)} onClick={() => action('end-round', () => galleryApi.endRound(clientId))}><Clock3 /> 提前结束第 {state.study.current_round} 轮</button>}

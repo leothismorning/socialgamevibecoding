@@ -1,4 +1,4 @@
-export type GalleryRole = 'creator' | 'contributor';
+export type GalleryRole = 'host' | 'creator' | 'contributor';
 export type GalleryStatus =
   | 'preparing'
   | 'round_active'

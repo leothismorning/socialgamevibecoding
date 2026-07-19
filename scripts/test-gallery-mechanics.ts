@@ -16,6 +16,11 @@ function expectError(task: () => unknown, pattern: RegExp) {
 }
 
 const creatorClients = ['creator-tab-1', 'creator-tab-2', 'creator-tab-3'];
+const hostClient = 'host-tab';
+const hostState = gallery.joinGallery(hostClient, 'host');
+assert.equal(hostState.viewer?.code, 'H01');
+assert.equal(hostState.viewer?.role, 'host');
+expectError(() => gallery.joinGallery('second-host-tab', 'host'), /Host seat is already occupied/i);
 creatorClients.forEach((clientId, index) => {
   const state = gallery.joinGallery(clientId, 'creator');
   assert.equal(state.viewer?.code, `C0${index + 1}`);
@@ -46,11 +51,20 @@ expectError(
   () => gallery.toggleGalleryAppLike(creatorClients[0], firstPublishedApp.id, 'showcase'),
   /own App/i,
 );
+expectError(
+  () => gallery.toggleGalleryAppLike(hostClient, firstPublishedApp.id, 'showcase'),
+  /Host only controls/i,
+);
 
-state = gallery.startFormalGalleryGame(creatorClients[0]);
+expectError(() => gallery.startFormalGalleryGame(creatorClients[0]), /requires the host role/i);
+state = gallery.startFormalGalleryGame(hostClient);
 assert.equal(state.study.status, 'round_active');
 assert.equal(state.study.current_round, 1);
-expectError(() => gallery.startNextGalleryRound(creatorClients[1]), /Only Creator 1/i);
+expectError(() => gallery.startNextGalleryRound(creatorClients[1]), /requires the host role/i);
+expectError(
+  () => gallery.saveGalleryComment(hostClient, firstPublishedApp.id, 'Host should not participate'),
+  /Host only controls/i,
+);
 
 function playRound(roundNumber: number) {
   state = gallery.getGalleryState('contributor-tab-1');
@@ -77,9 +91,9 @@ function playRound(roundNumber: number) {
   if (roundNumber === 1) {
     expectError(
       () => gallery.endGalleryRoundEarly(creatorClients[1], () => 0),
-      /Only Creator 1/i,
+      /requires the host role/i,
     );
-    const endedEarly = gallery.endGalleryRoundEarly(creatorClients[0], () => 0);
+    const endedEarly = gallery.endGalleryRoundEarly(hostClient, () => 0);
     assert.equal(endedEarly.study.status, 'round_processing');
   } else {
     assert.equal(gallery.lockExpiredGalleryRound(() => 0, true), true);
@@ -99,13 +113,13 @@ function playRound(roundNumber: number) {
     `).get(roundNumber) as { id: number };
     expectError(
       () => gallery.cancelGalleryGenerationJob('contributor-tab-1', cancellableJob.id),
-      /requires the creator role/i,
+      /requires the host role/i,
     );
     expectError(
       () => gallery.cancelGalleryGenerationJob(creatorClients[1], cancellableJob.id),
-      /Only Creator 1/i,
+      /requires the host role/i,
     );
-    const afterCancel = gallery.cancelGalleryGenerationJob(creatorClients[0], cancellableJob.id);
+    const afterCancel = gallery.cancelGalleryGenerationJob(hostClient, cancellableJob.id);
     const cancelledJob = (afterCancel.generationJobs as any[])
       .find((item: any) => Number(item.id) === Number(cancellableJob.id));
     assert.equal(
@@ -153,9 +167,9 @@ const roundOneJob = db.prepare(`
 `).get() as { id: number };
 expectError(
   () => gallery.redevelopGalleryGenerationJob(creatorClients[1], roundOneJob.id),
-  /Only Creator 1/i,
+  /requires the host role/i,
 );
-state = gallery.redevelopGalleryGenerationJob(creatorClients[0], roundOneJob.id);
+state = gallery.redevelopGalleryGenerationJob(hostClient, roundOneJob.id);
 assert.equal(state.study.status, 'round_processing');
 const redevelopJob = gallery.nextGalleryGenerationJob();
 assert.equal(Number(redevelopJob.id), Number(roundOneJob.id));
@@ -167,11 +181,11 @@ db.prepare(`
   WHERE id = ?
 `).run(roundOneJob.id);
 assert.equal(gallery.finalizeGalleryRoundIfReady(), true);
-assert.equal(gallery.getGalleryState(creatorClients[0]).study.status, 'round_review');
+assert.equal(gallery.getGalleryState(hostClient).study.status, 'round_review');
 
-gallery.startNextGalleryRound(creatorClients[0]);
+gallery.startNextGalleryRound(hostClient);
 playRound(2);
-gallery.startNextGalleryRound(creatorClients[0]);
+gallery.startNextGalleryRound(hostClient);
 playRound(3);
 
 state = gallery.getGalleryState('contributor-tab-1');
@@ -184,7 +198,7 @@ expectError(
   /own App/i,
 );
 
-state = gallery.endGalleryProject(creatorClients[0]);
+state = gallery.endGalleryProject(hostClient);
 assert.equal(state.study.status, 'ended');
 assert.ok(state.apps.every((app: any) => Number(app.final_like_count) === 1));
 expectError(
@@ -192,5 +206,5 @@ expectError(
   /active round/i,
 );
 
-console.log('Gallery mechanics test passed: direct gallery likes, Host early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+console.log('Gallery mechanics test passed: independent Host role, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
 db.close();

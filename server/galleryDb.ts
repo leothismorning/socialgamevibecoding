@@ -1,7 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { db, getAIProvider, type StudyAIProvider } from './studyDb.js';
 
-export type GalleryRole = 'creator' | 'contributor';
+export type GalleryRole = 'host' | 'creator' | 'contributor';
 export type GalleryStatus =
   | 'preparing'
   | 'round_active'
@@ -200,15 +200,17 @@ function requireSession(clientId: string, role?: GalleryRole): GalleryViewer {
 }
 
 function codeRange(role: GalleryRole) {
-  const prefix = role === 'creator' ? 'C' : 'P';
-  const count = role === 'creator' ? CREATOR_COUNT : CONTRIBUTOR_COUNT;
+  const prefix = role === 'host' ? 'H' : role === 'creator' ? 'C' : 'P';
+  const count = role === 'host' ? 1 : role === 'creator' ? CREATOR_COUNT : CONTRIBUTOR_COUNT;
   return Array.from({ length: count }, (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`);
 }
 
 export function joinGallery(clientId: string, role: GalleryRole) {
   const cleanClientId = clientId.trim();
   if (!cleanClientId || cleanClientId.length > 160) throw new Error('A valid browser-tab session is required.');
-  if (role !== 'creator' && role !== 'contributor') throw new Error('Role must be Creator or Contributor.');
+  if (role !== 'host' && role !== 'creator' && role !== 'contributor') {
+    throw new Error('Role must be Host, Creator, or Contributor.');
+  }
 
   if (role === 'contributor' && publishedApps().length < CREATOR_COUNT) {
     throw new Error('Contributors can enter after all three Creators publish their Apps.');
@@ -226,6 +228,7 @@ export function joinGallery(clientId: string, role: GalleryRole) {
   );
   const code = codeRange(role).find((candidate) => !occupied.has(candidate));
   if (!code) {
+    if (role === 'host') throw new Error('The Host seat is already occupied.');
     throw new Error(role === 'creator' ? 'All three Creator seats are occupied.' : 'All Contributor seats are occupied.');
   }
 
@@ -347,8 +350,14 @@ function publishedApps() {
 }
 
 function requireHost(clientId: string) {
-  const viewer = requireSession(clientId, 'creator');
-  if (viewer.code !== 'C01') throw new Error('Only Creator 1 / Host can control global rounds.');
+  return requireSession(clientId, 'host');
+}
+
+function requireGalleryParticipant(clientId: string) {
+  const viewer = requireSession(clientId);
+  if (viewer.role === 'host') {
+    throw new Error('The Host only controls the experiment flow and cannot comment or like.');
+  }
   return viewer;
 }
 
@@ -395,7 +404,7 @@ function activeRoundOrThrow() {
 }
 
 export function saveGalleryComment(clientId: string, appId: string, content: string) {
-  const viewer = requireSession(clientId);
+  const viewer = requireGalleryParticipant(clientId);
   const { currentStudy } = activeRoundOrThrow();
   const app = db.prepare(`SELECT id FROM gallery_apps WHERE id = ? AND study_id = ? AND status = 'published'`).get(
     appId,
@@ -417,7 +426,7 @@ export function saveGalleryComment(clientId: string, appId: string, content: str
 }
 
 export function deleteGalleryComment(clientId: string, appId: string) {
-  const viewer = requireSession(clientId);
+  const viewer = requireGalleryParticipant(clientId);
   const { currentStudy } = activeRoundOrThrow();
   const timestamp = now();
   db.prepare(`
@@ -428,7 +437,7 @@ export function deleteGalleryComment(clientId: string, appId: string) {
 }
 
 export function toggleGalleryCommentLike(clientId: string, commentId: number) {
-  const viewer = requireSession(clientId);
+  const viewer = requireGalleryParticipant(clientId);
   const { currentStudy } = activeRoundOrThrow();
   const comment = db.prepare(`
     SELECT * FROM gallery_comments
@@ -449,7 +458,7 @@ export function toggleGalleryCommentLike(clientId: string, commentId: number) {
 }
 
 export function toggleGalleryAppLike(clientId: string, appId: string, stage: 'showcase' | 'final') {
-  const viewer = requireSession(clientId);
+  const viewer = requireGalleryParticipant(clientId);
   const currentStudy = study();
   const app = db.prepare(`SELECT * FROM gallery_apps WHERE id = ? AND study_id = ? AND status = 'published'`).get(
     appId,

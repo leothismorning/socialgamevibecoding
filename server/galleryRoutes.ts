@@ -41,6 +41,12 @@ function creatorContext(clientId: string) {
   return state;
 }
 
+function hostContext(clientId: string) {
+  const state = getGalleryState(clientId);
+  if (state.viewer?.role !== 'host') throw new Error('Choose the Host identity to control the experiment.');
+  return state;
+}
+
 function publicAgentMessage(result: Awaited<ReturnType<typeof runDevelopmentAgent>>) {
   return [result.text, ...result.steps].filter(Boolean).join('\n\n');
 }
@@ -134,8 +140,8 @@ export function registerGalleryRoutes(app: Express) {
   app.post('/api/gallery/ai-provider', (req, res) => {
     try {
       const clientId = clientIdFrom(req);
-      const state = creatorContext(clientId);
-      if (state.viewer?.code !== 'C01') throw new Error('Only Creator 1 / Host can change the shared AI model.');
+      const state = hostContext(clientId);
+      if (state.study.status !== 'preparing') throw new Error('The shared AI model is locked after the formal game starts.');
       setAIProvider(String(req.body?.provider || '') as StudyAIProvider);
       res.json(getGalleryState(clientId));
     } catch (error) {
@@ -321,7 +327,7 @@ export function registerGalleryRoutes(app: Express) {
     try {
       const jobId = Number(req.params.jobId);
       const state = cancelGalleryGenerationJob(clientIdFrom(req), jobId);
-      activeGenerationControllers.get(jobId)?.abort(new Error('Stopped by Creator.'));
+      activeGenerationControllers.get(jobId)?.abort(new Error('Stopped by Host.'));
       res.json(state);
     } catch (error) {
       sendError(res, error);
