@@ -485,7 +485,12 @@ export function lockExpiredGalleryRound(random: LotteryRandom = (max) => randomI
   const timestamp = now();
 
   const tx = db.transaction(() => {
-    db.prepare(`UPDATE gallery_rounds SET status = 'processing', locked_at = ? WHERE id = ?`).run(timestamp, round.id);
+    db.prepare(`
+      UPDATE gallery_rounds
+      SET status = 'processing', locked_at = ?,
+          ends_at = CASE WHEN ? = 1 THEN ? ELSE ends_at END
+      WHERE id = ?
+    `).run(timestamp, force ? 1 : 0, timestamp, round.id);
     db.prepare(`UPDATE gallery_studies SET status = 'round_processing', updated_at = ? WHERE id = ?`).run(
       timestamp,
       STUDY_ID,
@@ -548,6 +553,21 @@ export function lockExpiredGalleryRound(random: LotteryRandom = (max) => randomI
   tx();
   finalizeGalleryRoundIfReady();
   return true;
+}
+
+export function endGalleryRoundEarly(
+  clientId: string,
+  random: LotteryRandom = (max) => randomInt(max),
+) {
+  requireHost(clientId);
+  const currentStudy = study();
+  if (currentStudy.status !== 'round_active') {
+    throw new Error('Only an active countdown can be ended early.');
+  }
+  if (!lockExpiredGalleryRound(random, true)) {
+    throw new Error('The current round could not be ended.');
+  }
+  return getGalleryState(clientId);
 }
 
 export function nextGalleryGenerationJob() {

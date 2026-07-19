@@ -31,6 +31,7 @@ export const galleryApi = {
     method: 'POST', body: body({ clientId }),
   }),
   start: (clientId: string) => request('/api/gallery/start', { method: 'POST', body: body({ clientId }) }),
+  endRound: (clientId: string) => request('/api/gallery/end-round', { method: 'POST', body: body({ clientId }) }),
   nextRound: (clientId: string) => request('/api/gallery/next-round', { method: 'POST', body: body({ clientId }) }),
   end: (clientId: string) => request('/api/gallery/end', { method: 'POST', body: body({ clientId }) }),
   comment: (clientId: string, appId: string, content: string) => request('/api/gallery/comments', {

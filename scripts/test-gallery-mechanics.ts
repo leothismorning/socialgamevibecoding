@@ -39,8 +39,15 @@ const contributorOne = gallery.joinGallery('contributor-tab-1', 'contributor');
 const contributorTwo = gallery.joinGallery('contributor-tab-2', 'contributor');
 assert.equal(contributorOne.viewer?.code, 'P01');
 assert.equal(contributorTwo.viewer?.code, 'P02');
+const firstPublishedApp = (contributorOne.apps as any[]).find((app: any) => app.creator_code === 'C01');
+let state = gallery.toggleGalleryAppLike('contributor-tab-1', firstPublishedApp.id, 'showcase');
+assert.equal((state.apps as any[]).find((app: any) => app.id === firstPublishedApp.id)?.viewer_showcase_liked, 1);
+expectError(
+  () => gallery.toggleGalleryAppLike(creatorClients[0], firstPublishedApp.id, 'showcase'),
+  /own App/i,
+);
 
-let state = gallery.startFormalGalleryGame(creatorClients[0]);
+state = gallery.startFormalGalleryGame(creatorClients[0]);
 assert.equal(state.study.status, 'round_active');
 assert.equal(state.study.current_round, 1);
 expectError(() => gallery.startNextGalleryRound(creatorClients[1]), /Only Creator 1/i);
@@ -67,7 +74,16 @@ function playRound(roundNumber: number) {
     expectError(() => gallery.toggleGalleryCommentLike('contributor-tab-1', p1Comment.id), /own comment/i);
   }
 
-  assert.equal(gallery.lockExpiredGalleryRound(() => 0, true), true);
+  if (roundNumber === 1) {
+    expectError(
+      () => gallery.endGalleryRoundEarly(creatorClients[1], () => 0),
+      /Only Creator 1/i,
+    );
+    const endedEarly = gallery.endGalleryRoundEarly(creatorClients[0], () => 0);
+    assert.equal(endedEarly.study.status, 'round_processing');
+  } else {
+    assert.equal(gallery.lockExpiredGalleryRound(() => 0, true), true);
+  }
   let processing = gallery.getGalleryState('contributor-tab-1');
   const lotteries = processing.lotteries.filter((item: any) => item.round_number === roundNumber);
   assert.equal(lotteries.length, 3);
@@ -169,5 +185,5 @@ expectError(
   /active round/i,
 );
 
-console.log('Gallery mechanics test passed: 3 creators, 3 apps, Host stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+console.log('Gallery mechanics test passed: direct gallery likes, Host early round end, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
 db.close();

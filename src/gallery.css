@@ -121,7 +121,11 @@
 .gallery-card-body h3 { margin: 7px 0 7px; font-size: 20px; letter-spacing: -.03em; }
 .gallery-card-body p { min-height: 38px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .gallery-card-stats { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #edf1f6; padding-top: 15px; }
-.gallery-card-stats > span { display: flex; align-items: center; gap: 6px; color: #e43a7c; font-size: 12px; font-weight: 800; }
+.gallery-card-like-button { min-height: 36px; display: flex; align-items: center; gap: 6px; padding: 0 11px; color: #d93676 !important; border: 1px solid #f0cad9; border-radius: 11px; background: #fff7fa; font-size: 10px !important; font-weight: 900; cursor: pointer; transition: .18s ease; }
+.gallery-card-like-button:hover:not(:disabled) { transform: translateY(-1px); border-color: #e98eb1; box-shadow: 0 7px 18px rgba(214, 54, 118, .12); }
+.gallery-card-like-button.is-liked { color: #fff !important; border-color: #e43a7c; background: linear-gradient(120deg, #f04b8c, #d62c70); }
+.gallery-card-like-button.is-liked svg { fill: currentColor; }
+.gallery-card-like-button:disabled { cursor: not-allowed; opacity: .5; }
 .gallery-text-button { display: flex; align-items: center; gap: 5px; padding: 0; color: var(--blue) !important; border: 0; background: transparent; font-size: 12px !important; font-weight: 900; cursor: pointer; }
 .gallery-placeholder { min-height: 358px; display: grid; place-content: center; justify-items: center; gap: 10px; color: #91a0b5; border-style: dashed; background: rgba(255,255,255,.48); box-shadow: none; }
 .gallery-placeholder:hover { transform: none; box-shadow: none; }
@@ -242,6 +246,7 @@
 .gallery-host-primary-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 .gallery-host-primary-actions button { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 16px; color: #fff !important; border: 0; border-radius: 13px; background: linear-gradient(110deg, var(--blue), var(--violet)); font-size: 11px !important; font-weight: 900; cursor: pointer; white-space: nowrap; }
 .gallery-host-primary-actions button svg { width: 16px; }
+.gallery-host-primary-actions button.is-end-round { background: linear-gradient(110deg, #ed7b35, #db3f68); }
 .gallery-host-job-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding-top: 15px; border-top: 1px solid #e4eaf3; }
 .gallery-host-job-grid article { min-width: 0; display: grid; gap: 12px; padding: 13px; border: 1px solid #dfe6f1; border-radius: 14px; background: #f8faff; }
 .gallery-host-job-grid article.is-running { border-color: #c8daf9; background: #f3f7ff; }

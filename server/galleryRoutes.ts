@@ -4,6 +4,7 @@ import {
   cancelGalleryGenerationJob,
   completeGalleryGenerationJob,
   deleteGalleryComment,
+  endGalleryRoundEarly,
   endGalleryProject,
   failGalleryGenerationJob,
   finalizeGalleryRoundIfReady,
@@ -248,6 +249,16 @@ export function registerGalleryRoutes(app: Express) {
   app.post('/api/gallery/next-round', (req, res) => {
     try {
       res.json(startNextGalleryRound(clientIdFrom(req)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/gallery/end-round', (req, res) => {
+    try {
+      const state = endGalleryRoundEarly(clientIdFrom(req));
+      void processGalleryAutomation();
+      res.json(state);
     } catch (error) {
       sendError(res, error);
     }

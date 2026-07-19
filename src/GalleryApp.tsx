@@ -75,11 +75,19 @@ function GalleryCard({
   app,
   finalStage,
   open,
+  like,
+  liked,
+  likeDisabled,
+  likeTitle,
   index,
 }: {
   app: GalleryAppRecord;
   finalStage: boolean;
   open: () => void;
+  like: () => void;
+  liked: boolean;
+  likeDisabled: boolean;
+  likeTitle: string;
   index: number;
 }) {
   return (
@@ -106,7 +114,12 @@ function GalleryCard({
           <p>{app.brief || 'A collaborative vibe-coded App.'}</p>
         </div>
         <div className="gallery-card-stats">
-          <span><Heart size={16} /> {finalStage ? app.final_like_count : app.showcase_like_count}</span>
+          <button
+            className={liked ? 'gallery-card-like-button is-liked' : 'gallery-card-like-button'}
+            disabled={likeDisabled}
+            title={likeTitle}
+            onClick={like}
+          ><Heart size={16} /> {finalStage ? app.final_like_count : app.showcase_like_count} {finalStage ? '最终版赞' : '作品赞'}</button>
           <button className="gallery-text-button" onClick={open}>查看作品 <ArrowRight size={15} /></button>
         </div>
       </div>
@@ -498,8 +511,26 @@ export default function GalleryApp() {
             <div className="gallery-grid" aria-label="公开作品画廊">
               {[0, 1, 2].map((index) => {
                 const app = publishedApps[index];
+                const ownApp = state.viewer?.role === 'creator' && state.viewer.code === app?.creator_code;
+                const likeDisabled = !state.viewer || Boolean(ownApp) || state.study.status === 'ended' || Boolean(busy);
+                const likeTitle = !state.viewer ? '选择身份后可以点赞'
+                  : ownApp ? '不能点赞自己的作品'
+                    : state.study.status === 'ended' ? '项目已结束' : '';
                 return app ? (
-                  <GalleryCard key={app.id} app={app} index={index} finalStage={Boolean(finalStage)} open={() => setSelectedAppId(app.id)} />
+                  <GalleryCard
+                    key={app.id}
+                    app={app}
+                    index={index}
+                    finalStage={Boolean(finalStage)}
+                    open={() => setSelectedAppId(app.id)}
+                    liked={Boolean(finalStage ? app.viewer_final_liked : app.viewer_showcase_liked)}
+                    likeDisabled={likeDisabled}
+                    likeTitle={likeTitle}
+                    like={() => void action(
+                      `like-home-${app.id}`,
+                      () => galleryApi.likeApp(clientId, app.id, finalStage ? 'final' : 'showcase'),
+                    )}
+                  />
                 ) : (
                   <article className="gallery-card gallery-placeholder" style={{ order: index }} key={`placeholder-${index}`}><LoaderCircle /><strong>等待 Creator 发布</strong><p>这个画廊席位还在开发中。</p></article>
                 );
@@ -521,6 +552,7 @@ export default function GalleryApp() {
               <div><span className="gallery-eyebrow">HOST CONTROL · C01</span><h3>全局实验控制</h3><p>Host 控制实验轮次，并可在进入下一轮前停止或重新开发本轮 App；抽中的评论不会改变。</p></div>
               <div className="gallery-host-primary-actions">
                 {state.study.status === 'preparing' && <button disabled={state.publishedAppCount !== 3 || Boolean(busy)} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
+                {state.study.status === 'round_active' && <button className="is-end-round" disabled={Boolean(busy)} onClick={() => action('end-round', () => galleryApi.endRound(clientId))}><Clock3 /> 提前结束第 {state.study.current_round} 轮</button>}
                 {state.study.status === 'round_review' && <button disabled={Boolean(busy)} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>开启第 {state.study.current_round + 1} 轮 <ArrowRight /></button>}
                 {state.study.status === 'final_voting' && <button disabled={Boolean(busy)} onClick={() => action('end', () => galleryApi.end(clientId))}><Check /> 结束最终投票</button>}
               </div>
