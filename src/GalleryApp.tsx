@@ -429,6 +429,11 @@ export default function GalleryApp() {
   const remaining = currentRound && state?.study.status === 'round_active' ? Date.parse(currentRound.ends_at) - now : 0;
   const isHost = state?.viewer?.code === 'C01';
   const finalStage = state?.study.status === 'final_voting' || state?.study.status === 'ended';
+  const stoppableJobs = state?.generationJobs.filter((job) =>
+    ['pending', 'running'].includes(job.status)
+      && state.viewer?.role === 'creator'
+      && (isHost || job.app_creator_code === state.viewer.code),
+  ) || [];
 
   useEffect(() => {
     if (selectedAppId) window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -483,6 +488,23 @@ export default function GalleryApp() {
           <AppDetail state={state} app={selectedApp} close={() => setSelectedAppId('')} action={action} clientId={clientId} busy={busy} />
         ) : (
           <section className="gallery-home">
+            {state.study.status === 'round_processing' && stoppableJobs.length > 0 && (
+              <section className="gallery-ai-stop-panel">
+                <div>
+                  <LoaderCircle className="spin" />
+                  <div><strong>AI 正在生成新版本</strong><p>如果请求长时间没有返回，可以停止对应任务；当前版本不会丢失。</p></div>
+                </div>
+                <div>
+                  {stoppableJobs.map((job) => (
+                    <button
+                      key={job.id}
+                      disabled={Boolean(busy)}
+                      onClick={() => action(`cancel-job-${job.id}`, () => galleryApi.cancelJob(clientId, job.id))}
+                    ><X /> 停止 {job.app_title} 的 AI</button>
+                  ))}
+                </div>
+              </section>
+            )}
             <div className="gallery-grid" aria-label="公开作品画廊">
               {[0, 1, 2].map((index) => {
                 const app = publishedApps[index];

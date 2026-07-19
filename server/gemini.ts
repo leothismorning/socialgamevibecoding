@@ -10,6 +10,7 @@ export type GeminiResult = {
 export type GeminiOptions = {
   systemPrompt?: string;
   maxTokens?: number;
+  signal?: AbortSignal;
 };
 
 export const GEMINI_MODEL = 'gemini-2.5-flash';
@@ -52,6 +53,7 @@ export async function generateWithGemini(
   try {
     upstream = await fetch(endpoint, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
         'x-goog-api-key': apiKey,

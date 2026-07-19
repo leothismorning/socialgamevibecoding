@@ -74,6 +74,31 @@ function playRound(roundNumber: number) {
   assert.ok(lotteries.every((item: any) => item.selected_author === 'P01'));
   assert.ok(lotteries.every((item: any) => item.total_weight === 3));
 
+  if (roundNumber === 1) {
+    const cancellableJob = db.prepare(`
+      SELECT id FROM gallery_generation_jobs
+      WHERE round_number = ? AND status = 'pending'
+      ORDER BY id
+      LIMIT 1
+    `).get(roundNumber) as { id: number };
+    expectError(
+      () => gallery.cancelGalleryGenerationJob(creatorClients[1], cancellableJob.id),
+      /App Creator or Creator 1/i,
+    );
+    const afterCancel = gallery.cancelGalleryGenerationJob(creatorClients[0], cancellableJob.id);
+    const cancelledJob = (afterCancel.generationJobs as any[])
+      .find((item: any) => Number(item.id) === Number(cancellableJob.id));
+    assert.equal(
+      cancelledJob?.status,
+      'cancelled',
+    );
+    db.prepare(`
+      UPDATE gallery_generation_jobs
+      SET status = 'pending', error = NULL, completed_at = NULL
+      WHERE id = ?
+    `).run(cancellableJob.id);
+  }
+
   let job = gallery.nextGalleryGenerationJob();
   let completed = 0;
   while (job) {

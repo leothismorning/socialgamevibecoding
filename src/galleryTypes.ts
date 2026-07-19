@@ -75,8 +75,9 @@ export type GalleryJob = {
   id: number;
   app_id: string;
   app_title: string;
+  app_creator_code: string;
   round_number: number;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
   attempts: number;
   error?: string;
 };

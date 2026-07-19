@@ -23,6 +23,7 @@ export type DevelopmentAgentInput = {
   currentCode?: string;
   creatorMessage?: string;
   recentConversation?: string;
+  signal?: AbortSignal;
   mode: 'initial-project' | 'round-candidate' | 'debug';
 };
 
@@ -401,7 +402,14 @@ function validateAssembledHtml(code: string, inspection: ArtifactInspection) {
   }
 }
 
-async function runAgentTextStep(provider: AIProvider, title: string, prompt: string, maxTokens = 3072) {
+async function runAgentTextStep(
+  provider: AIProvider,
+  title: string,
+  prompt: string,
+  maxTokens = 3072,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   addDebugLog({
     kind: 'ai',
     phase: 'info',
@@ -411,6 +419,7 @@ async function runAgentTextStep(provider: AIProvider, title: string, prompt: str
   const result = await generateWithAI(provider, prompt, {
     systemPrompt: TEXT_ONLY_SYSTEM,
     maxTokens,
+    signal,
   });
   return result.text.trim();
 }
@@ -450,6 +459,7 @@ Only when the supplied requirements or existing HTML require real images, specif
 Do not plan Tailwind, Bootstrap, external CSS frameworks, or invented image URLs.
 Use the same language as the Creator request and keep the plan under 900 characters.`,
     2048,
+    input.signal,
   );
 
   let body = cleanBodyFragment(await runAgentTextStep(
@@ -469,6 +479,7 @@ Only for images required by the supplied requirements or existing project, use <
 Use stable ids that JavaScript can bind and preserve during later repair. Avoid inline onclick handlers.
 Keep the fragment under 260 lines.`,
     6144,
+    input.signal,
   ));
 
   let structureInspection = inspectAgentArtifacts(body, '');
@@ -490,6 +501,7 @@ Replace every Tailwind/Bootstrap/utility class with a small set of descriptive s
 Do not include style or script tags. Do not invent image URLs; use empty src plus descriptive data-image-query and alt attributes.
 Keep it compact and complete.`,
       6144,
+      input.signal,
     ));
     repairNotes.push(`Agent rewrote HTML to remove ${structureInspection.utilityClasses.length} unsupported utility classes.`);
     structureInspection = inspectAgentArtifacts(body, '');
@@ -498,7 +510,9 @@ Keep it compact and complete.`,
     throw new Error(`GLM kept unsupported utility classes after repair: ${structureInspection.utilityClasses.slice(0, 12).join(', ')}.`);
   }
 
+  input.signal?.throwIfAborted();
   const imageResolution = await resolveBodyImageAssets(body);
+  input.signal?.throwIfAborted();
   body = imageResolution.body;
   const imageReport = imageResolution.report;
   addDebugLog({
@@ -526,6 +540,7 @@ Preserve any visual direction explicitly supplied by the Creator, selected ideas
 Include .agent-toast and .agent-toast.show styles.
 Keep CSS under 320 lines.`,
     6144,
+    input.signal,
   ));
 
   let inspection = inspectAgentArtifacts(body, css);
@@ -546,6 +561,7 @@ Missing classes: ${inspection.missingClasses.join(', ')}
 
 Generate replacement CSS ONLY, with no style tag. Define every HTML class, preserve only the visual direction present in the supplied requirements or existing project, include required responsive states, and include .agent-toast plus .agent-toast.show. Do not use any external framework or remote background image, and do not introduce a new visual theme.`,
       6144,
+      input.signal,
     ));
     repairNotes.push(`Agent regenerated CSS after detecting ${inspection.missingClasses.length} unstyled HTML classes.`);
     inspection = inspectAgentArtifacts(body, css);
@@ -571,6 +587,7 @@ If a mini-game is requested, implement the actual playable mechanics, not just p
 Define all functions needed by the controls, but avoid relying on inline onclick.
 Keep JavaScript under 260 lines.`,
     6144,
+    input.signal,
   ));
 
   const summary = await runAgentTextStep(
@@ -586,6 +603,7 @@ CSS length: ${css.length}
 JS length: ${js.length}
 Image assets: ${imageReport.preserved} preserved, ${imageReport.replaced} replaced from Wikimedia, ${imageReport.fallbacks} using embedded fallback.`,
     1024,
+    input.signal,
   );
 
   const code = buildHtml(input, summary, body, css, js);
@@ -620,6 +638,7 @@ ${truncate(js, 3500)}
 Check that the visible layout has styling, images cannot render as broken icons, and required controls have matching ids. If the supplied requirements include a game, also check that it has real event logic.
 Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwise "FAIL: concrete blocking reason".`,
     2048,
+    input.signal,
   );
   if (!/^PASS\s*:/i.test(integrationAudit.trim())) {
     throw new Error(`The development agent integration gate rejected the draft: ${integrationAudit.slice(0, 500)}`);

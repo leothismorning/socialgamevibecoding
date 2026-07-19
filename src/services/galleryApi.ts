@@ -47,4 +47,7 @@ export const galleryApi = {
   retryJob: (clientId: string, jobId: number) => request(`/api/gallery/jobs/${jobId}/retry`, {
     method: 'POST', body: body({ clientId }),
   }),
+  cancelJob: (clientId: string, jobId: number) => request(`/api/gallery/jobs/${jobId}/cancel`, {
+    method: 'POST', body: body({ clientId }),
+  }),
 };

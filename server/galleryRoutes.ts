@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import { runDevelopmentAgent } from './developmentAgent.js';
 import {
+  cancelGalleryGenerationJob,
   completeGalleryGenerationJob,
   deleteGalleryComment,
   endGalleryProject,
@@ -43,6 +44,8 @@ function publicAgentMessage(result: Awaited<ReturnType<typeof runDevelopmentAgen
 }
 
 let automationBusy = false;
+const activeGenerationControllers = new Map<number, AbortController>();
+const GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
 
 export async function processGalleryAutomation() {
   if (automationBusy) return;
@@ -51,6 +54,13 @@ export async function processGalleryAutomation() {
     lockExpiredGalleryRound();
     let job = nextGalleryGenerationJob();
     while (job) {
+      const jobId = Number(job.id);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort(new Error('AI generation timed out after 10 minutes.'));
+      }, GENERATION_TIMEOUT_MS);
+      timeout.unref();
+      activeGenerationControllers.set(jobId, controller);
       try {
         const selectedComment = String(job.selected_comment || '').trim();
         const result = await runDevelopmentAgent({
@@ -64,11 +74,15 @@ export async function processGalleryAutomation() {
           fusionPlan: selectedComment,
           currentCode: String(job.current_code || ''),
           creatorMessage: selectedComment,
+          signal: controller.signal,
           mode: 'round-candidate',
         });
-        completeGalleryGenerationJob(Number(job.id), result.code, result.text);
+        completeGalleryGenerationJob(jobId, result.code, result.text);
       } catch (error) {
-        failGalleryGenerationJob(Number(job.id), error);
+        failGalleryGenerationJob(jobId, error);
+      } finally {
+        clearTimeout(timeout);
+        activeGenerationControllers.delete(jobId);
       }
       job = nextGalleryGenerationJob();
     }
@@ -258,6 +272,17 @@ export function registerGalleryRoutes(app: Express) {
     try {
       const state = retryGalleryGenerationJob(clientIdFrom(req), Number(req.params.jobId));
       void processGalleryAutomation();
+      res.json(state);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/gallery/jobs/:jobId/cancel', (req, res) => {
+    try {
+      const jobId = Number(req.params.jobId);
+      const state = cancelGalleryGenerationJob(clientIdFrom(req), jobId);
+      activeGenerationControllers.get(jobId)?.abort(new Error('Stopped by Creator.'));
       res.json(state);
     } catch (error) {
       sendError(res, error);

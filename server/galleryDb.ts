@@ -613,12 +613,40 @@ export function completeGalleryGenerationJob(jobId: number, code: string, summar
 export function failGalleryGenerationJob(jobId: number, error: unknown) {
   const job = db.prepare(`SELECT * FROM gallery_generation_jobs WHERE id = ?`).get(jobId) as any;
   if (!job) return;
+  if (job.status === 'cancelled') {
+    finalizeGalleryRoundIfReady();
+    return;
+  }
   const message = error instanceof Error ? error.message : String(error);
   const nextStatus = Number(job.attempts || 0) >= 3 ? 'failed' : 'pending';
   db.prepare(`
     UPDATE gallery_generation_jobs SET status = ?, error = ?, completed_at = ? WHERE id = ?
   `).run(nextStatus, message.slice(0, 1000), nextStatus === 'failed' ? now() : null, jobId);
   finalizeGalleryRoundIfReady();
+}
+
+export function cancelGalleryGenerationJob(clientId: string, jobId: number) {
+  const viewer = requireSession(clientId, 'creator');
+  const job = db.prepare(`
+    SELECT j.*, a.creator_code AS app_creator_code, a.title AS app_title
+    FROM gallery_generation_jobs j
+    JOIN gallery_apps a ON a.id = j.app_id
+    WHERE j.id = ? AND j.study_id = ?
+  `).get(jobId, STUDY_ID) as any;
+  if (!job) throw new Error('Generation job not found.');
+  if (viewer.code !== 'C01' && viewer.code !== job.app_creator_code) {
+    throw new Error('Only the App Creator or Creator 1 / Host can stop this AI task.');
+  }
+  if (!['pending', 'running'].includes(String(job.status))) {
+    throw new Error('This AI task has already finished.');
+  }
+  db.prepare(`
+    UPDATE gallery_generation_jobs
+    SET status = 'cancelled', error = ?, completed_at = ?
+    WHERE id = ?
+  `).run(`Stopped by ${viewer.code}.`, now(), jobId);
+  finalizeGalleryRoundIfReady();
+  return getGalleryState(clientId);
 }
 
 export function retryGalleryGenerationJob(clientId: string, jobId: number) {
@@ -728,7 +756,7 @@ export function getGalleryState(clientId = '') {
     WHERE r.study_id = ? ORDER BY r.round_number, r.app_id
   `).all(STUDY_ID);
   const generationJobs = db.prepare(`
-    SELECT j.*, a.title AS app_title FROM gallery_generation_jobs j
+    SELECT j.*, a.title AS app_title, a.creator_code AS app_creator_code FROM gallery_generation_jobs j
     JOIN gallery_apps a ON a.id = j.app_id
     WHERE j.study_id = ? ORDER BY j.round_number, j.id
   `).all(STUDY_ID);

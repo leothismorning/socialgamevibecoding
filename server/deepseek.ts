@@ -10,6 +10,7 @@ type DeepSeekResult = {
 type DeepSeekOptions = {
   systemPrompt?: string;
   maxTokens?: number;
+  signal?: AbortSignal;
 };
 
 const ALLOWED_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
@@ -48,6 +49,7 @@ export async function generateWithDeepSeek(
   try {
     upstream = await fetch(endpoint, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,

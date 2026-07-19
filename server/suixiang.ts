@@ -10,6 +10,7 @@ type SuiXiangResult = {
 type SuiXiangOptions = {
   systemPrompt?: string;
   maxTokens?: number;
+  signal?: AbortSignal;
 };
 
 export const SUIXIANG_GPT_MODEL = 'gpt-5.5';
@@ -70,6 +71,7 @@ export async function generateWithSuiXiangGPT(
     try {
       upstream = await fetch(endpoint, {
         method: 'POST',
+        signal: options.signal,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,

@@ -10,6 +10,7 @@ export type GLMResult = {
 export type GLMOptions = {
   systemPrompt?: string;
   maxTokens?: number;
+  signal?: AbortSignal;
 };
 
 export const GLM_MODEL = 'glm-5.2';
@@ -113,6 +114,7 @@ Include all CSS and JavaScript in the same document.`;
   try {
     upstream = await fetch(endpoint, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
