@@ -25,7 +25,16 @@ export type DevelopmentAgentInput = {
   recentConversation?: string;
   signal?: AbortSignal;
   apiKey?: string;
+  onProgress?: (progress: DevelopmentAgentProgress) => void;
   mode: 'initial-project' | 'round-candidate' | 'debug';
+};
+
+export type DevelopmentAgentProgress = {
+  step: string;
+  order: number;
+  status: 'pending' | 'running' | 'completed' | 'warning' | 'failed' | 'cancelled';
+  title: string;
+  detail?: string;
 };
 
 export type DevelopmentAgentOutput = AIResult & {
@@ -429,6 +438,18 @@ async function runAgentTextStep(
 
 export async function runDevelopmentAgent(input: DevelopmentAgentInput): Promise<DevelopmentAgentOutput> {
   const startedAt = performance.now();
+  const progress = (event: DevelopmentAgentProgress) => {
+    try {
+      input.onProgress?.(event);
+    } catch (error) {
+      addDebugLog({
+        kind: 'server',
+        phase: 'error',
+        title: 'Unable to save public development progress',
+        detail: { error: error instanceof Error ? error.message : String(error), event },
+      });
+    }
+  };
   const preservationPolicy = input.currentCode?.trim()
     ? `Mandatory preservation policy:
 The current HTML is the canonical working App. Treat every new comment/request as a scoped change, not permission to redesign the App. Preserve all existing content, features, pages, navigation, interactions, copy, layout, data, images, and working behavior unless the supplied comment/request explicitly asks to change that exact element. Never remove, replace, rename, restyle, or simplify an unspecified element. If an extension comment is supplied with an original comment, implement their combined intent. Make the smallest additive change that satisfies them.`
@@ -454,6 +475,7 @@ Current HTML excerpt:
 ${truncate(input.currentCode || '', 18000)}`;
 
   const repairNotes: string[] = [];
+  progress({ step: 'plan', order: 1, status: 'running', title: 'AI 正在制定修改计划', detail: '正在理解抽中的评论，并确认哪些现有内容必须保留。' });
   const plan = await runAgentTextStep(
     input.provider,
     '1/4 implementation plan',
@@ -472,7 +494,9 @@ Use the same language as the Creator request and keep the plan under 900 charact
     input.signal,
     input.apiKey,
   );
+  progress({ step: 'plan', order: 1, status: 'completed', title: '修改计划已经完成', detail: plan });
 
+  progress({ step: 'structure', order: 2, status: 'running', title: 'AI 正在修改页面结构', detail: '正在按照计划生成完整页面结构，并保留未被评论要求修改的内容。' });
   let body = cleanBodyFragment(await runAgentTextStep(
     input.provider,
     '2/4 body structure',
@@ -497,6 +521,7 @@ Keep the fragment under 260 lines.`,
 
   let structureInspection = inspectAgentArtifacts(body, '');
   if (structureInspection.utilityClasses.length > 0) {
+    progress({ step: 'structure', order: 2, status: 'running', title: '正在修复页面结构', detail: `检查发现 ${structureInspection.utilityClasses.length} 个不受支持的样式类，AI 正在改写。` });
     body = cleanBodyFragment(await runAgentTextStep(
       input.provider,
       '2b/4 semantic HTML repair',
@@ -523,7 +548,9 @@ Keep it compact and complete.`,
   if (structureInspection.utilityClasses.length > 0) {
     throw new Error(`GLM kept unsupported utility classes after repair: ${structureInspection.utilityClasses.slice(0, 12).join(', ')}.`);
   }
+  progress({ step: 'structure', order: 2, status: 'completed', title: '页面结构已经完成', detail: `已生成完整页面结构，包含 ${structureInspection.usedClasses.length} 组界面样式标记。` });
 
+  progress({ step: 'images', order: 3, status: 'running', title: '系统正在检查图片资源', detail: '正在保留有效图片，并为无法使用的图片寻找可公开访问的替代资源。' });
   input.signal?.throwIfAborted();
   const imageResolution = await resolveBodyImageAssets(body);
   input.signal?.throwIfAborted();
@@ -535,7 +562,15 @@ Keep it compact and complete.`,
     title: 'Agent image validation complete',
     detail: imageReport,
   });
+  progress({
+    step: 'images',
+    order: 3,
+    status: 'completed',
+    title: '图片资源检查完成',
+    detail: `保留 ${imageReport.preserved} 张，替换 ${imageReport.replaced} 张，使用备用图 ${imageReport.fallbacks} 张。`,
+  });
 
+  progress({ step: 'styles', order: 4, status: 'running', title: 'AI 正在编写视觉样式', detail: '正在为页面结构生成完整 CSS，并延续当前 App 的视觉风格。' });
   let css = cleanCss(await runAgentTextStep(
     input.provider,
     '3/4 CSS',
@@ -561,6 +596,7 @@ Keep CSS under 320 lines.`,
 
   let inspection = inspectAgentArtifacts(body, css);
   if (inspection.coverage < 0.9 || inspection.missingClasses.length > 4) {
+    progress({ step: 'styles', order: 4, status: 'running', title: '正在补全遗漏的视觉样式', detail: `自动检查发现 ${inspection.missingClasses.length} 个界面样式尚未覆盖，AI 正在修复。` });
     css = cleanCss(await runAgentTextStep(
       input.provider,
       '3b/4 CSS coverage repair',
@@ -586,7 +622,9 @@ Generate replacement CSS ONLY, with no style tag. Define every HTML class, prese
 
   css = await resolveCssImageAssets(css, imageReport);
   inspection = inspectAgentArtifacts(body, css);
+  progress({ step: 'styles', order: 4, status: 'completed', title: '视觉样式已经完成', detail: `页面样式覆盖率为 ${Math.round(inspection.coverage * 100)}%。` });
 
+  progress({ step: 'logic', order: 5, status: 'running', title: 'AI 正在实现交互逻辑', detail: '正在编写按钮、表单、动画或小游戏所需的 JavaScript 行为。' });
   const js = cleanJs(await runAgentTextStep(
     input.provider,
     '4/4 JavaScript',
@@ -608,7 +646,9 @@ Keep JavaScript under 260 lines.`,
     input.signal,
     input.apiKey,
   ));
+  progress({ step: 'logic', order: 5, status: 'completed', title: '交互逻辑已经完成', detail: `已生成 ${js.length} 个字符的交互逻辑。` });
 
+  progress({ step: 'summary', order: 6, status: 'running', title: 'AI 正在整理本次修改', detail: '正在生成面向所有参与者的版本说明。' });
   const summary = await runAgentTextStep(
     input.provider,
     'summary',
@@ -625,10 +665,12 @@ Image assets: ${imageReport.preserved} preserved, ${imageReport.replaced} replac
     input.signal,
     input.apiKey,
   );
+  progress({ step: 'summary', order: 6, status: 'completed', title: '本次修改说明已经完成', detail: summary });
 
   const code = buildHtml(input, summary, body, css, js);
   validateAssembledHtml(code, inspection);
 
+  progress({ step: 'validation', order: 7, status: 'running', title: '系统正在进行最终检查', detail: '正在检查页面、样式、图片与交互是否完整连接。' });
   const integrationAudit = await runAgentTextStep(
     input.provider,
     'final integration gate',
@@ -664,6 +706,7 @@ Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwi
   if (!/^PASS\s*:/i.test(integrationAudit.trim())) {
     throw new Error(`The development agent integration gate rejected the draft: ${integrationAudit.slice(0, 500)}`);
   }
+  progress({ step: 'validation', order: 7, status: 'completed', title: '最终检查已经通过', detail: integrationAudit.replace(/^PASS\s*:\s*/i, '') });
 
   addDebugLog({
     kind: 'ai',

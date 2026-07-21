@@ -87,6 +87,19 @@ export type GalleryJob = {
   error?: string;
 };
 
+export type GalleryGenerationEvent = {
+  id: number;
+  job_id: number;
+  app_id: string;
+  round_number: number;
+  step_key: string;
+  sort_order: number;
+  status: 'pending' | 'running' | 'completed' | 'warning' | 'failed' | 'cancelled';
+  title: string;
+  detail: string;
+  updated_at: string;
+};
+
 export type DevelopmentMessage = {
   id: number;
   role: 'creator' | 'assistant' | 'system';
@@ -119,6 +132,7 @@ export type GalleryState = {
   comments: GalleryComment[];
   lotteries: GalleryLottery[];
   generationJobs: GalleryJob[];
+  generationEvents: GalleryGenerationEvent[];
   roundOpenings: Array<{
     app_id: string;
     round_number: number;

@@ -202,6 +202,27 @@ function playRound(roundNumber: number) {
   let job = gallery.nextGalleryGenerationJob();
   assert.match(String(job?.selected_parent_comment || ''), /P01 improvement/);
   assert.match(String(job?.selected_comment || ''), /P02 expansion/);
+  if (job) {
+    gallery.recordGalleryGenerationProgress(Number(job.id), {
+      step: 'plan',
+      order: 1,
+      status: 'running',
+      title: 'GPT 正在制定修改计划',
+      detail: 'Public progress test.',
+    });
+    gallery.recordGalleryGenerationProgress(Number(job.id), {
+      step: 'plan',
+      order: 1,
+      status: 'completed',
+      title: '修改计划已经完成',
+      detail: 'Preserve the existing App and implement the selected comments.',
+    });
+    const liveEvent = gallery.getGalleryState('contributor-tab-1').generationEvents.find(
+      (event: any) => Number(event.job_id) === Number(job.id) && event.step_key === 'plan',
+    ) as any;
+    assert.equal(liveEvent?.status, 'completed');
+    assert.match(String(liveEvent?.detail), /Preserve the existing App/);
+  }
   if (roundNumber === 1 && job) {
     const retryJobId = Number(job.id);
     gallery.failGalleryGenerationJob(retryJobId, new Error('Simulated first-attempt network failure.'));
@@ -224,6 +245,9 @@ function playRound(roundNumber: number) {
   processing = gallery.getGalleryState(creatorClients[0]);
   assert.equal(processing.study.status, roundNumber === 3 ? 'final_voting' : 'round_review');
   assert.ok(processing.apps.every((app: any) => Number(app.current_version_number) === roundNumber));
+  assert.ok(processing.generationEvents.some(
+    (event: any) => event.round_number === roundNumber && event.step_key === 'complete',
+  ));
 }
 
 function openAllAppsForNextRound(nextRound: number) {
@@ -330,5 +354,5 @@ assert.equal(
 const nextCreator = gallery.joinGallery('next-creator-tab', 'creator', 'C01');
 assert.equal(nextCreator.viewer?.code, 'C01');
 
-console.log('Gallery mechanics test passed: one-level expansion comments, parent+reply lottery prompts, per-App early comment openings, 15/10-minute round configuration, archived experiments, independent Host controls, weighted lotteries, AI versions, and final votes.');
+console.log('Gallery mechanics test passed: persistent public AI progress, one-level expansion comments, parent+reply lottery prompts, per-App early comment openings, 15/10-minute rounds, archived experiments, Host controls, weighted lotteries, AI versions, and final votes.');
 db.close();

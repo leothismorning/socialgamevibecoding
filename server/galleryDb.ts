@@ -166,6 +166,22 @@ db.exec(`
     UNIQUE (study_id, app_id, round_number)
   );
 
+  CREATE TABLE IF NOT EXISTS gallery_generation_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    study_id TEXT NOT NULL,
+    job_id INTEGER NOT NULL,
+    app_id TEXT NOT NULL,
+    round_number INTEGER NOT NULL,
+    step_key TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (job_id, step_key)
+  );
+
   CREATE TABLE IF NOT EXISTS gallery_round_openings (
     study_id TEXT NOT NULL,
     app_id TEXT NOT NULL,
@@ -683,6 +699,56 @@ export function toggleGalleryAppLike(clientId: string, appId: string, stage: 'sh
 
 type LotteryRandom = (exclusiveMax: number) => number;
 
+export type GalleryGenerationProgress = {
+  step: string;
+  order: number;
+  status: 'pending' | 'running' | 'completed' | 'warning' | 'failed' | 'cancelled';
+  title: string;
+  detail?: string;
+};
+
+export function recordGalleryGenerationProgress(jobId: number, progress: GalleryGenerationProgress) {
+  const job = db.prepare(`
+    SELECT id, app_id, round_number FROM gallery_generation_jobs WHERE id = ? AND study_id = ?
+  `).get(jobId, STUDY_ID) as any;
+  if (!job) return;
+  const timestamp = now();
+  db.prepare(`
+    INSERT INTO gallery_generation_events
+      (study_id, job_id, app_id, round_number, step_key, sort_order, status, title, detail, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(job_id, step_key) DO UPDATE SET
+      sort_order = excluded.sort_order,
+      status = excluded.status,
+      title = excluded.title,
+      detail = excluded.detail,
+      updated_at = excluded.updated_at
+  `).run(
+    STUDY_ID,
+    job.id,
+    job.app_id,
+    job.round_number,
+    progress.step,
+    progress.order,
+    progress.status,
+    progress.title,
+    String(progress.detail || '').slice(0, 4000),
+    timestamp,
+    timestamp,
+  );
+}
+
+function resetGalleryGenerationProgress(jobId: number) {
+  db.prepare(`DELETE FROM gallery_generation_events WHERE study_id = ? AND job_id = ?`).run(STUDY_ID, jobId);
+  recordGalleryGenerationProgress(jobId, {
+    step: 'queued',
+    order: 0,
+    status: 'pending',
+    title: '开发任务已进入队列',
+    detail: '系统已经保存本轮抽中的评论，正在等待 AI 开始处理。',
+  });
+}
+
 export function lockExpiredGalleryRound(random: LotteryRandom = (max) => randomInt(max), force = false) {
   const currentStudy = study();
   if (currentStudy.status !== 'round_active') return false;
@@ -745,7 +811,7 @@ export function lockExpiredGalleryRound(random: LotteryRandom = (max) => randomI
         JSON.stringify(weights),
         timestamp,
       );
-      db.prepare(`
+      const insertedJob = db.prepare(`
         INSERT INTO gallery_generation_jobs
           (study_id, app_id, round_number, selected_comment_id, status, attempts)
         VALUES (?, ?, ?, ?, ?, 0)
@@ -756,6 +822,20 @@ export function lockExpiredGalleryRound(random: LotteryRandom = (max) => randomI
         selectedCommentId,
         selectedCommentId ? 'pending' : 'skipped',
       );
+      const jobId = Number(insertedJob.lastInsertRowid);
+      recordGalleryGenerationProgress(jobId, selectedCommentId ? {
+        step: 'queued',
+        order: 0,
+        status: 'pending',
+        title: '开发任务已进入队列',
+        detail: '系统已经保存本轮抽中的评论，正在等待 AI 开始处理。',
+      } : {
+        step: 'complete',
+        order: 8,
+        status: 'completed',
+        title: '本轮沿用当前版本',
+        detail: '这个 App 本轮没有有效评论，因此不需要调用 AI。',
+      });
     }
   });
   tx();
@@ -810,6 +890,17 @@ export function nextGalleryGenerationJob(jobId?: number) {
     SET status = 'running', attempts = attempts + 1, started_at = ?, error = NULL
     WHERE id = ? AND status = 'pending'
   `).run(now(), job.id);
+  db.prepare(`DELETE FROM gallery_generation_events WHERE study_id = ? AND job_id = ? AND step_key = 'error'`).run(
+    STUDY_ID,
+    job.id,
+  );
+  recordGalleryGenerationProgress(Number(job.id), {
+    step: 'queued',
+    order: 0,
+    status: 'completed',
+    title: 'AI 已接收开发任务',
+    detail: `正在使用本轮抽中的评论开发 ${job.app_title}。`,
+  });
   return { ...job, attempts: Number(job.attempts || 0) + 1 };
 }
 
@@ -848,6 +939,13 @@ export function completeGalleryGenerationJob(jobId: number, code: string, summar
     `).run(timestamp, jobId);
   });
   tx();
+  recordGalleryGenerationProgress(jobId, {
+    step: 'complete',
+    order: 8,
+    status: 'completed',
+    title: '新版本已经发布',
+    detail: summary,
+  });
   finalizeGalleryRoundIfReady();
 }
 
@@ -863,6 +961,13 @@ export function failGalleryGenerationJob(jobId: number, error: unknown) {
   db.prepare(`
     UPDATE gallery_generation_jobs SET status = ?, error = ?, completed_at = ? WHERE id = ?
   `).run(nextStatus, message.slice(0, 1000), nextStatus === 'failed' ? now() : null, jobId);
+  recordGalleryGenerationProgress(jobId, {
+    step: 'error',
+    order: 9,
+    status: nextStatus === 'failed' ? 'failed' : 'warning',
+    title: nextStatus === 'failed' ? 'AI 开发失败' : '连接中断，系统准备重试',
+    detail: message,
+  });
   finalizeGalleryRoundIfReady();
 }
 
@@ -890,6 +995,13 @@ export function cancelGalleryGenerationJob(clientId: string, jobId: number) {
     SET status = 'cancelled', error = ?, completed_at = ?
     WHERE id = ?
   `).run(`Stopped by ${viewer.code}.`, now(), jobId);
+  recordGalleryGenerationProgress(jobId, {
+    step: 'error',
+    order: 9,
+    status: 'cancelled',
+    title: 'Host 已停止 AI 开发',
+    detail: '当前任务已停止，Host 可以在进入下一轮前重新开发。',
+  });
   finalizeGalleryRoundIfReady();
   return getGalleryState(clientId);
 }
@@ -944,6 +1056,7 @@ export function redevelopGalleryGenerationJob(clientId: string, jobId: number) {
     `).run(timestamp, STUDY_ID);
   });
   tx();
+  resetGalleryGenerationProgress(jobId);
   return getGalleryState(clientId);
 }
 
@@ -1087,6 +1200,10 @@ export function getGalleryState(clientId = '') {
     JOIN gallery_apps a ON a.id = j.app_id
     WHERE j.study_id = ? ORDER BY j.round_number, j.id
   `).all(STUDY_ID);
+  const generationEvents = db.prepare(`
+    SELECT * FROM gallery_generation_events
+    WHERE study_id = ? ORDER BY round_number, job_id, sort_order, id
+  `).all(STUDY_ID);
   const sessions = db.prepare(`
     SELECT role, code, joined_at, last_seen_at FROM gallery_sessions WHERE study_id = ? ORDER BY code
   `).all(STUDY_ID);
@@ -1110,6 +1227,7 @@ export function getGalleryState(clientId = '') {
     comments,
     lotteries,
     generationJobs,
+    generationEvents,
     roundOpenings,
     sessions,
     developmentMessages,

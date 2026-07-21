@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { galleryApi } from './services/galleryApi';
-import type { GalleryAppRecord, GalleryJob, GalleryRole, GalleryState, GalleryStatus } from './galleryTypes';
+import type { GalleryAppRecord, GalleryGenerationEvent, GalleryJob, GalleryRole, GalleryState, GalleryStatus } from './galleryTypes';
 import './gallery.css';
 
 const CLIENT_KEY = 'gallery-v2-client-id';
@@ -81,6 +81,8 @@ function GalleryCard({
   likeDisabled,
   likeTitle,
   index,
+  developmentJob,
+  developmentEvents,
 }: {
   app: GalleryAppRecord;
   finalStage: boolean;
@@ -90,7 +92,14 @@ function GalleryCard({
   likeDisabled: boolean;
   likeTitle: string;
   index: number;
+  developmentJob?: GalleryJob;
+  developmentEvents: GalleryGenerationEvent[];
 }) {
+  const currentEvent = [...developmentEvents].sort((left, right) => Number(right.sort_order) - Number(left.sort_order))[0];
+  const completedSteps = developmentEvents.filter((event) => Number(event.sort_order) > 0 && event.status === 'completed').length;
+  const displayedCompletedSteps = developmentJob?.status === 'completed' || developmentJob?.status === 'skipped'
+    ? 8
+    : Math.min(8, completedSteps);
   return (
     <article className={`gallery-card gallery-waterfall-card is-waterfall-${index % 3}`} style={{ order: index }}>
       <div className="gallery-card-chrome">
@@ -98,6 +107,13 @@ function GalleryCard({
         <strong>{app.title}</strong>
         <span>V{Number(app.current_version_number || 0) + 1}</span>
       </div>
+      {developmentJob && currentEvent && (
+        <div className={`gallery-card-development is-${developmentJob.status}`}>
+          <span>{developmentJob.status === 'running' ? <LoaderCircle className="spin" /> : <Bot />}</span>
+          <div><small>AI DEVELOPMENT · R{developmentJob.round_number}</small><strong>{currentEvent.title}</strong></div>
+          <em>{displayedCompletedSteps}/8</em>
+        </div>
+      )}
       {finalStage ? (
         <div className="gallery-card-compare">
           <div><span>初始版</span><Preview code={app.initial_code} title={`${app.title} 初始版`} /></div>
@@ -356,6 +372,71 @@ function EvolutionHistory({ state, app }: { state: GalleryState; app: GalleryApp
   );
 }
 
+function DevelopmentLive({ state, app }: { state: GalleryState; app: GalleryAppRecord }) {
+  const roundNumber = Number(state.study.current_round);
+  const job = state.generationJobs.find(
+    (candidate) => candidate.app_id === app.id && Number(candidate.round_number) === roundNumber,
+  );
+  if (!job) return null;
+  const events = (state.generationEvents || [])
+    .filter((event) => Number(event.job_id) === Number(job.id))
+    .sort((left, right) => Number(left.sort_order) - Number(right.sort_order));
+  const lottery = state.lotteries.find(
+    (candidate) => candidate.app_id === app.id && Number(candidate.round_number) === roundNumber,
+  );
+  const currentEvent = [...events].sort((left, right) => Number(right.sort_order) - Number(left.sort_order))[0];
+  const completedSteps = events.filter((event) => Number(event.sort_order) > 0 && event.status === 'completed').length;
+  const displayedCompletedSteps = job.status === 'completed' || job.status === 'skipped' ? 8 : Math.min(8, completedSteps);
+  const progress = job.status === 'completed' || job.status === 'skipped' ? 100 : Math.min(92, Math.round((completedSteps / 8) * 100));
+
+  return (
+    <section className={`gallery-development-live is-${job.status}`}>
+      <header>
+        <div>
+          <span className="gallery-eyebrow"><Bot /> AI DEVELOPMENT LIVE · ROUND {roundNumber}</span>
+          <h3>{job.status === 'completed' ? '本轮开发记录' : 'AI 正在开发这个 App'}</h3>
+          <p>这里展示系统真实执行的公开步骤，不包含 API Key、系统提示词或模型内部推理。</p>
+        </div>
+        <div className="gallery-development-current">
+          {job.status === 'running' && <LoaderCircle className="spin" />}
+          {job.status === 'completed' && <Check />}
+          {['failed', 'cancelled'].includes(job.status) && <X />}
+          <div><small>{state.aiProvider} · {displayedCompletedSteps}/8</small><strong>{currentEvent?.title || generationJobStatusLabel(job.status)}</strong></div>
+        </div>
+      </header>
+
+      <div className="gallery-development-progress"><span style={{ width: `${progress}%` }} /></div>
+
+      {lottery?.selected_comment && (
+        <div className="gallery-development-prompt">
+          <strong><MessageCircle /> 本轮交给 AI 的任务</strong>
+          {lottery.selected_parent_comment && <p><span>原评论</span>{lottery.selected_parent_comment}</p>}
+          <p><span>{lottery.selected_parent_comment ? '拓展评论' : '抽中评论'}</span>{lottery.selected_comment}</p>
+        </div>
+      )}
+
+      <div className="gallery-development-timeline">
+        {events.map((event) => (
+          <article key={event.id} className={`is-${event.status}`}>
+            <span className="gallery-development-node">
+              {event.status === 'running' ? <LoaderCircle className="spin" /> : event.status === 'completed' ? <Check /> : event.status === 'pending' ? <Clock3 /> : <X />}
+            </span>
+            <div>
+              <strong>{event.title}</strong>
+              {event.detail && (
+                event.step_key === 'plan'
+                  ? <details open={event.status === 'completed'}><summary>查看公开修改计划</summary><p>{event.detail}</p></details>
+                  : <p>{event.detail}</p>
+              )}
+            </div>
+          </article>
+        ))}
+        {events.length === 0 && <div className="gallery-development-empty"><LoaderCircle className="spin" /> 正在建立公开开发记录……</div>}
+      </div>
+    </section>
+  );
+}
+
 function AppDetail({
   state,
   app,
@@ -447,6 +528,8 @@ function AppDetail({
             </>
           )}
         </div>
+
+        <DevelopmentLive state={state} app={app} />
 
         <aside className="gallery-comment-panel">
           <section className="gallery-initial-prompt">
@@ -736,6 +819,12 @@ export default function GalleryApp() {
             <div className="gallery-grid" aria-label="公开作品画廊">
               {[0, 1, 2].map((index) => {
                 const app = publishedApps[index];
+                const developmentJob = app
+                  ? currentGenerationJobs.find((job) => job.app_id === app.id)
+                  : undefined;
+                const developmentEvents = developmentJob
+                  ? (state.generationEvents || []).filter((event) => Number(event.job_id) === Number(developmentJob.id))
+                  : [];
                 const ownApp = state.viewer?.role === 'creator' && state.viewer.code === app?.creator_code;
                 const likeDisabled = !state.viewer || isHost || Boolean(ownApp) || state.study.status === 'ended' || Boolean(busy);
                 const likeTitle = !state.viewer ? '选择身份后可以点赞'
@@ -756,6 +845,8 @@ export default function GalleryApp() {
                       `like-home-${app.id}`,
                       () => galleryApi.likeApp(clientId, app.id, finalStage ? 'final' : 'showcase'),
                     )}
+                    developmentJob={developmentJob}
+                    developmentEvents={developmentEvents}
                   />
                 ) : (
                   <article className="gallery-card gallery-placeholder" style={{ order: index }} key={`placeholder-${index}`}><LoaderCircle /><strong>等待 Creator 发布</strong><p>这个画廊席位还在开发中。</p></article>

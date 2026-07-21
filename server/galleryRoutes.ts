@@ -14,6 +14,7 @@ import {
   nextGalleryGenerationJob,
   openNextRoundComments,
   publishCreatorApp,
+  recordGalleryGenerationProgress,
   redevelopGalleryGenerationJob,
   retryGalleryGenerationJob,
   saveCreatorDraft,
@@ -99,6 +100,7 @@ async function processGalleryGenerationJob(job: any) {
       creatorMessage: combinedPrompt,
       signal: controller.signal,
       apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(job.app_creator_code) : undefined,
+      onProgress: (progress) => recordGalleryGenerationProgress(jobId, progress),
       mode: 'round-candidate',
     });
     completeGalleryGenerationJob(jobId, result.code, result.text);
