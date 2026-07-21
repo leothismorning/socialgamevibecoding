@@ -42,7 +42,7 @@ export type DevelopmentAgentOutput = AIResult & {
 };
 
 const TEXT_ONLY_SYSTEM =
-  'You are one step in a web-development agent pipeline. Return only the requested artifact as plain text. Do not wrap it in JSON. Do not use Markdown fences unless the user explicitly asks for fenced code.';
+  'You are one step in a web-development agent pipeline. Return only JSON with "text" containing the requested artifact and "code" set to an empty string. Do not use Markdown fences unless the user explicitly asks for fenced code.';
 
 const FALLBACK_IMAGE_DATA_URI = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675">
@@ -432,7 +432,6 @@ async function runAgentTextStep(
     maxTokens,
     signal,
     apiKey,
-    responseMode: 'text',
   });
   return result.text.trim();
 }

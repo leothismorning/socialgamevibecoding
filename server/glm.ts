@@ -11,7 +11,6 @@ export type GLMOptions = {
   systemPrompt?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  responseMode?: 'json' | 'text';
 };
 
 export const GLM_MODEL = 'glm-5.2';
@@ -68,6 +67,10 @@ function validateCompleteHtml(code: string, finishReason: unknown) {
   throw new Error(`GLM returned an incomplete HTML document: ${reasons.join('; ')}. Try a shorter prompt, ask GLM for a simpler version, or switch to DeepSeek for full-page generation.`);
 }
 
+function isTextOnlyRequest(options: GLMOptions) {
+  return Boolean(options.systemPrompt?.includes('"code" set to an empty string'));
+}
+
 export async function generateWithGLM(
   prompt: string,
   model = GLM_MODEL,
@@ -80,10 +83,10 @@ export async function generateWithGLM(
 
   const selectedModel = model === GLM_MODEL ? model : GLM_MODEL;
   const endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
-  const textResponse = options.responseMode === 'text';
-  const systemPrompt = textResponse
+  const textOnlyRequest = isTextOnlyRequest(options);
+  const systemPrompt = textOnlyRequest
     ? options.systemPrompt ||
-      'Return only the requested artifact as plain text. Do not wrap it in JSON or Markdown fences.'
+      'Return only JSON with "text" containing the requested response and "code" set to an empty string. Do not use Markdown fences.'
     : `${options.systemPrompt || 'You are an expert web developer. Follow the supplied user requirements exactly and do not invent features, themes, text, branding, games, or controls that were not requested. When requirements are underspecified, produce a minimal neutral implementation instead of fabricating content or product claims.'}
 
 Output override for GLM reliability:
@@ -102,7 +105,7 @@ Include all CSS and JavaScript in the same document.`;
       provider: 'glm',
       model: selectedModel,
       promptLength: prompt.length,
-      outputMode: textResponse ? 'text' : 'direct_html',
+      outputMode: textOnlyRequest ? 'json_text' : 'direct_html',
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -125,9 +128,10 @@ Include all CSS and JavaScript in the same document.`;
           },
           { role: 'user', content: prompt },
         ],
+        ...(textOnlyRequest ? { response_format: { type: 'json_object' } } : {}),
         thinking: { type: 'disabled' },
         reasoning_effort: 'none',
-        max_tokens: options.maxTokens || (textResponse ? 2048 : 12288),
+        max_tokens: options.maxTokens || (textOnlyRequest ? 2048 : 12288),
         temperature: 0.6,
       }),
     });
@@ -187,57 +191,35 @@ Include all CSS and JavaScript in the same document.`;
     throw new Error('GLM returned an empty response.');
   }
 
-  if (textResponse) {
-    const result = {
-      text: String(content).trim(),
-      code: '',
-      model: data?.model || selectedModel,
-      usage: data?.usage || null,
-    };
-    addDebugLog({
-      kind: 'ai',
-      phase: 'response',
-      title: 'GLM text response received',
-      durationMs: Math.round(performance.now() - startedAt),
-      detail: {
-        endpoint,
-        provider: 'glm',
-        model: result.model,
-        textLength: result.text.length,
-        finishReason: data?.choices?.[0]?.finish_reason,
-        usage: result.usage,
-      },
-    });
-    return result;
-  }
+  if (!textOnlyRequest) {
+    const htmlResult = extractHtml(content);
+    if (htmlResult) {
+      validateCompleteHtml(htmlResult.code, data?.choices?.[0]?.finish_reason);
+      const result = {
+        text: htmlResult.text,
+        code: htmlResult.code,
+        model: data?.model || selectedModel,
+        usage: data?.usage || null,
+      };
 
-  const htmlResult = extractHtml(content);
-  if (htmlResult) {
-    validateCompleteHtml(htmlResult.code, data?.choices?.[0]?.finish_reason);
-    const result = {
-      text: htmlResult.text,
-      code: htmlResult.code,
-      model: data?.model || selectedModel,
-      usage: data?.usage || null,
-    };
+      addDebugLog({
+        kind: 'ai',
+        phase: 'response',
+        title: 'GLM HTML response received',
+        durationMs: Math.round(performance.now() - startedAt),
+        detail: {
+          endpoint,
+          provider: 'glm',
+          model: result.model,
+          codeLength: result.code.length,
+          textLength: result.text.length,
+          finishReason: data?.choices?.[0]?.finish_reason,
+          usage: result.usage,
+        },
+      });
 
-    addDebugLog({
-      kind: 'ai',
-      phase: 'response',
-      title: 'GLM HTML response received',
-      durationMs: Math.round(performance.now() - startedAt),
-      detail: {
-        endpoint,
-        provider: 'glm',
-        model: result.model,
-        codeLength: result.code.length,
-        textLength: result.text.length,
-        finishReason: data?.choices?.[0]?.finish_reason,
-        usage: result.usage,
-      },
-    });
-
-    return result;
+      return result;
+    }
   }
 
   let parsed: any;

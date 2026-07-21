@@ -11,7 +11,6 @@ export type GeminiOptions = {
   systemPrompt?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  responseMode?: 'json' | 'text';
 };
 
 export const GEMINI_MODEL = 'gemini-2.5-flash';
@@ -36,7 +35,6 @@ export async function generateWithGemini(
 
   const selectedModel = model === GEMINI_MODEL ? model : GEMINI_MODEL;
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent`;
-  const textResponse = options.responseMode === 'text';
 
   addDebugLog({
     kind: 'ai',
@@ -47,7 +45,6 @@ export async function generateWithGemini(
       provider: 'gemini',
       model: selectedModel,
       promptLength: prompt.length,
-      outputMode: textResponse ? 'text' : 'json',
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -70,7 +67,7 @@ export async function generateWithGemini(
         },
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
-          ...(textResponse ? {} : { responseMimeType: 'application/json' }),
+          responseMimeType: 'application/json',
           maxOutputTokens: options.maxTokens || 8192,
         },
       }),
@@ -115,30 +112,6 @@ export async function generateWithGemini(
   if (!content) {
     const blockReason = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason;
     throw new Error(blockReason ? `Gemini returned no content (${blockReason}).` : 'Gemini returned an empty response.');
-  }
-
-  if (textResponse) {
-    const result = {
-      text: content,
-      code: '',
-      model: data?.modelVersion || selectedModel,
-      usage: data?.usageMetadata || null,
-    };
-    addDebugLog({
-      kind: 'ai',
-      phase: 'response',
-      title: 'Gemini text response received',
-      durationMs: Math.round(performance.now() - startedAt),
-      detail: {
-        endpoint,
-        provider: 'gemini',
-        model: result.model,
-        textLength: result.text.length,
-        finishReason: data?.candidates?.[0]?.finishReason,
-        usage: result.usage,
-      },
-    });
-    return result;
   }
 
   let parsed: any;
