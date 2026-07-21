@@ -33,12 +33,25 @@ legacyDb.exec(`
     deleted_at TEXT,
     UNIQUE (study_id, app_id, round_number, author_code)
   );
+
+  CREATE TABLE app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  INSERT INTO app_meta (key, value) VALUES ('ai_provider', 'deepseek');
 `);
 legacyDb.close();
 
 const gallery = await import('../server/galleryDb.js');
 const { inspectAgentArtifacts } = await import('../server/developmentAgent.js');
-const { db } = await import('../server/studyDb.js');
+const { db, getAIProvider } = await import('../server/studyDb.js');
+
+assert.equal(getAIProvider(), 'gpt5', 'the former DeepSeek default should migrate to GPT-5.5');
+assert.equal(
+  (db.prepare(`SELECT value FROM app_meta WHERE key = 'ai_provider_default_gpt55_v1'`).get() as { value: string }).value,
+  '1',
+  'the GPT-5.5 default migration should only run once',
+);
 
 assert.deepEqual(
   inspectAgentArtifacts('<main class="content-section"></main>', '.content-section { display: block; }').utilityClasses,

@@ -15,6 +15,9 @@ export type StudyPhase =
 
 export type StudyAIProvider = 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';
 
+const DEFAULT_AI_PROVIDER: StudyAIProvider = 'gpt5';
+const GPT55_DEFAULT_MIGRATION_KEY = 'ai_provider_default_gpt55_v1';
+
 export type StudyState = {
   experiment: any | null;
   participants: any[];
@@ -328,6 +331,30 @@ const seedParticipants = db.transaction(() => {
 
 seedParticipants();
 
+function migrateDefaultAIProviderToGPT55() {
+  const migrated = db.prepare(`SELECT value FROM app_meta WHERE key = ?`).get(
+    GPT55_DEFAULT_MIGRATION_KEY,
+  ) as { value?: string } | undefined;
+  if (migrated?.value === '1') return;
+
+  const stored = db.prepare(`SELECT value FROM app_meta WHERE key = 'ai_provider'`).get() as
+    | { value?: string }
+    | undefined;
+  const tx = db.transaction(() => {
+    if (!stored?.value || stored.value === 'deepseek') {
+      db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES ('ai_provider', ?)`).run(
+        DEFAULT_AI_PROVIDER,
+      );
+    }
+    db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, '1')`).run(
+      GPT55_DEFAULT_MIGRATION_KEY,
+    );
+  });
+  tx();
+}
+
+migrateDefaultAIProviderToGPT55();
+
 function getActiveExperimentId() {
   const stored = db.prepare(`SELECT value FROM app_meta WHERE key = 'active_experiment_id'`).get() as any;
   if (stored?.value) return String(stored.value);
@@ -350,7 +377,7 @@ export function getAIProvider(): StudyAIProvider {
   if (stored?.value === 'gemini') return 'gemini';
   if (stored?.value === 'glm') return 'glm';
   if (stored?.value === 'gpt5') return 'gpt5';
-  return 'deepseek';
+  return DEFAULT_AI_PROVIDER;
 }
 
 export function setAIProvider(provider: StudyAIProvider) {
