@@ -11,6 +11,7 @@ type DeepSeekOptions = {
   systemPrompt?: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  responseMode?: 'json' | 'text';
 };
 
 const ALLOWED_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
@@ -32,6 +33,7 @@ export async function generateWithDeepSeek(
 
   const selectedModel = ALLOWED_MODELS.has(model) ? model : 'deepseek-v4-flash';
   const endpoint = 'https://api.deepseek.com/chat/completions';
+  const textResponse = options.responseMode === 'text';
 
   addDebugLog({
     kind: 'ai',
@@ -41,6 +43,7 @@ export async function generateWithDeepSeek(
       endpoint,
       model: selectedModel,
       promptLength: prompt.length,
+      outputMode: textResponse ? 'text' : 'json',
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -64,7 +67,7 @@ export async function generateWithDeepSeek(
           },
           { role: 'user', content: prompt },
         ],
-        response_format: { type: 'json_object' },
+        ...(textResponse ? {} : { response_format: { type: 'json_object' } }),
         max_tokens: options.maxTokens || 8192,
       }),
     });
@@ -120,6 +123,29 @@ export async function generateWithDeepSeek(
       },
     });
     throw new Error('DeepSeek returned an empty response.');
+  }
+
+  if (textResponse) {
+    const result = {
+      text: String(content).trim(),
+      code: '',
+      model: data.model || selectedModel,
+      usage: data.usage || null,
+    };
+    addDebugLog({
+      kind: 'ai',
+      phase: 'response',
+      title: 'DeepSeek text response received',
+      durationMs: Math.round(performance.now() - startedAt),
+      detail: {
+        endpoint,
+        model: result.model,
+        textLength: result.text.length,
+        finishReason: data?.choices?.[0]?.finish_reason,
+        usage: result.usage,
+      },
+    });
+    return result;
   }
 
   let parsed: any;

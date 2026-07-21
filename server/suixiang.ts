@@ -12,6 +12,7 @@ type SuiXiangOptions = {
   maxTokens?: number;
   signal?: AbortSignal;
   apiKey?: string;
+  responseMode?: 'json' | 'text';
 };
 
 export const SUIXIANG_GPT_MODEL = 'gpt-5.5';
@@ -46,6 +47,7 @@ export async function generateWithSuiXiangGPT(
   const apiKey = options.apiKey || process.env.SUIXIANG_API_KEY;
   const baseUrl = (process.env.SUIXIANG_BASE_URL || 'https://sui-xiang.com').replace(/\/+$/, '');
   const endpoint = `${baseUrl}/v1/chat/completions`;
+  const textResponse = options.responseMode === 'text';
 
   if (!apiKey) {
     throw new Error('SUIXIANG_API_KEY is not configured on the server.');
@@ -62,6 +64,7 @@ export async function generateWithSuiXiangGPT(
       endpoint,
       model,
       promptLength: prompt.length,
+      outputMode: textResponse ? 'text' : 'json',
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -88,7 +91,7 @@ export async function generateWithSuiXiangGPT(
             },
             { role: 'user', content: prompt },
           ],
-          response_format: { type: 'json_object' },
+          ...(textResponse ? {} : { response_format: { type: 'json_object' } }),
           max_completion_tokens: options.maxTokens || 8192,
         }),
       });
@@ -159,6 +162,29 @@ export async function generateWithSuiXiangGPT(
       },
     });
     throw new Error('Sui-Xiang GPT-5.5 returned an empty response.');
+  }
+
+  if (textResponse) {
+    const result = {
+      text: String(content).trim(),
+      code: '',
+      model: data.model || model,
+      usage: data.usage || null,
+    };
+    addDebugLog({
+      kind: 'ai',
+      phase: 'response',
+      title: 'Sui-Xiang GPT-5.5 text response received',
+      durationMs: Math.round(performance.now() - startedAt),
+      detail: {
+        endpoint,
+        model: result.model,
+        textLength: result.text.length,
+        finishReason: data?.choices?.[0]?.finish_reason,
+        usage: result.usage,
+      },
+    });
+    return result;
   }
 
   let parsed: any;
