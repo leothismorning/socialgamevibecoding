@@ -214,10 +214,6 @@
 .gallery-like-button.final-like.is-liked { color: #fff !important; border-color: #7044df; background: #7044df; }
 .gallery-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .gallery-detail-preview { min-height: 760px; display: grid; grid-template-rows: 48px minmax(0, 1fr); overflow: hidden; border: 1px solid #dce4ee; border-radius: 18px; background: #edf2f8; }
-.gallery-detail-preview:has(.gallery-final-comparison) { grid-template-rows: minmax(0, 1fr); }
-.gallery-final-comparison { min-height: 760px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #dce4ee; }
-.gallery-final-comparison section { min-width: 0; display: grid; grid-template-rows: 44px minmax(0, 1fr); background: #edf2f8; }
-.gallery-final-comparison section > strong { display: grid; place-items: center; color: #53637c; background: #f8fafc; font-size: 11px; }
 .gallery-version-tabs { display: flex; align-items: center; gap: 6px; padding: 6px; background: #f8fafc; }
 .gallery-version-tabs button { min-height: 34px; padding: 0 13px; color: #64748b; border: 0; border-radius: 10px; background: transparent; font-size: 10px !important; font-weight: 900; cursor: pointer; }
 .gallery-version-tabs button.is-active { color: #fff; background: #172a4f; }
@@ -483,9 +479,7 @@
   .gallery-waterfall-card.is-waterfall-0 .gallery-card-compare > div,
   .gallery-waterfall-card.is-waterfall-1 .gallery-card-compare > div,
   .gallery-waterfall-card.is-waterfall-2 .gallery-card-compare > div { grid-template-rows: 34px 500px; }
-  .gallery-card-compare,
-  .gallery-final-comparison { grid-template-columns: 1fr; }
-  .gallery-final-comparison { min-height: 1000px; }
+  .gallery-card-compare { grid-template-columns: 1fr; }
   .gallery-studio,
   .gallery-detail { padding: 18px; border-radius: 21px; }
   .gallery-studio-actions { grid-template-columns: 1fr; }

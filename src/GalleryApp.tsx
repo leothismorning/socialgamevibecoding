@@ -512,21 +512,12 @@ function AppDetail({
 
       <div className="gallery-detail-grid">
         <div className="gallery-detail-preview">
-          {state.study.status === 'ended' ? (
-            <div className="gallery-final-comparison">
-              <section><strong>初始版</strong><Preview code={app.initial_code} title={`${app.title} 初始版`} /></section>
-              <section><strong>最终版</strong><Preview code={app.final_code || app.current_code} title={`${app.title} 最终版`} /></section>
-            </div>
-          ) : (
-            <>
-              <div className="gallery-version-tabs">
-                <button className={view === 'initial' ? 'is-active' : ''} onClick={() => setView('initial')}>初始版</button>
-                <button className={view === 'current' ? 'is-active' : ''} onClick={() => setView('current')}>当前版 V{Number(app.current_version_number || 0) + 1}</button>
-                {finalStage && <button className={view === 'final' ? 'is-active' : ''} onClick={() => setView('final')}>最终版</button>}
-              </div>
-              <Preview code={previewCode} title={`${app.title} ${view}`} />
-            </>
-          )}
+          <div className="gallery-version-tabs">
+            <button className={view === 'initial' ? 'is-active' : ''} onClick={() => setView('initial')}>初始版</button>
+            <button className={view === 'current' ? 'is-active' : ''} onClick={() => setView('current')}>当前版 V{Number(app.current_version_number || 0) + 1}</button>
+            {finalStage && <button className={view === 'final' ? 'is-active' : ''} onClick={() => setView('final')}>最终版</button>}
+          </div>
+          <Preview code={previewCode} title={`${app.title} ${view}`} />
         </div>
 
         <DevelopmentLive state={state} app={app} />
