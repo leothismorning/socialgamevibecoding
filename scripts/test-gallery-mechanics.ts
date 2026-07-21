@@ -37,7 +37,19 @@ legacyDb.exec(`
 legacyDb.close();
 
 const gallery = await import('../server/galleryDb.js');
+const { inspectAgentArtifacts } = await import('../server/developmentAgent.js');
 const { db } = await import('../server/studyDb.js');
+
+assert.deepEqual(
+  inspectAgentArtifacts('<main class="content-section"></main>', '.content-section { display: block; }').utilityClasses,
+  [],
+  'semantic content-* class names must not be mistaken for Tailwind utilities',
+);
+assert.deepEqual(
+  inspectAgentArtifacts('<main class="content-none hover:bg-blue-500"></main>', '').utilityClasses,
+  ['content-none', 'hover:bg-blue-500'],
+  'actual Tailwind content and variant utilities should still be detected',
+);
 
 const migratedSessionsSchema = db.prepare(`
   SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'

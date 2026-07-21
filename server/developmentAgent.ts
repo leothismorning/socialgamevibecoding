@@ -92,7 +92,7 @@ function extractCssClasses(css: string) {
 }
 
 function looksLikeTailwindUtility(value: string) {
-  return /^(?:-?(?:m|p)[trblxy]?-(?:\d|px)|(?:sm|md|lg|xl|2xl):|(?:hover|focus|group-hover):|flex|grid|hidden|block|inline(?:-block|-flex)?|items-|justify-|content-|self-|place-|gap-|space-[xy]-|order-|col-|row-|w-|h-|min-[wh]-|max-[wh]-|text-(?:xs|sm|base|lg|xl|[2-9]xl|left|center|right|white|black|transparent)|font-|leading-|tracking-|bg-|from-|via-|to-|border-|rounded-|shadow-|opacity-|overflow-|object-|absolute|relative|fixed|sticky|inset-|top-|right-|bottom-|left-|z-|transform|-?translate-|-?rotate-|scale-|transition|duration-|ease-|cursor-|select-|pointer-events-)/.test(value);
+  return /^(?:-?(?:m|p)[trblxy]?-(?:\d|px)|(?:sm|md|lg|xl|2xl):|(?:hover|focus|group-hover):|flex|grid|hidden|block|inline(?:-block|-flex)?|items-|justify-|content-(?:none|\[)|self-|place-|gap-|space-[xy]-|order-|col-|row-|w-|h-|min-[wh]-|max-[wh]-|text-(?:xs|sm|base|lg|xl|[2-9]xl|left|center|right|white|black|transparent)|font-|leading-|tracking-|bg-|from-|via-|to-|border-|rounded-|shadow-|opacity-|overflow-|object-|absolute|relative|fixed|sticky|inset-|top-|right-|bottom-|left-|z-|transform|-?translate-|-?rotate-|scale-|transition|duration-|ease-|cursor-|select-|pointer-events-)/.test(value);
 }
 
 export function inspectAgentArtifacts(body: string, css: string): ArtifactInspection {
@@ -546,7 +546,7 @@ Keep it compact and complete.`,
     structureInspection = inspectAgentArtifacts(body, '');
   }
   if (structureInspection.utilityClasses.length > 0) {
-    throw new Error(`GLM kept unsupported utility classes after repair: ${structureInspection.utilityClasses.slice(0, 12).join(', ')}.`);
+    throw new Error(`The development agent kept unsupported utility classes after repair: ${structureInspection.utilityClasses.slice(0, 12).join(', ')}.`);
   }
   progress({ step: 'structure', order: 2, status: 'completed', title: '页面结构已经完成', detail: `已生成完整页面结构，包含 ${structureInspection.usedClasses.length} 组界面样式标记。` });
 
