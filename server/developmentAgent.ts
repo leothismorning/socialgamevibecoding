@@ -429,6 +429,10 @@ async function runAgentTextStep(
 
 export async function runDevelopmentAgent(input: DevelopmentAgentInput): Promise<DevelopmentAgentOutput> {
   const startedAt = performance.now();
+  const preservationPolicy = input.currentCode?.trim()
+    ? `Mandatory preservation policy:
+The current HTML is the canonical working App. Treat every new comment/request as a scoped change, not permission to redesign the App. Preserve all existing content, features, pages, navigation, interactions, copy, layout, data, images, and working behavior unless the supplied comment/request explicitly asks to change that exact element. Never remove, replace, rename, restyle, or simplify an unspecified element. If an extension comment is supplied with an original comment, implement their combined intent. Make the smallest additive change that satisfies them.`
+    : '';
   const context = `Experiment: ${input.experimentTitle}
 Round: ${input.roundNumber || 1}
 Mode: ${input.mode}
@@ -444,8 +448,10 @@ ${input.fusionPlan || 'No fusion plan yet.'}
 Recent transparent development conversation:
 ${input.recentConversation || 'No previous development messages.'}
 
+${preservationPolicy}
+
 Current HTML excerpt:
-${truncate(input.currentCode || '', 7000)}`;
+${truncate(input.currentCode || '', 18000)}`;
 
   const repairNotes: string[] = [];
   const plan = await runAgentTextStep(
@@ -456,6 +462,7 @@ ${truncate(input.currentCode || '', 7000)}`;
 Create a compact implementation plan for a self-contained web prototype.
 Plan only work required by the Creator request, selected ideas, approved fusion plan, or existing functionality.
 Do not introduce product features, themes, copy, branding, games, controls, or interactions that were not supplied in those sources.
+For an existing App, list only the explicitly requested scoped edits and identify the existing parts that must remain unchanged.
 When details are underspecified, choose the smallest neutral implementation rather than inventing content or product claims.
 If a mini-game is requested, define its exact state, controls, win condition, and DOM ids.
 Only when the supplied requirements or existing HTML require real images, specify a concrete Wikimedia Commons search phrase and meaningful fallback text for each required image.
@@ -476,6 +483,7 @@ ${plan}
 
 Generate BODY INNER HTML ONLY. No <!doctype>, no <html>, no <head>, no <body>, no <style>, no <script>.
 Make it compact and complete.
+For an existing App, retain every existing section, control, text, image, id, and behavior that the supplied request does not explicitly target.
 If there is a mini-game, include the board, controls, score/status elements, and clear instructions.
 Use a small set of descriptive semantic kebab-case classes.
 Do not use Tailwind, Bootstrap, utility classes, responsive prefixes, or external CSS frameworks. Every class must be styled by the separate CSS step.
@@ -541,6 +549,7 @@ ${truncate(body, 16000)}
 
 Generate CSS ONLY. No <style> tag.
 Create complete self-contained CSS for this exact body. Define a visible rule for every class used in the HTML.
+Preserve the existing visual system and styling of all elements not explicitly targeted by the new request.
 Do not use Tailwind, Bootstrap, @import, external stylesheets, or remote background-image URLs.
 Preserve any visual direction explicitly supplied by the Creator, selected ideas, fusion plan, or current HTML. If none is supplied, use restrained neutral styling only for readability, layout, usability, and responsive behavior.
 Include .agent-toast and .agent-toast.show styles.
@@ -591,6 +600,7 @@ ${truncate(body, 14000)}
 
 Generate JavaScript ONLY. No <script> tag.
 Bind event listeners on DOMContentLoaded.
+Preserve every existing behavior not explicitly targeted by the new request; do not silently drop prior interactions.
 If a mini-game is requested, implement the actual playable mechanics, not just placeholders.
 Define all functions needed by the controls, but avoid relying on inline onclick.
 Keep JavaScript under 260 lines.`,

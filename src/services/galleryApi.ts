@@ -37,11 +37,14 @@ export const galleryApi = {
   newExperiment: (clientId: string) => request('/api/gallery/new-experiment', {
     method: 'POST', body: body({ clientId }),
   }),
-  comment: (clientId: string, appId: string, content: string) => request('/api/gallery/comments', {
-    method: 'POST', body: body({ clientId, appId, content }),
+  comment: (clientId: string, appId: string, content: string, parentCommentId?: number) => request('/api/gallery/comments', {
+    method: 'POST', body: body({ clientId, appId, content, parentCommentId }),
   }),
-  deleteComment: (clientId: string, appId: string) => request('/api/gallery/comments', {
-    method: 'DELETE', body: body({ clientId, appId }),
+  deleteComment: (clientId: string, appId: string, commentId?: number) => request('/api/gallery/comments', {
+    method: 'DELETE', body: body({ clientId, appId, commentId }),
+  }),
+  openNextComments: (clientId: string, appId: string) => request(`/api/gallery/apps/${appId}/open-next-comments`, {
+    method: 'POST', body: body({ clientId }),
   }),
   likeComment: (clientId: string, commentId: number) => request(`/api/gallery/comments/${commentId}/like`, {
     method: 'POST', body: body({ clientId }),

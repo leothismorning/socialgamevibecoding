@@ -43,6 +43,7 @@ export type GalleryComment = {
   app_id: string;
   round_number: number;
   author_code: string;
+  parent_comment_id?: number;
   content: string;
   like_count: number;
   viewer_liked: number;
@@ -66,6 +67,9 @@ export type GalleryLottery = {
   selected_comment_id?: number;
   selected_comment?: string;
   selected_author?: string;
+  selected_parent_comment_id?: number;
+  selected_parent_comment?: string;
+  selected_parent_author?: string;
   total_weight: number;
   random_roll?: number;
   weights_json: string;
@@ -115,6 +119,12 @@ export type GalleryState = {
   comments: GalleryComment[];
   lotteries: GalleryLottery[];
   generationJobs: GalleryJob[];
+  roundOpenings: Array<{
+    app_id: string;
+    round_number: number;
+    opened_at: string;
+    opened_by: string;
+  }>;
   sessions: Array<{ role: GalleryRole; code: string; joined_at: string }>;
   developmentMessages: DevelopmentMessage[];
   aiProvider: 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';

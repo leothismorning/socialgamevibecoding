@@ -303,7 +303,9 @@ function EvolutionHistory({ state, app }: { state: GalleryState; app: GalleryApp
       (item) => item.app_id === app.id && Number(item.round_number) === roundNumber,
     );
     return { roundNumber, lottery, versions, version, job };
-  });
+  }).filter(({ lottery, version, job }) => lottery || version || job);
+
+  if (rounds.length === 0) return null;
 
   return (
     <section className="gallery-evolution-history">
@@ -323,11 +325,16 @@ function EvolutionHistory({ state, app }: { state: GalleryState; app: GalleryApp
               <section className="gallery-evolution-comment">
                 <div><MessageCircle /><strong>抽中的评论</strong></div>
                 {lottery?.selected_comment ? (
-                  <blockquote>{lottery.selected_comment}</blockquote>
+                  <>
+                    {lottery.selected_parent_comment && (
+                      <blockquote className="is-parent">原评论：{lottery.selected_parent_comment}</blockquote>
+                    )}
+                    <blockquote>{lottery.selected_parent_comment ? '拓展评论：' : ''}{lottery.selected_comment}</blockquote>
+                  </>
                 ) : (
                   <p>本轮没有有效评论被抽中，因此 App 沿用上一轮版本。</p>
                 )}
-                {lottery?.selected_author && <small>评论者：{lottery.selected_author}</small>}
+                {lottery?.selected_author && <small>{lottery.selected_parent_comment ? `原评论者：${lottery.selected_parent_author} · 拓展者：` : '评论者：'}{lottery.selected_author}</small>}
                 {version?.summary && <div className="gallery-evolution-summary"><Code2 /><span>{version.summary}</span></div>}
                 {!version && lottery?.selected_comment && (
                   <div className="gallery-evolution-summary is-warning"><Clock3 /><span>评论已抽中，但没有成功发布新版本。任务状态：{job ? generationJobStatusLabel(job.status) : '未知'}</span></div>
@@ -364,17 +371,33 @@ function AppDetail({
   clientId: string;
   busy: string;
 }) {
-  const roundNumber = Number(state.study.current_round || 1);
+  const stagedRound = Number(state.study.current_round) + 1;
+  const earlyOpening = (state.roundOpenings || []).some(
+    (opening) => opening.app_id === app.id && Number(opening.round_number) === stagedRound,
+  );
+  const roundNumber = earlyOpening && ['round_processing', 'round_review'].includes(state.study.status)
+    ? stagedRound
+    : Number(state.study.current_round || 1);
   const [view, setView] = useState<'initial' | 'current' | 'final'>('current');
   const comments = state.comments.filter((comment) => comment.app_id === app.id && comment.round_number === roundNumber);
-  const myComment = comments.find((comment) => comment.author_code === state.viewer?.code);
+  const topLevelComments = comments.filter((item) => !item.parent_comment_id);
+  const myComment = topLevelComments.find((comment) => comment.author_code === state.viewer?.code);
+  const myReply = comments.find((comment) => comment.author_code === state.viewer?.code && comment.parent_comment_id);
   const [comment, setComment] = useState(myComment?.content || '');
+  const [replyTarget, setReplyTarget] = useState<number | null>(null);
+  const [replyText, setReplyText] = useState('');
   const lottery = state.lotteries.find((item) => item.app_id === app.id && item.round_number === roundNumber);
   const job = state.generationJobs.find((item) => item.app_id === app.id && item.round_number === roundNumber);
-  const interactionOpen = state.study.status === 'round_active' && Boolean(state.viewer) && state.viewer?.role !== 'host';
+  const interactionOpen = Boolean(state.viewer)
+    && state.viewer?.role !== 'host'
+    && (state.study.status === 'round_active' || earlyOpening);
   const finalStage = state.study.status === 'final_voting' || state.study.status === 'ended';
 
   useEffect(() => setComment(myComment?.content || ''), [myComment?.id, myComment?.content, app.id, roundNumber]);
+  useEffect(() => {
+    setReplyTarget(myReply?.parent_comment_id || null);
+    setReplyText(myReply?.content || '');
+  }, [myReply?.id, myReply?.content, myReply?.parent_comment_id, app.id, roundNumber]);
 
   const previewCode = view === 'initial'
     ? app.initial_code
@@ -408,12 +431,21 @@ function AppDetail({
 
       <div className="gallery-detail-grid">
         <div className="gallery-detail-preview">
-          <div className="gallery-version-tabs">
-            <button className={view === 'initial' ? 'is-active' : ''} onClick={() => setView('initial')}>初始版</button>
-            <button className={view === 'current' ? 'is-active' : ''} onClick={() => setView('current')}>当前版 V{Number(app.current_version_number || 0) + 1}</button>
-            {finalStage && <button className={view === 'final' ? 'is-active' : ''} onClick={() => setView('final')}>最终版</button>}
-          </div>
-          <Preview code={previewCode} title={`${app.title} ${view}`} />
+          {state.study.status === 'ended' ? (
+            <div className="gallery-final-comparison">
+              <section><strong>初始版</strong><Preview code={app.initial_code} title={`${app.title} 初始版`} /></section>
+              <section><strong>最终版</strong><Preview code={app.final_code || app.current_code} title={`${app.title} 最终版`} /></section>
+            </div>
+          ) : (
+            <>
+              <div className="gallery-version-tabs">
+                <button className={view === 'initial' ? 'is-active' : ''} onClick={() => setView('initial')}>初始版</button>
+                <button className={view === 'current' ? 'is-active' : ''} onClick={() => setView('current')}>当前版 V{Number(app.current_version_number || 0) + 1}</button>
+                {finalStage && <button className={view === 'final' ? 'is-active' : ''} onClick={() => setView('final')}>最终版</button>}
+              </div>
+              <Preview code={previewCode} title={`${app.title} ${view}`} />
+            </>
+          )}
         </div>
 
         <aside className="gallery-comment-panel">
@@ -422,7 +454,7 @@ function AppDetail({
             <p>{app.creator_prompt?.trim() || 'Creator 通过上传完整 HTML 创建了初版，没有填写额外提示词。'}</p>
           </section>
           <div className="gallery-comment-heading">
-            <div><MessageCircle /><strong>第 {roundNumber} 轮评论</strong></div>
+            <div><MessageCircle /><strong>第 {roundNumber} 轮评论 {earlyOpening && <em>预开放 · 暂不计时</em>}</strong></div>
             <span>{comments.length} 条</span>
           </div>
           {interactionOpen ? (
@@ -436,20 +468,68 @@ function AppDetail({
           )}
 
           <div className="gallery-comment-list">
-            {comments.length === 0 && <p className="gallery-empty-comments">本轮还没有评论。</p>}
-            {comments.map((item) => {
+            {topLevelComments.length === 0 && <p className="gallery-empty-comments">本轮还没有评论。</p>}
+            {topLevelComments.map((item) => {
               const own = item.author_code === state.viewer?.code;
               const selected = lottery?.selected_comment_id === item.id;
+              const replies = comments.filter((reply) => Number(reply.parent_comment_id) === Number(item.id));
+              const editingThisReply = replyTarget === item.id;
               return (
                 <article key={item.id} className={selected ? 'is-selected' : ''}>
                   <div><strong>{item.author_code}</strong>{selected && <span><Sparkles /> 本轮抽中</span>}</div>
                   <p>{item.content}</p>
-                  <button
-                    className={item.viewer_liked ? 'is-liked' : ''}
-                    disabled={!interactionOpen || own || Boolean(busy)}
-                    title={own ? '不能点赞自己的评论' : ''}
-                    onClick={() => action('like-comment', () => galleryApi.likeComment(clientId, item.id))}
-                  ><Heart /> {item.like_count}</button>
+                  <div className="gallery-comment-actions">
+                    <button
+                      className={item.viewer_liked ? 'is-liked' : ''}
+                      disabled={!interactionOpen || own || Boolean(busy)}
+                      title={own ? '不能点赞自己的评论' : ''}
+                      onClick={() => action('like-comment', () => galleryApi.likeComment(clientId, item.id))}
+                    ><Heart /> {item.like_count}</button>
+                    {interactionOpen && !own && (
+                      <button
+                        className="is-reply"
+                        onClick={() => {
+                          setReplyTarget(editingThisReply ? null : item.id);
+                          setReplyText(myReply?.parent_comment_id === item.id ? myReply.content : '');
+                        }}
+                      ><MessageCircle /> {myReply?.parent_comment_id === item.id ? '修改拓展' : '拓展评论'}</button>
+                    )}
+                  </div>
+                  {editingThisReply && interactionOpen && !own && (
+                    <div className="gallery-reply-composer">
+                      <textarea
+                        maxLength={500}
+                        rows={3}
+                        value={replyText}
+                        onChange={(event) => setReplyText(event.target.value)}
+                        placeholder="补充或拓展这条评论。每人每个 App 每轮限一条拓展评论。"
+                      />
+                      <div><span>{replyText.length}/500</span><button disabled={!replyText.trim() || Boolean(busy)} onClick={() => action('reply-comment', () => galleryApi.comment(clientId, app.id, replyText, item.id))}><Send /> {myReply ? '保存拓展' : '提交拓展'}</button></div>
+                    </div>
+                  )}
+                  {replies.length > 0 && (
+                    <div className="gallery-comment-replies">
+                      {replies.map((reply) => {
+                        const ownReply = reply.author_code === state.viewer?.code;
+                        const selectedReply = lottery?.selected_comment_id === reply.id;
+                        return (
+                          <article key={reply.id} className={selectedReply ? 'is-selected' : ''}>
+                            <div><strong>{reply.author_code} · 拓展</strong>{selectedReply && <span><Sparkles /> 本轮抽中</span>}</div>
+                            <p>{reply.content}</p>
+                            <div className="gallery-comment-actions">
+                              <button
+                                className={reply.viewer_liked ? 'is-liked' : ''}
+                                disabled={!interactionOpen || ownReply || Boolean(busy)}
+                                title={ownReply ? '不能点赞自己的评论' : ''}
+                                onClick={() => action('like-reply', () => galleryApi.likeComment(clientId, reply.id))}
+                              ><Heart /> {reply.like_count}</button>
+                              {ownReply && interactionOpen && <button className="is-delete" disabled={Boolean(busy)} onClick={() => action('delete-reply', () => galleryApi.deleteComment(clientId, app.id, reply.id))}>删除拓展</button>}
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
                 </article>
               );
             })}
@@ -459,6 +539,7 @@ function AppDetail({
             <div className="gallery-lottery-result">
               <span className="gallery-eyebrow">WEIGHTED LOTTERY</span>
               <strong>{lottery.selected_comment ? '本轮被抽中的开发建议' : '本轮没有有效评论'}</strong>
+              {lottery.selected_parent_comment && <p className="is-parent">原评论：“{lottery.selected_parent_comment}”</p>}
               {lottery.selected_comment && <p>“{lottery.selected_comment}”</p>}
               <small>每条评论权重 = 点赞数 + 1；本轮总权重 {lottery.total_weight}。</small>
               {job?.status === 'running' && <em><LoaderCircle className="spin" /> AI 正在生成新版本</em>}
@@ -467,7 +548,7 @@ function AppDetail({
           )}
         </aside>
       </div>
-      {state.study.status === 'ended' && <EvolutionHistory state={state} app={app} />}
+      <EvolutionHistory state={state} app={app} />
     </section>
   );
 }
@@ -497,6 +578,40 @@ function DebugConsole({ open, close }: { open: boolean; close: () => void }) {
   );
 }
 
+function LotteryNotice({ state, roundNumber, close }: { state: GalleryState; roundNumber: number; close: () => void }) {
+  const apps = state.apps.filter((app) => app.status === 'published');
+  return (
+    <div className="gallery-lottery-modal" role="dialog" aria-modal="true" aria-labelledby="lottery-result-title">
+      <section>
+        <span className="gallery-lottery-burst"><Sparkles /></span>
+        <span className="gallery-eyebrow">ROUND {roundNumber} · LOTTERY RESULT</span>
+        <h2 id="lottery-result-title">第 {roundNumber} 轮抽签结果</h2>
+        <p>倒计时已经结束，评论和点赞已锁定。以下建议将用于生成三个 App 的新版本。</p>
+        <div>
+          {apps.map((app) => {
+            const result = state.lotteries.find(
+              (item) => item.app_id === app.id && Number(item.round_number) === roundNumber,
+            );
+            return (
+              <article key={app.id}>
+                <header><strong>{app.title}</strong><span>{app.creator_code}</span></header>
+                {result?.selected_comment ? (
+                  <>
+                    {result.selected_parent_comment && <p className="is-parent">原评论：{result.selected_parent_comment}</p>}
+                    <p>{result.selected_parent_comment ? '拓展评论：' : ''}{result.selected_comment}</p>
+                    <small>{result.selected_parent_comment ? `${result.selected_parent_author} → ` : ''}{result.selected_author}</small>
+                  </>
+                ) : <p className="is-empty">本轮没有有效评论，沿用当前版本。</p>}
+              </article>
+            );
+          })}
+        </div>
+        <button onClick={close}>知道了，查看开发进度 <ArrowRight /></button>
+      </section>
+    </div>
+  );
+}
+
 export default function GalleryApp() {
   const [clientId] = useState(getClientId);
   const [state, setState] = useState<GalleryState | null>(null);
@@ -505,6 +620,7 @@ export default function GalleryApp() {
   const [selectedAppId, setSelectedAppId] = useState('');
   const [now, setNow] = useState(Date.now());
   const [debugOpen, setDebugOpen] = useState(false);
+  const [lotteryNoticeRound, setLotteryNoticeRound] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -522,6 +638,18 @@ export default function GalleryApp() {
     const clock = window.setInterval(() => setNow(Date.now()), 500);
     return () => { window.clearInterval(poll); window.clearInterval(clock); };
   }, [refresh]);
+
+  useEffect(() => {
+    if (!state || state.study.status === 'preparing' || lotteryNoticeRound) return;
+    const publishedCount = state.apps.filter((app) => app.status === 'published').length;
+    const completedRounds = [...new Set(state.lotteries.map((item) => Number(item.round_number)))]
+      .filter((roundNumber) => state.lotteries.filter((item) => Number(item.round_number) === roundNumber).length === publishedCount)
+      .sort((left, right) => right - left);
+    const latestCompletedRound = completedRounds[0];
+    if (latestCompletedRound && !sessionStorage.getItem(`gallery-lottery-seen:${state.study.id}:${latestCompletedRound}`)) {
+      setLotteryNoticeRound(latestCompletedRound);
+    }
+  }, [state, lotteryNoticeRound]);
 
   const action = useCallback(async (label: string, task: () => Promise<GalleryState>) => {
     setBusy(label);
@@ -544,6 +672,13 @@ export default function GalleryApp() {
   const currentGenerationJobs = state?.generationJobs.filter(
     (job) => Number(job.round_number) === Number(state.study.current_round),
   ) || [];
+  const nextRoundNumber = Number(state?.study.current_round || 0) + 1;
+  const nextRoundOpenedAppIds = new Set(
+    (state?.roundOpenings || [])
+      .filter((opening) => Number(opening.round_number) === nextRoundNumber)
+      .map((opening) => opening.app_id) || [],
+  );
+  const allNextRoundCommentsOpen = publishedApps.length === 3 && nextRoundOpenedAppIds.size === 3;
 
   useEffect(() => {
     if (selectedAppId) window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -644,7 +779,7 @@ export default function GalleryApp() {
               <div className="gallery-host-primary-actions">
                 {state.study.status === 'preparing' && <button disabled={state.publishedAppCount !== 3 || Boolean(busy)} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
                 {state.study.status === 'round_active' && <button className="is-end-round" disabled={Boolean(busy)} onClick={() => action('end-round', () => galleryApi.endRound(clientId))}><Clock3 /> 提前结束第 {state.study.current_round} 轮</button>}
-                {state.study.status === 'round_review' && <button disabled={Boolean(busy)} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>开启第 {state.study.current_round + 1} 轮 <ArrowRight /></button>}
+                {state.study.status === 'round_review' && <button disabled={Boolean(busy) || !allNextRoundCommentsOpen} title={!allNextRoundCommentsOpen ? '先在下方逐个开放三个 App 的下一轮评论' : ''} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>启动第 {state.study.current_round + 1} 轮倒计时 <ArrowRight /></button>}
                 {state.study.status === 'final_voting' && <button disabled={Boolean(busy)} onClick={() => action('end', () => galleryApi.end(clientId))}><Check /> 结束最终投票</button>}
                 {state.study.status === 'ended' && <button className="is-new-experiment" disabled={Boolean(busy)} onClick={() => action('new-experiment', () => galleryApi.newExperiment(clientId))}><RefreshCw /> 开始新的实验</button>}
               </div>
@@ -653,7 +788,11 @@ export default function GalleryApp() {
               <div className="gallery-host-job-grid">
                 {currentGenerationJobs.map((job) => {
                   const active = ['pending', 'running'].includes(job.status);
-                  const canRedevelop = !active && Boolean(job.selected_comment_id);
+                  const nextCommentsOpened = nextRoundOpenedAppIds.has(job.app_id);
+                  const canRedevelop = !active && Boolean(job.selected_comment_id) && !nextCommentsOpened;
+                  const canOpenNextComments = Number(state.study.current_round) < 3
+                    && ['completed', 'skipped'].includes(job.status)
+                    && !nextCommentsOpened;
                   const statusLabel = generationJobStatusLabel(job.status);
                   return (
                     <article key={job.id} className={`is-${job.status}`}>
@@ -664,7 +803,9 @@ export default function GalleryApp() {
                       <div className="gallery-host-job-actions">
                         {active && <button className="is-stop" disabled={Boolean(busy)} onClick={() => action(`cancel-job-${job.id}`, () => galleryApi.cancelJob(clientId, job.id))}><X /> 停止 AI</button>}
                         {canRedevelop && <button className="is-redevelop" disabled={Boolean(busy)} onClick={() => action(`redevelop-job-${job.id}`, () => galleryApi.redevelopJob(clientId, job.id))}><RefreshCw /> 重新开发</button>}
-                        {!active && !canRedevelop && <em>本轮没有抽中评论</em>}
+                        {canOpenNextComments && <button className="is-open-comments" disabled={Boolean(busy)} onClick={() => action(`open-comments-${job.app_id}`, () => galleryApi.openNextComments(clientId, job.app_id))}><MessageCircle /> 开放第 {nextRoundNumber} 轮评论</button>}
+                        {nextCommentsOpened && <em className="is-opened">第 {nextRoundNumber} 轮评论已开放 · 暂不计时</em>}
+                        {!active && !job.selected_comment_id && !nextCommentsOpened && <em>本轮没有抽中评论</em>}
                       </div>
                     </article>
                   );
@@ -677,6 +818,16 @@ export default function GalleryApp() {
 
       <button className="gallery-debug-button" onClick={() => setDebugOpen(true)}><Bug /> Debug</button>
       <DebugConsole open={debugOpen} close={() => setDebugOpen(false)} />
+      {lotteryNoticeRound && (
+        <LotteryNotice
+          state={state}
+          roundNumber={lotteryNoticeRound}
+          close={() => {
+            sessionStorage.setItem(`gallery-lottery-seen:${state.study.id}:${lotteryNoticeRound}`, '1');
+            setLotteryNoticeRound(null);
+          }}
+        />
+      )}
     </div>
   );
 }

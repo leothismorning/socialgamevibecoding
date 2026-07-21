@@ -143,7 +143,7 @@
 .gallery-placeholder:hover { transform: none; box-shadow: none; }
 .gallery-placeholder svg { width: 27px; }
 .gallery-placeholder p { margin: 0; font-size: 12px; }
-.gallery-card-compare { display: grid; background: #eef3f9; }
+.gallery-card-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: #eef3f9; }
 .gallery-card-compare > div { min-width: 0; display: grid; grid-template-rows: 34px 520px; overflow: hidden; border-bottom: 1px solid #dfe7f1; }
 .gallery-card-compare > div:last-child { border: 0; }
 .gallery-card-compare span { display: grid; place-items: center; color: #5f6f88; background: #f8fafc; font-size: 10px; font-weight: 900; }
@@ -202,12 +202,16 @@
 .gallery-like-button.is-liked { color: #fff !important; border-color: #e33f81; background: #e33f81; }
 .gallery-like-button.final-like { border-color: #d9ceff; color: #673fd3 !important; background: #f8f5ff; }
 .gallery-like-button.final-like.is-liked { color: #fff !important; border-color: #7044df; background: #7044df; }
-.gallery-detail-grid { display: grid; grid-template-columns: minmax(0, 1.58fr) minmax(310px, .62fr); gap: 18px; }
+.gallery-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .gallery-detail-preview { min-height: 760px; display: grid; grid-template-rows: 48px minmax(0, 1fr); overflow: hidden; border: 1px solid #dce4ee; border-radius: 18px; background: #edf2f8; }
+.gallery-detail-preview:has(.gallery-final-comparison) { grid-template-rows: minmax(0, 1fr); }
+.gallery-final-comparison { min-height: 760px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #dce4ee; }
+.gallery-final-comparison section { min-width: 0; display: grid; grid-template-rows: 44px minmax(0, 1fr); background: #edf2f8; }
+.gallery-final-comparison section > strong { display: grid; place-items: center; color: #53637c; background: #f8fafc; font-size: 11px; }
 .gallery-version-tabs { display: flex; align-items: center; gap: 6px; padding: 6px; background: #f8fafc; }
 .gallery-version-tabs button { min-height: 34px; padding: 0 13px; color: #64748b; border: 0; border-radius: 10px; background: transparent; font-size: 10px !important; font-weight: 900; cursor: pointer; }
 .gallery-version-tabs button.is-active { color: #fff; background: #172a4f; }
-.gallery-comment-panel { min-height: 760px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dce5ef; border-radius: 18px; background: #fbfcfe; }
+.gallery-comment-panel { min-height: 420px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dce5ef; border-radius: 18px; background: #fbfcfe; }
 .gallery-initial-prompt { display: grid; gap: 10px; padding: 16px; border-bottom: 1px solid #e6ebf2; background: linear-gradient(135deg, #f7f5ff, #fff9fd); }
 .gallery-initial-prompt > div { display: flex; align-items: center; gap: 8px; color: #6941ce; }
 .gallery-initial-prompt svg { width: 17px; }
@@ -217,6 +221,7 @@
 .gallery-comment-heading div { display: flex; align-items: center; gap: 8px; }
 .gallery-comment-heading svg { width: 18px; color: var(--blue); }
 .gallery-comment-heading strong { font-size: 12px; }
+.gallery-comment-heading strong em { margin-left: 7px; padding: 4px 7px; color: #146b4a; border-radius: 99px; background: #e3f8ee; font-size: 8px; font-style: normal; }
 .gallery-comment-heading > span { color: #8794a8; font-size: 10px; font-weight: 800; }
 .gallery-comment-composer { display: grid; gap: 8px; padding: 13px; border-bottom: 1px solid #e6ebf2; background: #fff; }
 .gallery-comment-composer textarea { width: 100%; padding: 10px 11px; resize: vertical; border: 1px solid #dce5ef; border-radius: 11px; color: var(--ink); background: #fbfdff; font-size: 11px; line-height: 1.5; }
@@ -227,7 +232,7 @@
 .gallery-comment-composer .gallery-delete-comment { justify-self: start; padding: 0; color: #be4356 !important; background: none; }
 .gallery-locked-note { display: flex; align-items: center; gap: 8px; margin: 12px; padding: 11px; color: #6c7b91; border-radius: 11px; background: #eef2f7; font-size: 10px; font-weight: 750; }
 .gallery-locked-note svg { width: 15px; }
-.gallery-comment-list { max-height: 420px; overflow: auto; display: grid; align-content: start; gap: 9px; padding: 12px; }
+.gallery-comment-list { overflow: visible; display: grid; align-content: start; gap: 9px; padding: 12px; }
 .gallery-comment-list article { padding: 12px; border: 1px solid #e2e8f0; border-radius: 13px; background: #fff; }
 .gallery-comment-list article.is-selected { border-color: #c4b5fd; background: #f7f5ff; box-shadow: inset 3px 0 #7c3aed; }
 .gallery-comment-list article > div { display: flex; align-items: center; justify-content: space-between; }
@@ -235,13 +240,26 @@
 .gallery-comment-list article > div span { display: flex; align-items: center; gap: 4px; color: #7045d3; font-size: 9px; font-weight: 850; }
 .gallery-comment-list article > div svg { width: 11px; }
 .gallery-comment-list article p { margin: 8px 0 10px; color: #455671; font-size: 11px; line-height: 1.55; }
-.gallery-comment-list article > button { display: flex; align-items: center; gap: 5px; padding: 5px 8px; color: #ba466f; border: 1px solid #f0d1dd; border-radius: 8px; background: #fff8fb; font-size: 9px !important; font-weight: 900; cursor: pointer; }
-.gallery-comment-list article > button.is-liked { color: #fff; background: #e44781; border-color: #e44781; }
-.gallery-comment-list article > button svg { width: 12px; }
+.gallery-comment-actions { display: flex !important; justify-content: flex-start !important; gap: 7px; }
+.gallery-comment-actions button { display: flex; align-items: center; gap: 5px; padding: 5px 8px; color: #ba466f; border: 1px solid #f0d1dd; border-radius: 8px; background: #fff8fb; font-size: 9px !important; font-weight: 900; cursor: pointer; }
+.gallery-comment-actions button.is-liked { color: #fff; background: #e44781; border-color: #e44781; }
+.gallery-comment-actions button.is-reply { color: #4f5dc5; border-color: #d8dcfa; background: #f7f7ff; }
+.gallery-comment-actions button.is-delete { color: #a14456; border-color: transparent; background: transparent; }
+.gallery-comment-actions button svg { width: 12px; }
+.gallery-reply-composer { display: grid !important; gap: 7px; margin-top: 10px; padding: 10px; border-radius: 11px; background: #f5f7fb; }
+.gallery-reply-composer textarea { width: 100%; padding: 9px 10px; resize: vertical; color: var(--ink); border: 1px solid #dce4ef; border-radius: 9px; background: #fff; font-size: 10px; line-height: 1.5; }
+.gallery-reply-composer > div { display: flex; align-items: center; justify-content: space-between; }
+.gallery-reply-composer span { color: #8c99ab; font-size: 8px; }
+.gallery-reply-composer button { display: flex; align-items: center; gap: 5px; padding: 7px 9px; color: #fff; border: 0; border-radius: 8px; background: #5665d8; font-size: 9px; font-weight: 900; }
+.gallery-comment-replies { display: grid !important; gap: 7px; margin-top: 11px; padding-left: 22px; border-left: 2px solid #d9def8; }
+.gallery-comment-replies > article { padding: 10px; border-color: #dde2f5; background: #fafaff; }
+.gallery-comment-replies > article.is-selected { border-color: #a998ee; background: #f3f0ff; }
 .gallery-empty-comments { margin: 50px 0; text-align: center; color: #9aa6b7; font-size: 11px; }
 .gallery-lottery-result { display: grid; gap: 7px; margin: auto 12px 12px; padding: 13px; border: 1px solid #ddd5ff; border-radius: 14px; background: linear-gradient(135deg, #f7f5ff, #fff7fb); }
 .gallery-lottery-result strong { font-size: 11px; }
 .gallery-lottery-result p { margin: 0; color: #4f456f; font-size: 11px; line-height: 1.5; }
+.gallery-lottery-result p.is-parent,
+.gallery-evolution-comment blockquote.is-parent { color: #66738a; border-left-color: #b5bfd0; background: #f1f4f8; }
 .gallery-lottery-result small { color: #817799; font-size: 9px; }
 .gallery-lottery-result em { display: flex; align-items: center; gap: 5px; color: #3973ce; font-size: 9px; font-style: normal; font-weight: 800; }
 .gallery-lottery-result em.is-error { color: #bd3448; }
@@ -312,7 +330,9 @@
 .gallery-host-job-actions button svg { width: 13px; }
 .gallery-host-job-actions button.is-stop { background: #c93662; }
 .gallery-host-job-actions button.is-redevelop { background: linear-gradient(110deg, #347cf5, #7946ec); }
+.gallery-host-job-actions button.is-open-comments { background: linear-gradient(110deg, #0d9b70, #2f80d5); }
 .gallery-host-job-actions em { color: #8a96a8; font-size: 9px; font-style: normal; }
+.gallery-host-job-actions em.is-opened { color: #13704d; font-weight: 850; }
 .gallery-processing-panel { display: flex; align-items: center; justify-content: space-between; gap: 26px; }
 .gallery-processing-panel > svg { width: 30px; color: var(--blue); }
 .gallery-processing-panel > div:last-child { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
@@ -322,6 +342,24 @@
 .gallery-processing-panel span.is-running { color: #245fc5; background: #eaf2ff; }
 .gallery-processing-panel span.is-failed { color: #b32d43; background: #fff0f2; }
 .gallery-processing-panel span.is-cancelled { color: #7b5361; background: #f4eaf0; }
+
+.gallery-lottery-modal { position: fixed; z-index: 150; inset: 0; overflow: auto; display: grid; place-items: center; padding: 24px; background: rgba(12, 24, 48, .62); backdrop-filter: blur(8px); }
+.gallery-lottery-modal > section { width: min(760px, 100%); display: grid; justify-items: center; gap: 12px; padding: 32px; border: 1px solid rgba(255,255,255,.75); border-radius: 26px; background: linear-gradient(145deg, #fff, #f5f3ff); box-shadow: 0 32px 100px rgba(20, 30, 70, .35); }
+.gallery-lottery-burst { width: 54px; height: 54px; display: grid; place-items: center; color: #fff; border-radius: 18px; background: linear-gradient(135deg, #397df4, #8a3ff0, #ec4e8a); box-shadow: 0 14px 35px rgba(113, 65, 219, .3); }
+.gallery-lottery-burst svg { width: 25px; }
+.gallery-lottery-modal h2 { margin: 0; font-size: 28px; letter-spacing: -.04em; }
+.gallery-lottery-modal > section > p { max-width: 570px; margin: 0 0 4px; color: #6d7b90; text-align: center; font-size: 11px; line-height: 1.6; }
+.gallery-lottery-modal > section > div { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.gallery-lottery-modal article { min-width: 0; padding: 13px; border: 1px solid #dfe5f0; border-radius: 14px; background: #fff; }
+.gallery-lottery-modal article header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gallery-lottery-modal article header strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-lottery-modal article header span { color: #7b65cf; font-size: 8px; font-weight: 900; }
+.gallery-lottery-modal article p { margin: 9px 0 0; color: #3e4e68; font-size: 10px; line-height: 1.55; }
+.gallery-lottery-modal article p.is-parent { padding-bottom: 8px; color: #7b8799; border-bottom: 1px dashed #dce2ec; }
+.gallery-lottery-modal article p.is-empty { color: #8794a7; }
+.gallery-lottery-modal article small { display: block; margin-top: 9px; color: #8164dc; font-size: 8px; font-weight: 850; }
+.gallery-lottery-modal > section > button { min-height: 42px; display: flex; align-items: center; gap: 7px; margin-top: 3px; padding: 0 16px; color: #fff; border: 0; border-radius: 12px; background: linear-gradient(115deg, #347df4, #7845e8); font-size: 10px; font-weight: 900; cursor: pointer; }
+.gallery-lottery-modal > section > button svg { width: 15px; }
 
 .gallery-debug-button { position: fixed; z-index: 70; left: 18px; bottom: 18px; display: flex; align-items: center; gap: 7px; min-height: 39px; padding: 0 13px; color: #d9e8ff !important; border: 1px solid rgba(255,255,255,.15); border-radius: 12px; background: #142441; box-shadow: 0 10px 30px rgba(10, 24, 50, .25); font-size: 10px !important; font-weight: 900; cursor: pointer; }
 .gallery-debug-button svg { width: 15px; }
@@ -396,6 +434,9 @@
   .gallery-waterfall-card.is-waterfall-0 .gallery-card-compare > div,
   .gallery-waterfall-card.is-waterfall-1 .gallery-card-compare > div,
   .gallery-waterfall-card.is-waterfall-2 .gallery-card-compare > div { grid-template-rows: 34px 500px; }
+  .gallery-card-compare,
+  .gallery-final-comparison { grid-template-columns: 1fr; }
+  .gallery-final-comparison { min-height: 1000px; }
   .gallery-studio,
   .gallery-detail { padding: 18px; border-radius: 21px; }
   .gallery-studio-actions { grid-template-columns: 1fr; }
@@ -412,6 +453,9 @@
   .gallery-processing-panel { align-items: flex-start; flex-direction: column; }
   .gallery-host-primary-actions { width: 100%; }
   .gallery-host-job-grid { grid-template-columns: 1fr; }
+  .gallery-lottery-modal { padding: 12px; }
+  .gallery-lottery-modal > section { padding: 23px 16px; }
+  .gallery-lottery-modal > section > div { grid-template-columns: 1fr; }
   .gallery-debug-console article { grid-template-columns: 1fr; }
   .gallery-debug-console pre { grid-column: 1; }
 }

@@ -20,6 +20,19 @@ legacyDb.exec(`
   );
   INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
   VALUES ('gallery_v2_main', 'legacy-creator-tab', 'creator', 'C01', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+  CREATE TABLE gallery_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    study_id TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    round_number INTEGER NOT NULL,
+    author_code TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    UNIQUE (study_id, app_id, round_number, author_code)
+  );
 `);
 legacyDb.close();
 
@@ -30,6 +43,14 @@ const migratedSessionsSchema = db.prepare(`
   SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'
 `).get() as { sql: string };
 assert.doesNotMatch(migratedSessionsSchema.sql, /UNIQUE\s*\(\s*study_id\s*,\s*code\s*\)/i);
+const migratedCommentColumns = db.prepare(`PRAGMA table_info(gallery_comments)`).all() as Array<{ name: string }>;
+assert.ok(migratedCommentColumns.some((column) => column.name === 'parent_comment_id'));
+const testDurationOverride = process.env.GALLERY_ROUND_DURATION_MS;
+delete process.env.GALLERY_ROUND_DURATION_MS;
+assert.equal(gallery.galleryRoundDurationSeconds(1), 15 * 60);
+assert.equal(gallery.galleryRoundDurationSeconds(2), 10 * 60);
+assert.equal(gallery.galleryRoundDurationSeconds(3), 10 * 60);
+process.env.GALLERY_ROUND_DURATION_MS = testDurationOverride;
 
 const html = (title: string, version = 'initial') => `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>${title}</title></head>
@@ -117,6 +138,18 @@ function playRound(roundNumber: number) {
     assert.ok(p1Comment);
     gallery.toggleGalleryCommentLike('contributor-tab-2', p1Comment.id);
     expectError(() => gallery.toggleGalleryCommentLike('contributor-tab-1', p1Comment.id), /own comment/i);
+    const afterReply = gallery.saveGalleryComment(
+      'contributor-tab-2',
+      app.id,
+      `P02 expansion of P01 for App ${app.creator_code}, round ${roundNumber}`,
+      p1Comment.id,
+    );
+    const reply = afterReply.comments.find(
+      (candidate: any) => Number(candidate.parent_comment_id) === Number(p1Comment.id)
+        && candidate.author_code === 'P02',
+    );
+    assert.ok(reply);
+    gallery.toggleGalleryCommentLike('contributor-tab-1', reply.id);
   }
 
   if (roundNumber === 1) {
@@ -124,16 +157,18 @@ function playRound(roundNumber: number) {
       () => gallery.endGalleryRoundEarly(creatorClients[1], () => 0),
       /requires the host role/i,
     );
-    const endedEarly = gallery.endGalleryRoundEarly(hostClient, () => 0);
+    const endedEarly = gallery.endGalleryRoundEarly(hostClient, (max: number) => max - 1);
     assert.equal(endedEarly.study.status, 'round_processing');
   } else {
-    assert.equal(gallery.lockExpiredGalleryRound(() => 0, true), true);
+    assert.equal(gallery.lockExpiredGalleryRound((max: number) => max - 1, true), true);
   }
   let processing = gallery.getGalleryState('contributor-tab-1');
   const lotteries = processing.lotteries.filter((item: any) => item.round_number === roundNumber);
   assert.equal(lotteries.length, 3);
-  assert.ok(lotteries.every((item: any) => item.selected_author === 'P01'));
-  assert.ok(lotteries.every((item: any) => item.total_weight === 3));
+  assert.ok(lotteries.every((item: any) => item.selected_author === 'P02'));
+  assert.ok(lotteries.every((item: any) => item.selected_parent_author === 'P01'));
+  assert.ok(lotteries.every((item: any) => /P01 improvement/.test(item.selected_parent_comment)));
+  assert.ok(lotteries.every((item: any) => item.total_weight === 5));
 
   if (roundNumber === 1) {
     const cancellableJob = db.prepare(`
@@ -165,6 +200,8 @@ function playRound(roundNumber: number) {
   }
 
   let job = gallery.nextGalleryGenerationJob();
+  assert.match(String(job?.selected_parent_comment || ''), /P01 improvement/);
+  assert.match(String(job?.selected_comment || ''), /P02 expansion/);
   if (roundNumber === 1 && job) {
     const retryJobId = Number(job.id);
     gallery.failGalleryGenerationJob(retryJobId, new Error('Simulated first-attempt network failure.'));
@@ -187,6 +224,32 @@ function playRound(roundNumber: number) {
   processing = gallery.getGalleryState(creatorClients[0]);
   assert.equal(processing.study.status, roundNumber === 3 ? 'final_voting' : 'round_review');
   assert.ok(processing.apps.every((app: any) => Number(app.current_version_number) === roundNumber));
+}
+
+function openAllAppsForNextRound(nextRound: number) {
+  const hostState = gallery.getGalleryState(hostClient);
+  const apps = hostState.apps.filter((app: any) => app.status === 'published');
+  const firstApp = apps[0];
+  const secondApp = apps[1];
+  gallery.openNextRoundComments(hostClient, firstApp.id);
+  const earlyState = gallery.saveGalleryComment(
+    'contributor-tab-1',
+    firstApp.id,
+    `P01 early comment for round ${nextRound}`,
+  );
+  assert.ok(earlyState.comments.some(
+    (comment: any) => comment.app_id === firstApp.id && comment.round_number === nextRound,
+  ));
+  expectError(
+    () => gallery.saveGalleryComment('contributor-tab-1', secondApp.id, 'This App is still locked'),
+    /not open/i,
+  );
+  expectError(() => gallery.startNextGalleryRound(hostClient), /all three Apps/i);
+  apps.slice(1).forEach((app: any) => gallery.openNextRoundComments(hostClient, app.id));
+  const opened = gallery.getGalleryState(hostClient).roundOpenings.filter(
+    (opening: any) => Number(opening.round_number) === nextRound,
+  );
+  assert.equal(opened.length, 3);
 }
 
 playRound(1);
@@ -214,8 +277,10 @@ db.prepare(`
 assert.equal(gallery.finalizeGalleryRoundIfReady(), true);
 assert.equal(gallery.getGalleryState(hostClient).study.status, 'round_review');
 
+openAllAppsForNextRound(2);
 gallery.startNextGalleryRound(hostClient);
 playRound(2);
+openAllAppsForNextRound(3);
 gallery.startNextGalleryRound(hostClient);
 playRound(3);
 
@@ -235,7 +300,7 @@ assert.ok(state.apps.every((app: any) => Number(app.final_like_count) === 1));
 const endedStudyId = String(state.study.id);
 expectError(
   () => gallery.saveGalleryComment('contributor-tab-1', state.apps[0].id, 'Too late'),
-  /active round/i,
+  /not open/i,
 );
 
 const archivedAppCount = Number(
@@ -265,5 +330,5 @@ assert.equal(
 const nextCreator = gallery.joinGallery('next-creator-tab', 'creator', 'C01');
 assert.equal(nextCreator.viewer?.code, 'C01');
 
-console.log('Gallery mechanics test passed: shared self-selected identity numbers, independent Host role, archived experiment rollover, direct gallery likes, early round end, independent per-App retries, stop/redevelop controls, 3 weighted-lottery rounds, AI-version slots, multi-like final vote.');
+console.log('Gallery mechanics test passed: one-level expansion comments, parent+reply lottery prompts, per-App early comment openings, 15/10-minute round configuration, archived experiments, independent Host controls, weighted lotteries, AI versions, and final votes.');
 db.close();

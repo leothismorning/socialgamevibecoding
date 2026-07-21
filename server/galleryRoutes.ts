@@ -12,6 +12,7 @@ import {
   joinGallery,
   lockExpiredGalleryRound,
   nextGalleryGenerationJob,
+  openNextRoundComments,
   publishCreatorApp,
   redevelopGalleryGenerationJob,
   retryGalleryGenerationJob,
@@ -73,18 +74,29 @@ async function processGalleryGenerationJob(job: any) {
 
   try {
     const selectedComment = String(job.selected_comment || '').trim();
+    const selectedParentComment = String(job.selected_parent_comment || '').trim();
+    const combinedPrompt = selectedParentComment
+      ? `原评论：${selectedParentComment}\n拓展评论：${selectedComment}`
+      : selectedComment;
     const provider = getAIProvider();
     const result = await runDevelopmentAgent({
       provider,
       experimentTitle: String(job.app_title || 'Gallery App'),
       roundNumber: Number(job.round_number),
       brief: String(job.app_brief || ''),
-      selectedIdeas: selectedComment
-        ? [{ participant_code: String(job.selected_author || ''), content: selectedComment }]
-        : [],
-      fusionPlan: selectedComment,
+      selectedIdeas: [
+        ...(selectedParentComment ? [{
+          participant_code: String(job.selected_parent_author || ''),
+          content: `原评论：${selectedParentComment}`,
+        }] : []),
+        ...(selectedComment ? [{
+          participant_code: String(job.selected_author || ''),
+          content: selectedParentComment ? `拓展评论：${selectedComment}` : selectedComment,
+        }] : []),
+      ],
+      fusionPlan: combinedPrompt,
       currentCode: String(job.current_code || ''),
-      creatorMessage: selectedComment,
+      creatorMessage: combinedPrompt,
       signal: controller.signal,
       apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(job.app_creator_code) : undefined,
       mode: 'round-candidate',
@@ -274,6 +286,14 @@ export function registerGalleryRoutes(app: Express) {
     }
   });
 
+  app.post('/api/gallery/apps/:appId/open-next-comments', (req, res) => {
+    try {
+      res.json(openNextRoundComments(clientIdFrom(req), String(req.params.appId || '')));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/gallery/end-round', (req, res) => {
     try {
       const state = endGalleryRoundEarly(clientIdFrom(req));
@@ -286,7 +306,13 @@ export function registerGalleryRoutes(app: Express) {
 
   app.post('/api/gallery/comments', (req, res) => {
     try {
-      res.json(saveGalleryComment(clientIdFrom(req), String(req.body?.appId || ''), String(req.body?.content || '')));
+      const parentCommentId = Number(req.body?.parentCommentId || 0) || undefined;
+      res.json(saveGalleryComment(
+        clientIdFrom(req),
+        String(req.body?.appId || ''),
+        String(req.body?.content || ''),
+        parentCommentId,
+      ));
     } catch (error) {
       sendError(res, error);
     }
@@ -294,7 +320,8 @@ export function registerGalleryRoutes(app: Express) {
 
   app.delete('/api/gallery/comments', (req, res) => {
     try {
-      res.json(deleteGalleryComment(clientIdFrom(req), String(req.body?.appId || '')));
+      const commentId = Number(req.body?.commentId || 0) || undefined;
+      res.json(deleteGalleryComment(clientIdFrom(req), String(req.body?.appId || ''), commentId));
     } catch (error) {
       sendError(res, error);
     }

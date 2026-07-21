@@ -21,7 +21,8 @@ const ACTIVE_STUDY_SETTING = 'active_study_id';
 let STUDY_ID = LEGACY_STUDY_ID;
 const CREATOR_COUNT = 3;
 const CONTRIBUTOR_COUNT = 20;
-const DEFAULT_ROUND_DURATION_SECONDS = 15 * 60;
+const ROUND_ONE_DURATION_SECONDS = 15 * 60;
+const LATER_ROUND_DURATION_SECONDS = 10 * 60;
 const now = () => new Date().toISOString();
 
 db.exec(`
@@ -122,11 +123,11 @@ db.exec(`
     app_id TEXT NOT NULL,
     round_number INTEGER NOT NULL,
     author_code TEXT NOT NULL,
+    parent_comment_id INTEGER,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    deleted_at TEXT,
-    UNIQUE (study_id, app_id, round_number, author_code)
+    deleted_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS gallery_comment_likes (
@@ -164,6 +165,15 @@ db.exec(`
     completed_at TEXT,
     UNIQUE (study_id, app_id, round_number)
   );
+
+  CREATE TABLE IF NOT EXISTS gallery_round_openings (
+    study_id TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    round_number INTEGER NOT NULL,
+    opened_at TEXT NOT NULL,
+    opened_by TEXT NOT NULL,
+    PRIMARY KEY (study_id, app_id, round_number)
+  );
 `);
 
 function migrateGallerySessionsToSharedCodes() {
@@ -197,6 +207,56 @@ function migrateGallerySessionsToSharedCodes() {
 
 migrateGallerySessionsToSharedCodes();
 
+function migrateGalleryCommentsToReplies() {
+  const columns = db.prepare(`PRAGMA table_info(gallery_comments)`).all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === 'parent_comment_id')) return;
+
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE gallery_comments RENAME TO gallery_comments_without_replies;
+
+      CREATE TABLE gallery_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        study_id TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        round_number INTEGER NOT NULL,
+        author_code TEXT NOT NULL,
+        parent_comment_id INTEGER,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+
+      INSERT INTO gallery_comments
+        (id, study_id, app_id, round_number, author_code, parent_comment_id, content, created_at, updated_at, deleted_at)
+      SELECT id, study_id, app_id, round_number, author_code, NULL, content, created_at, updated_at, deleted_at
+      FROM gallery_comments_without_replies;
+
+      DROP TABLE gallery_comments_without_replies;
+
+      CREATE UNIQUE INDEX gallery_comments_top_level_unique
+      ON gallery_comments (study_id, app_id, round_number, author_code)
+      WHERE parent_comment_id IS NULL;
+
+      CREATE UNIQUE INDEX gallery_comments_reply_unique
+      ON gallery_comments (study_id, app_id, round_number, author_code)
+      WHERE parent_comment_id IS NOT NULL;
+    `);
+  })();
+}
+
+migrateGalleryCommentsToReplies();
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS gallery_comments_top_level_unique
+  ON gallery_comments (study_id, app_id, round_number, author_code)
+  WHERE parent_comment_id IS NULL;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS gallery_comments_reply_unique
+  ON gallery_comments (study_id, app_id, round_number, author_code)
+  WHERE parent_comment_id IS NOT NULL;
+`);
+
 const activeStudySetting = db.prepare(`SELECT value FROM gallery_settings WHERE key = ?`).get(
   ACTIVE_STUDY_SETTING,
 ) as { value?: string } | undefined;
@@ -210,10 +270,10 @@ if (activeStudySetting?.value) {
   );
 }
 
-function configuredRoundDurationSeconds() {
+export function galleryRoundDurationSeconds(roundNumber = 1) {
   const milliseconds = Number(process.env.GALLERY_ROUND_DURATION_MS || 0);
   if (Number.isFinite(milliseconds) && milliseconds > 0) return Math.max(1, Math.ceil(milliseconds / 1000));
-  return DEFAULT_ROUND_DURATION_SECONDS;
+  return roundNumber === 1 ? ROUND_ONE_DURATION_SECONDS : LATER_ROUND_DURATION_SECONDS;
 }
 
 function ensureStudy() {
@@ -222,7 +282,7 @@ function ensureStudy() {
     INSERT OR IGNORE INTO gallery_studies
       (id, status, current_round, round_duration_seconds, created_at, updated_at)
     VALUES (?, 'preparing', 0, ?, ?, ?)
-  `).run(STUDY_ID, configuredRoundDurationSeconds(), timestamp, timestamp);
+  `).run(STUDY_ID, galleryRoundDurationSeconds(), timestamp, timestamp);
   return db.prepare(`SELECT * FROM gallery_studies WHERE id = ?`).get(STUDY_ID) as any;
 }
 
@@ -407,8 +467,7 @@ function requireGalleryParticipant(clientId: string) {
 }
 
 function startRound(roundNumber: number) {
-  const currentStudy = study();
-  const durationSeconds = Number(currentStudy.round_duration_seconds || DEFAULT_ROUND_DURATION_SECONDS);
+  const durationSeconds = galleryRoundDurationSeconds(roundNumber);
   const startsAt = new Date();
   const endsAt = new Date(startsAt.getTime() + durationSeconds * 1000);
   db.prepare(`
@@ -416,8 +475,10 @@ function startRound(roundNumber: number) {
     VALUES (?, ?, 'active', ?, ?)
   `).run(STUDY_ID, roundNumber, startsAt.toISOString(), endsAt.toISOString());
   db.prepare(`
-    UPDATE gallery_studies SET status = 'round_active', current_round = ?, updated_at = ? WHERE id = ?
-  `).run(roundNumber, now(), STUDY_ID);
+    UPDATE gallery_studies
+    SET status = 'round_active', current_round = ?, round_duration_seconds = ?, updated_at = ?
+    WHERE id = ?
+  `).run(roundNumber, durationSeconds, now(), STUDY_ID);
 }
 
 export function startFormalGalleryGame(clientId: string) {
@@ -434,61 +495,154 @@ export function startNextGalleryRound(clientId: string) {
   const currentStudy = study();
   if (currentStudy.status !== 'round_review') throw new Error('Wait for every App update before starting the next round.');
   if (Number(currentStudy.current_round) >= 3) throw new Error('All three rounds are complete.');
-  startRound(Number(currentStudy.current_round) + 1);
+  const nextRound = Number(currentStudy.current_round) + 1;
+  const opened = db.prepare(`
+    SELECT COUNT(*) AS count FROM gallery_round_openings
+    WHERE study_id = ? AND round_number = ?
+  `).get(STUDY_ID, nextRound) as any;
+  if (Number(opened.count) !== publishedApps().length) {
+    throw new Error('Open next-round comments for all three Apps before starting the countdown.');
+  }
+  startRound(nextRound);
   return getGalleryState(clientId);
 }
 
-function activeRoundOrThrow() {
+export function openNextRoundComments(clientId: string, appId: string) {
+  const host = requireHost(clientId);
   const currentStudy = study();
-  if (currentStudy.status !== 'round_active') throw new Error('Comments are only available during an active round.');
-  const round = db.prepare(`
-    SELECT * FROM gallery_rounds WHERE study_id = ? AND round_number = ?
-  `).get(STUDY_ID, currentStudy.current_round) as any;
-  if (!round || Date.now() >= Date.parse(round.ends_at)) throw new Error('This round has ended and interactions are locked.');
-  return { currentStudy, round };
+  if (!['round_processing', 'round_review'].includes(currentStudy.status)) {
+    throw new Error('Next-round comments can only be opened after the lottery.');
+  }
+  if (Number(currentStudy.current_round) >= 3) throw new Error('There is no comment phase after round three.');
+  const app = db.prepare(`
+    SELECT id FROM gallery_apps WHERE id = ? AND study_id = ? AND status = 'published'
+  `).get(appId, STUDY_ID) as any;
+  if (!app) throw new Error('App not found.');
+  const job = db.prepare(`
+    SELECT status FROM gallery_generation_jobs
+    WHERE study_id = ? AND app_id = ? AND round_number = ?
+  `).get(STUDY_ID, appId, currentStudy.current_round) as any;
+  if (!job || !['completed', 'skipped'].includes(job.status)) {
+    throw new Error('Wait for this App to finish development before opening its next comment phase.');
+  }
+  db.prepare(`
+    INSERT OR IGNORE INTO gallery_round_openings
+      (study_id, app_id, round_number, opened_at, opened_by)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(STUDY_ID, appId, Number(currentStudy.current_round) + 1, now(), host.code);
+  return getGalleryState(clientId);
 }
 
-export function saveGalleryComment(clientId: string, appId: string, content: string) {
-  const viewer = requireGalleryParticipant(clientId);
-  const { currentStudy } = activeRoundOrThrow();
-  const app = db.prepare(`SELECT id FROM gallery_apps WHERE id = ? AND study_id = ? AND status = 'published'`).get(
-    appId,
-    STUDY_ID,
-  );
+function interactionRoundForApp(appId: string) {
+  const currentStudy = study();
+  const app = db.prepare(`
+    SELECT id FROM gallery_apps WHERE id = ? AND study_id = ? AND status = 'published'
+  `).get(appId, STUDY_ID) as any;
   if (!app) throw new Error('App not found.');
+
+  if (currentStudy.status === 'round_active') {
+    const round = db.prepare(`
+      SELECT * FROM gallery_rounds WHERE study_id = ? AND round_number = ?
+    `).get(STUDY_ID, currentStudy.current_round) as any;
+    if (!round || Date.now() >= Date.parse(round.ends_at)) {
+      throw new Error('This round has ended and interactions are locked.');
+    }
+    return Number(currentStudy.current_round);
+  }
+
+  if (['round_processing', 'round_review'].includes(currentStudy.status) && Number(currentStudy.current_round) < 3) {
+    const nextRound = Number(currentStudy.current_round) + 1;
+    const opening = db.prepare(`
+      SELECT 1 FROM gallery_round_openings WHERE study_id = ? AND app_id = ? AND round_number = ?
+    `).get(STUDY_ID, appId, nextRound);
+    if (opening) return nextRound;
+  }
+  throw new Error('Comments are not open for this App right now.');
+}
+
+export function saveGalleryComment(clientId: string, appId: string, content: string, parentCommentId?: number) {
+  const viewer = requireGalleryParticipant(clientId);
+  const roundNumber = interactionRoundForApp(appId);
   const text = content.trim();
   if (!text) throw new Error('Comment cannot be empty.');
   if (text.length > 500) throw new Error('Comment must be 500 characters or fewer.');
   const timestamp = now();
-  db.prepare(`
-    INSERT INTO gallery_comments
-      (study_id, app_id, round_number, author_code, content, created_at, updated_at, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-    ON CONFLICT(study_id, app_id, round_number, author_code)
-    DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at, deleted_at = NULL
-  `).run(STUDY_ID, appId, currentStudy.current_round, viewer.code, text, timestamp, timestamp);
+  if (parentCommentId) {
+    const parent = db.prepare(`
+      SELECT * FROM gallery_comments
+      WHERE id = ? AND study_id = ? AND app_id = ? AND round_number = ?
+        AND parent_comment_id IS NULL AND deleted_at IS NULL
+    `).get(parentCommentId, STUDY_ID, appId, roundNumber) as any;
+    if (!parent) throw new Error('The original comment is not available in this comment phase.');
+    if (parent.author_code === viewer.code) throw new Error('You cannot expand your own comment.');
+    const existing = db.prepare(`
+      SELECT id FROM gallery_comments
+      WHERE study_id = ? AND app_id = ? AND round_number = ? AND author_code = ?
+        AND parent_comment_id IS NOT NULL
+    `).get(STUDY_ID, appId, roundNumber, viewer.code) as any;
+    if (existing) {
+      db.prepare(`
+        UPDATE gallery_comments
+        SET parent_comment_id = ?, content = ?, updated_at = ?, deleted_at = NULL
+        WHERE id = ?
+      `).run(parentCommentId, text, timestamp, existing.id);
+    } else {
+      db.prepare(`
+        INSERT INTO gallery_comments
+          (study_id, app_id, round_number, author_code, parent_comment_id, content, created_at, updated_at, deleted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+      `).run(STUDY_ID, appId, roundNumber, viewer.code, parentCommentId, text, timestamp, timestamp);
+    }
+  } else {
+    db.prepare(`
+      INSERT INTO gallery_comments
+        (study_id, app_id, round_number, author_code, parent_comment_id, content, created_at, updated_at, deleted_at)
+      VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL)
+      ON CONFLICT(study_id, app_id, round_number, author_code) WHERE parent_comment_id IS NULL
+      DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at, deleted_at = NULL
+    `).run(STUDY_ID, appId, roundNumber, viewer.code, text, timestamp, timestamp);
+  }
   return getGalleryState(clientId);
 }
 
-export function deleteGalleryComment(clientId: string, appId: string) {
+export function deleteGalleryComment(clientId: string, appId: string, commentId?: number) {
   const viewer = requireGalleryParticipant(clientId);
-  const { currentStudy } = activeRoundOrThrow();
+  const roundNumber = interactionRoundForApp(appId);
   const timestamp = now();
-  db.prepare(`
-    UPDATE gallery_comments SET deleted_at = ?, updated_at = ?
-    WHERE study_id = ? AND app_id = ? AND round_number = ? AND author_code = ?
-  `).run(timestamp, timestamp, STUDY_ID, appId, currentStudy.current_round, viewer.code);
+  if (commentId) {
+    db.prepare(`
+      UPDATE gallery_comments SET deleted_at = ?, updated_at = ?
+      WHERE id = ? AND study_id = ? AND app_id = ? AND round_number = ? AND author_code = ?
+        AND parent_comment_id IS NOT NULL
+    `).run(timestamp, timestamp, commentId, STUDY_ID, appId, roundNumber, viewer.code);
+  } else {
+    const own = db.prepare(`
+      SELECT id FROM gallery_comments
+      WHERE study_id = ? AND app_id = ? AND round_number = ? AND author_code = ?
+        AND parent_comment_id IS NULL AND deleted_at IS NULL
+    `).get(STUDY_ID, appId, roundNumber, viewer.code) as any;
+    if (own) {
+      db.transaction(() => {
+        db.prepare(`UPDATE gallery_comments SET deleted_at = ?, updated_at = ? WHERE id = ?`).run(timestamp, timestamp, own.id);
+        db.prepare(`
+          UPDATE gallery_comments SET deleted_at = ?, updated_at = ?
+          WHERE study_id = ? AND parent_comment_id = ? AND deleted_at IS NULL
+        `).run(timestamp, timestamp, STUDY_ID, own.id);
+      })();
+    }
+  }
   return getGalleryState(clientId);
 }
 
 export function toggleGalleryCommentLike(clientId: string, commentId: number) {
   const viewer = requireGalleryParticipant(clientId);
-  const { currentStudy } = activeRoundOrThrow();
   const comment = db.prepare(`
     SELECT * FROM gallery_comments
-    WHERE id = ? AND study_id = ? AND round_number = ? AND deleted_at IS NULL
-  `).get(commentId, STUDY_ID, currentStudy.current_round) as any;
-  if (!comment) throw new Error('Comment not found in the active round.');
+    WHERE id = ? AND study_id = ? AND deleted_at IS NULL
+  `).get(commentId, STUDY_ID) as any;
+  if (!comment) throw new Error('Comment not found.');
+  const interactionRound = interactionRoundForApp(String(comment.app_id));
+  if (Number(comment.round_number) !== interactionRound) throw new Error('This comment phase is locked.');
   if (comment.author_code === viewer.code) throw new Error('You cannot like your own comment.');
   const existing = db.prepare(`
     SELECT id FROM gallery_comment_likes WHERE study_id = ? AND comment_id = ? AND voter_code = ?
@@ -629,10 +783,13 @@ export function nextGalleryGenerationJob(jobId?: number) {
     SELECT j.*, a.title AS app_title, a.brief AS app_brief, a.current_version_id,
            a.creator_code AS app_creator_code,
            c.content AS selected_comment, c.author_code AS selected_author,
+           c.parent_comment_id AS selected_parent_comment_id,
+           parent.content AS selected_parent_comment, parent.author_code AS selected_parent_author,
            v.code AS current_code
     FROM gallery_generation_jobs j
     JOIN gallery_apps a ON a.id = j.app_id
     JOIN gallery_comments c ON c.id = j.selected_comment_id
+    LEFT JOIN gallery_comments parent ON parent.id = c.parent_comment_id
     JOIN gallery_versions v ON v.id = (
       SELECT base.id
       FROM gallery_versions base
@@ -759,6 +916,13 @@ export function redevelopGalleryGenerationJob(clientId: string, jobId: number) {
   if (!job.selected_comment_id) {
     throw new Error('This App did not select a comment in the current round.');
   }
+  const nextRoundOpening = db.prepare(`
+    SELECT 1 FROM gallery_round_openings
+    WHERE study_id = ? AND app_id = ? AND round_number = ?
+  `).get(STUDY_ID, job.app_id, Number(job.round_number) + 1);
+  if (nextRoundOpening) {
+    throw new Error('This App has already entered the next comment phase and can no longer be redeveloped.');
+  }
 
   const timestamp = now();
   const tx = db.transaction(() => {
@@ -851,7 +1015,7 @@ export function startNewGalleryExperiment(clientId: string) {
       INSERT INTO gallery_studies
         (id, status, current_round, round_duration_seconds, created_at, updated_at)
       VALUES (?, 'preparing', 0, ?, ?, ?)
-    `).run(nextStudyId, configuredRoundDurationSeconds(), timestamp, timestamp);
+    `).run(nextStudyId, galleryRoundDurationSeconds(), timestamp, timestamp);
     db.prepare(`
       INSERT INTO gallery_settings (key, value, updated_at)
       VALUES (?, ?, ?)
@@ -910,9 +1074,12 @@ export function getGalleryState(clientId = '') {
   );
   const rounds = db.prepare(`SELECT * FROM gallery_rounds WHERE study_id = ? ORDER BY round_number`).all(STUDY_ID);
   const lotteries = db.prepare(`
-    SELECT r.*, c.content AS selected_comment, c.author_code AS selected_author
+    SELECT r.*, c.content AS selected_comment, c.author_code AS selected_author,
+      c.parent_comment_id AS selected_parent_comment_id,
+      parent.content AS selected_parent_comment, parent.author_code AS selected_parent_author
     FROM gallery_lottery_results r
     LEFT JOIN gallery_comments c ON c.id = r.selected_comment_id
+    LEFT JOIN gallery_comments parent ON parent.id = c.parent_comment_id
     WHERE r.study_id = ? ORDER BY r.round_number, r.app_id
   `).all(STUDY_ID);
   const generationJobs = db.prepare(`
@@ -922,6 +1089,9 @@ export function getGalleryState(clientId = '') {
   `).all(STUDY_ID);
   const sessions = db.prepare(`
     SELECT role, code, joined_at, last_seen_at FROM gallery_sessions WHERE study_id = ? ORDER BY code
+  `).all(STUDY_ID);
+  const roundOpenings = db.prepare(`
+    SELECT * FROM gallery_round_openings WHERE study_id = ? ORDER BY round_number, app_id
   `).all(STUDY_ID);
   const developmentMessages = viewer?.role === 'creator'
     ? db.prepare(`
@@ -940,6 +1110,7 @@ export function getGalleryState(clientId = '') {
     comments,
     lotteries,
     generationJobs,
+    roundOpenings,
     sessions,
     developmentMessages,
     aiProvider: getAIProvider() as StudyAIProvider,
