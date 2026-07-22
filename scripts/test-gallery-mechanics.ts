@@ -63,6 +63,19 @@ assert.deepEqual(
   ['content-none', 'hover:bg-blue-500'],
   'actual Tailwind content and variant utilities should still be detected',
 );
+assert.deepEqual(
+  inspectAgentArtifacts(
+    '<main class="left-wall right-wall object-core object-glow relative-stage flex-layout"></main>',
+    '',
+  ).utilityClasses,
+  [],
+  'ordinary semantic class names must not be rejected because of broad utility prefixes',
+);
+assert.deepEqual(
+  inspectAgentArtifacts('<main class="p-4 md:grid w-1/2 left-[10px]"></main>', '').utilityClasses,
+  ['p-4', 'md:grid', 'w-1/2', 'left-[10px]'],
+  'high-confidence utility syntax should still trigger the self-contained CSS repair',
+);
 
 const migratedSessionsSchema = db.prepare(`
   SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'

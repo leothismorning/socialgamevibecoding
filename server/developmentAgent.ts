@@ -92,7 +92,14 @@ function extractCssClasses(css: string) {
 }
 
 function looksLikeTailwindUtility(value: string) {
-  return /^(?:-?(?:m|p)[trblxy]?-(?:\d|px)|(?:sm|md|lg|xl|2xl):|(?:hover|focus|group-hover):|flex|grid|hidden|block|inline(?:-block|-flex)?|items-|justify-|content-(?:none|\[)|self-|place-|gap-|space-[xy]-|order-|col-|row-|w-|h-|min-[wh]-|max-[wh]-|text-(?:xs|sm|base|lg|xl|[2-9]xl|left|center|right|white|black|transparent)|font-|leading-|tracking-|bg-|from-|via-|to-|border-|rounded-|shadow-|opacity-|overflow-|object-|absolute|relative|fixed|sticky|inset-|top-|right-|bottom-|left-|z-|transform|-?translate-|-?rotate-|scale-|transition|duration-|ease-|cursor-|select-|pointer-events-)/.test(value);
+  // Only flag syntax that strongly implies a framework dependency. Prefix-only
+  // checks such as `left-`, `object-`, or `content-` also match ordinary
+  // semantic names like `left-wall`, `object-core`, and `content-section`.
+  return /^(?:(?:sm|md|lg|xl|2xl|dark|print|hover|focus|focus-within|active|disabled|group-hover|peer-checked):)/.test(value)
+    || /^-?(?:m|p)[trblxy]?-(?:\d+(?:\.\d+)?|px|auto|\[[^\]]+\])$/.test(value)
+    || /^(?:w|h|min-w|max-w|min-h|max-h)-\d+\/\d+$/.test(value)
+    || /^content-(?:none|\[[^\]]+\])$/.test(value)
+    || /\[[^\]]+\]/.test(value);
 }
 
 export function inspectAgentArtifacts(body: string, css: string): ArtifactInspection {
