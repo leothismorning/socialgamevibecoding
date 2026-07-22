@@ -20,8 +20,11 @@ import {
   UsersRound,
   X,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { galleryApi } from './services/galleryApi';
 import type { GalleryAppRecord, GalleryGenerationEvent, GalleryJob, GalleryRole, GalleryState, GalleryStatus } from './galleryTypes';
+import { useGlobalPointerSpotlight } from './hooks/useGlobalPointerSpotlight';
+import { usePointerTilt } from './hooks/usePointerTilt';
 import './gallery.css';
 
 const CLIENT_KEY = 'gallery-v2-client-id';
@@ -95,13 +98,23 @@ function GalleryCard({
   developmentJob?: GalleryJob;
   developmentEvents: GalleryGenerationEvent[];
 }) {
+  const tilt = usePointerTilt<HTMLElement>({ strength: 'surface' });
   const currentEvent = [...developmentEvents].sort((left, right) => Number(right.sort_order) - Number(left.sort_order))[0];
   const completedSteps = developmentEvents.filter((event) => Number(event.sort_order) > 0 && event.status === 'completed').length;
   const displayedCompletedSteps = developmentJob?.status === 'completed' || developmentJob?.status === 'skipped'
     ? 8
     : Math.min(8, completedSteps);
   return (
-    <article className={`gallery-card gallery-waterfall-card is-waterfall-${index % 3}`} style={{ order: index }}>
+    <article
+      ref={tilt.ref}
+      className={`gallery-card gallery-waterfall-card is-waterfall-${index % 3}`}
+      style={{ order: index }}
+      data-spotlight-surface
+      onPointerMove={tilt.onPointerMove}
+      onPointerEnter={tilt.onPointerEnter}
+      onPointerLeave={tilt.onPointerLeave}
+      onPointerCancel={tilt.onPointerCancel}
+    >
       <div className="gallery-card-chrome">
         <Code2 />
         <strong>{app.title}</strong>
@@ -134,13 +147,59 @@ function GalleryCard({
           <button
             className={liked ? 'gallery-card-like-button is-liked' : 'gallery-card-like-button'}
             disabled={likeDisabled}
-            title={likeTitle}
+            data-tooltip={likeTitle || undefined}
             onClick={like}
           ><Heart size={16} /> {finalStage ? app.final_like_count : app.showcase_like_count} {finalStage ? '最终版赞' : '作品赞'}</button>
           <button className="gallery-text-button" onClick={open}>查看作品 <ArrowRight size={15} /></button>
         </div>
       </div>
     </article>
+  );
+}
+
+function GalleryRoleCard({
+  role,
+  title,
+  detail,
+  Icon,
+  selected,
+  disabled,
+  select,
+}: {
+  role: GalleryRole;
+  title: string;
+  detail: string;
+  Icon: LucideIcon;
+  selected: boolean;
+  disabled: boolean;
+  select: () => void;
+}) {
+  const tilt = usePointerTilt<HTMLButtonElement>({ strength: 'surface', disabled: selected || disabled });
+  return (
+    <button
+      ref={tilt.ref}
+      type="button"
+      className={selected ? 'gallery-role-card is-selected' : 'gallery-role-card'}
+      data-role={role}
+      disabled={disabled}
+      aria-pressed={selected}
+      onClick={select}
+      onPointerMove={tilt.onPointerMove}
+      onPointerEnter={tilt.onPointerEnter}
+      onPointerLeave={tilt.onPointerLeave}
+      onPointerCancel={tilt.onPointerCancel}
+    >
+      <span className="gallery-role-orbit" aria-hidden="true" />
+      <span className="gallery-role-scene">
+        <span className="gallery-role-face gallery-role-front" aria-hidden={selected}>
+          <Icon />
+          <span className="gallery-role-copy"><strong>{title}</strong><small>{detail}</small></span>
+        </span>
+        <span className="gallery-role-face gallery-role-back" aria-hidden={!selected}>
+          <span className="gallery-role-back-copy"><em>身份已选择</em><strong>{title}</strong><small>请在下方选择编号</small></span>
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -157,7 +216,7 @@ function IdentityPanel({ state, join, busy }: {
       ? ['C01', 'C02', 'C03']
       : Array.from({ length: 20 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`);
   return (
-    <section className="gallery-identity-panel">
+    <section className="gallery-identity-panel" data-spotlight-surface>
       <div>
         <span className="gallery-eyebrow">JOIN THE STUDY</span>
         <h2>选择本标签页的实验身份</h2>
@@ -165,16 +224,9 @@ function IdentityPanel({ state, join, busy }: {
       </div>
       <div className="gallery-identity-picker">
         <div className="gallery-role-grid">
-          <button className={selectedRole === 'host' ? 'is-selected' : ''} disabled={Boolean(busy)} onClick={() => setSelectedRole('host')}>
-            <ShieldCheck /><strong>Host</strong><span>选择 H01 控制实验流程</span>
-          </button>
-          <button className={selectedRole === 'creator' ? 'is-selected' : ''} disabled={Boolean(busy)} onClick={() => setSelectedRole('creator')}>
-            <UserRound /><strong>Creator</strong><span>自主选择 C01–C03</span>
-          </button>
-          <button className={selectedRole === 'contributor' ? 'is-selected' : ''} disabled={Boolean(busy) || !contributorsOpen} onClick={() => setSelectedRole('contributor')}>
-            <UsersRound /><strong>Contributor</strong>
-            <span>{contributorsOpen ? '自主选择 P01–P20' : '三位 Creator 发布后开放'}</span>
-          </button>
+          <GalleryRoleCard role="host" title="Host" detail="选择 H01 控制实验流程" Icon={ShieldCheck} selected={selectedRole === 'host'} disabled={Boolean(busy)} select={() => setSelectedRole('host')} />
+          <GalleryRoleCard role="creator" title="Creator" detail="自主选择 C01–C03" Icon={UserRound} selected={selectedRole === 'creator'} disabled={Boolean(busy)} select={() => setSelectedRole('creator')} />
+          <GalleryRoleCard role="contributor" title="Contributor" detail={contributorsOpen ? '自主选择 P01–P20' : '三位 Creator 发布后开放'} Icon={UsersRound} selected={selectedRole === 'contributor'} disabled={Boolean(busy) || !contributorsOpen} select={() => setSelectedRole('contributor')} />
         </div>
         {selectedRole && (
           <section className="gallery-seat-picker">
@@ -331,7 +383,7 @@ function EvolutionHistory({ state, app }: { state: GalleryState; app: GalleryApp
       </header>
       <div className="gallery-evolution-rounds">
         {rounds.map(({ roundNumber, lottery, versions, version, job }) => (
-          <article key={roundNumber} className={version ? 'has-version' : 'is-empty'}>
+          <article key={roundNumber} className={version ? 'has-version' : 'is-empty'} data-spotlight-surface>
             <header>
               <span>R{roundNumber}</span>
               <div><strong>第 {roundNumber} 轮</strong><small>{version ? `采用 V${Number(version.version_number) + 1}` : '没有生成新版本'}</small></div>
@@ -390,7 +442,7 @@ function DevelopmentLive({ state, app }: { state: GalleryState; app: GalleryAppR
   const progress = job.status === 'completed' || job.status === 'skipped' ? 100 : Math.min(92, Math.round((completedSteps / 8) * 100));
 
   return (
-    <section className={`gallery-development-live is-${job.status}`}>
+    <section className={`gallery-development-live is-${job.status}`} data-spotlight-surface>
       <header>
         <div>
           <span className="gallery-eyebrow"><Bot /> AI DEVELOPMENT LIVE · ROUND {roundNumber}</span>
@@ -489,7 +541,7 @@ function AppDetail({
   const hostViewer = state.viewer?.role === 'host';
 
   return (
-    <section className="gallery-detail" id="app-detail">
+    <section className="gallery-detail" id="app-detail" data-spotlight-surface>
       <button className="gallery-back-button" onClick={close}><ArrowLeft /> 返回画廊</button>
       <div className="gallery-detail-heading">
         <div><span className="gallery-eyebrow">{app.creator_code} · APP DETAIL</span><h2>{app.title}</h2><p>{app.brief}</p></div>
@@ -497,7 +549,7 @@ function AppDetail({
           <button
             className={app.viewer_showcase_liked ? 'gallery-like-button is-liked' : 'gallery-like-button'}
             disabled={!state.viewer || hostViewer || ownApp || state.study.status === 'ended' || Boolean(busy)}
-            title={hostViewer ? 'Host 只控制实验流程，不参与点赞' : ownApp ? '不能点赞自己的作品' : ''}
+            data-tooltip={hostViewer ? 'Host 只控制实验流程，不参与点赞' : ownApp ? '不能点赞自己的作品' : undefined}
             onClick={() => action('like-app', () => galleryApi.likeApp(clientId, app.id, 'showcase'))}
           ><Heart /> {app.showcase_like_count} 作品赞</button>
           {finalStage && (
@@ -549,14 +601,14 @@ function AppDetail({
               const replies = comments.filter((reply) => Number(reply.parent_comment_id) === Number(item.id));
               const editingThisReply = replyTarget === item.id;
               return (
-                <article key={item.id} className={selected ? 'is-selected' : ''}>
+                <article key={item.id} className={selected ? 'is-selected' : ''} data-spotlight-surface>
                   <div><strong>{item.author_code}</strong>{selected && <span><Sparkles /> 本轮抽中</span>}</div>
                   <p>{item.content}</p>
                   <div className="gallery-comment-actions">
                     <button
                       className={item.viewer_liked ? 'is-liked' : ''}
                       disabled={!interactionOpen || own || Boolean(busy)}
-                      title={own ? '不能点赞自己的评论' : ''}
+                      data-tooltip={own ? '不能点赞自己的评论' : undefined}
                       onClick={() => action('like-comment', () => galleryApi.likeComment(clientId, item.id))}
                     ><Heart /> {item.like_count}</button>
                     {interactionOpen && !own && (
@@ -587,14 +639,14 @@ function AppDetail({
                         const ownReply = reply.author_code === state.viewer?.code;
                         const selectedReply = lottery?.selected_comment_id === reply.id;
                         return (
-                          <article key={reply.id} className={selectedReply ? 'is-selected' : ''}>
+                          <article key={reply.id} className={selectedReply ? 'is-selected' : ''} data-spotlight-surface>
                             <div><strong>{reply.author_code} · 拓展</strong>{selectedReply && <span><Sparkles /> 本轮抽中</span>}</div>
                             <p>{reply.content}</p>
                             <div className="gallery-comment-actions">
                               <button
                                 className={reply.viewer_liked ? 'is-liked' : ''}
                                 disabled={!interactionOpen || ownReply || Boolean(busy)}
-                                title={ownReply ? '不能点赞自己的评论' : ''}
+                                data-tooltip={ownReply ? '不能点赞自己的评论' : undefined}
                                 onClick={() => action('like-reply', () => galleryApi.likeComment(clientId, reply.id))}
                               ><Heart /> {reply.like_count}</button>
                               {ownReply && interactionOpen && <button className="is-delete" disabled={Boolean(busy)} onClick={() => action('delete-reply', () => galleryApi.deleteComment(clientId, app.id, reply.id))}>删除拓展</button>}
@@ -656,12 +708,15 @@ function LotteryNotice({ state, roundNumber, close }: { state: GalleryState; rou
   const apps = state.apps.filter((app) => app.status === 'published');
   return (
     <div className="gallery-lottery-modal" role="dialog" aria-modal="true" aria-labelledby="lottery-result-title">
-      <section>
+      <section className="gallery-lottery-stage">
+        <div className="gallery-lottery-sparks" aria-hidden="true">
+          {[0, 1, 2, 3, 4, 5].map((index) => <Sparkles key={index} />)}
+        </div>
         <span className="gallery-lottery-burst"><Sparkles /></span>
         <span className="gallery-eyebrow">ROUND {roundNumber} · LOTTERY RESULT</span>
         <h2 id="lottery-result-title">第 {roundNumber} 轮抽签结果</h2>
         <p>倒计时已经结束，评论和点赞已锁定。以下建议将用于生成三个 App 的新版本。</p>
-        <div>
+        <div className="gallery-lottery-results">
           {apps.map((app) => {
             const result = state.lotteries.find(
               (item) => item.app_id === app.id && Number(item.round_number) === roundNumber,
@@ -687,6 +742,7 @@ function LotteryNotice({ state, roundNumber, close }: { state: GalleryState; rou
 }
 
 export default function GalleryApp() {
+  useGlobalPointerSpotlight();
   const [clientId] = useState(getClientId);
   const [state, setState] = useState<GalleryState | null>(null);
   const [busy, setBusy] = useState('');
@@ -783,12 +839,12 @@ export default function GalleryApp() {
             ) : <strong>{state.aiProvider}</strong>}
           </div>
           {state.viewer ? <div className="gallery-identity"><span>{state.viewer.role}</span><strong>{state.viewer.code}</strong></div> : <div className="gallery-identity is-guest"><span>Browsing as</span><strong>Guest</strong></div>}
-          <button className="gallery-icon-button" onClick={() => void refresh()} title="Refresh"><RefreshCw className={busy ? 'spin' : ''} /></button>
+          <button className="gallery-icon-button" onClick={() => void refresh()} data-tooltip="Refresh" aria-label="Refresh"><RefreshCw className={busy ? 'spin' : ''} /></button>
         </div>
       </header>
 
       <main>
-        <section className="gallery-status-strip">
+        <section className="gallery-status-strip" data-spotlight-surface>
           <div><span className={`gallery-status-dot is-${state.study.status}`} /><div><strong>{status.label}</strong><p>{status.detail}</p></div></div>
           <div className="gallery-round-indicator">
             {[1, 2, 3].map((round) => <span key={round} className={state.study.current_round >= round ? 'is-reached' : ''}>R{round}</span>)}
@@ -846,7 +902,7 @@ export default function GalleryApp() {
             </div>
 
             {state.study.status === 'round_processing' && !isHost && (
-              <section className="gallery-processing-panel">
+              <section className="gallery-processing-panel" data-spotlight-surface>
                 <LoaderCircle className="spin" /><div><h3>AI 正在同时生成三个新版本</h3><p>三个 App 独立开发，完成时间可能不同。页面会自动刷新。</p></div>
                 <div>{state.generationJobs.filter((job) => job.round_number === state.study.current_round).map((job) => <span key={job.id} className={`is-${job.status}`}>{job.app_title}<strong>{job.status}</strong></span>)}</div>
               </section>
@@ -855,13 +911,13 @@ export default function GalleryApp() {
         )}
 
         {isHost && !selectedApp && (
-          <section className="gallery-host-panel">
+          <section className="gallery-host-panel" data-spotlight-surface>
             <header>
               <div><span className="gallery-eyebrow">HOST CONTROL · H01</span><h3>全局实验控制</h3><p>Host 只控制实验轮次、倒计时与 AI 开发任务，不参与 App 创作、评论或点赞。</p></div>
               <div className="gallery-host-primary-actions">
                 {state.study.status === 'preparing' && <button disabled={state.publishedAppCount !== 3 || Boolean(busy)} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
                 {state.study.status === 'round_active' && <button className="is-end-round" disabled={Boolean(busy)} onClick={() => action('end-round', () => galleryApi.endRound(clientId))}><Clock3 /> 提前结束第 {state.study.current_round} 轮</button>}
-                {state.study.status === 'round_review' && <button disabled={Boolean(busy) || !allNextRoundCommentsOpen} title={!allNextRoundCommentsOpen ? '先在下方逐个开放三个 App 的下一轮评论' : ''} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>启动第 {state.study.current_round + 1} 轮倒计时 <ArrowRight /></button>}
+                {state.study.status === 'round_review' && <button disabled={Boolean(busy) || !allNextRoundCommentsOpen} data-tooltip={!allNextRoundCommentsOpen ? '先在下方逐个开放三个 App 的下一轮评论' : undefined} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>启动第 {state.study.current_round + 1} 轮倒计时 <ArrowRight /></button>}
                 {state.study.status === 'final_voting' && <button disabled={Boolean(busy)} onClick={() => action('end', () => galleryApi.end(clientId))}><Check /> 结束最终投票</button>}
                 {state.study.status === 'ended' && <button className="is-new-experiment" disabled={Boolean(busy)} onClick={() => action('new-experiment', () => galleryApi.newExperiment(clientId))}><RefreshCw /> 开始新的实验</button>}
               </div>
@@ -877,7 +933,7 @@ export default function GalleryApp() {
                     && !nextCommentsOpened;
                   const statusLabel = generationJobStatusLabel(job.status);
                   return (
-                    <article key={job.id} className={`is-${job.status}`}>
+                    <article key={job.id} className={`is-${job.status}`} data-spotlight-surface>
                       <div className="gallery-host-job-status">
                         <div><strong>{job.app_title}</strong><small>{job.app_creator_code} · 独立 Key {Number(job.app_creator_code.slice(1))}</small></div>
                         <span>{statusLabel}</span>

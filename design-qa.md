@@ -1,53 +1,51 @@
-# Gallery Waterfall Design QA
+# Main Visual Effects Design QA
 
-- Source visual truth:
-  - `C:\Users\85743\AppData\Local\Temp\codex-clipboard-a981dd8e-980a-45d6-af95-174e71f8af13.png`
-  - `C:\Users\85743\AppData\Local\Temp\codex-clipboard-8abf2aa5-9e16-41de-a76b-368de03fe0bc.png`
-- Implementation URL: `http://localhost:3012/` (isolated visual-QA database)
-- Implementation screenshot: `F:\vibecodingproject\gemini-ai-studio-clone\design-qa-assets\gallery-waterfall.png`
-- Detail screenshot: `F:\vibecodingproject\gemini-ai-studio-clone\design-qa-assets\gallery-detail-prompt.png`
-- Combined comparison: `F:\vibecodingproject\gemini-ai-studio-clone\design-qa-assets\gallery-comparison.png`
+- Source visual truth: current production at `https://socialgamevibecoding-production.up.railway.app`
+- Code baseline: `origin/main` at `764083f6974f9adc63b92330a5ef2668b2f652ee`
+- Implementation URL: `http://127.0.0.1:3000/`
 - Desktop viewport: 1280 × 720
 - Mobile viewport: 390 × 844
-- State: guest, preparation phase, three published Apps
+- Browser: Codex in-app Browser
 
-## Full-view comparison evidence
+## Evidence
 
-The two source screenshots identify the promotional hero and the “当前公开作品” heading as content to remove. The combined comparison confirms both blocks are absent. After the required experiment status and identity controls, the implementation begins directly with two large App canvases. The canvases form two independently flowing columns with intentionally different heights, followed by the third App further down the shorter path.
+- `design-qa-assets/main-visual-effects/01-online-main-1280x720.png` — production baseline
+- `design-qa-assets/main-visual-effects/02-local-guest-1280x720.png` — local Guest state
+- `design-qa-assets/main-visual-effects/03-local-host-flipped-1280x720.png` — Host flip and seat picker
+- `design-qa-assets/main-visual-effects/04-local-creator-flipped-1280x720.png` — Creator flip and seats
+- `design-qa-assets/main-visual-effects/05-local-contributor-flipped-1280x720.png` — Contributor flip and seats
+- `design-qa-assets/main-visual-effects/06-local-like-ring-1280x720.png` — real like action and feedback
+- `design-qa-assets/main-visual-effects/08-local-lottery-animation-1280x720.png` — authoritative lottery result modal
+- `design-qa-assets/main-visual-effects/09-local-round-history-1280x720.png` — ice-blue round history
+- `design-qa-assets/main-visual-effects/10-local-mobile-390x844.png` — mobile lottery animation
+- `design-qa-assets/main-visual-effects/11-local-mobile-roles-390x844.png` — mobile role layout
+- `design-qa-assets/main-visual-effects/12-local-black-tooltip-1280x720.png` — black/white tooltip
 
-## Focused region evidence
+## Visible comparison
 
-The detail capture confirms that opening an App shows the App preview and a clearly separated “初版提示词” panel at the top of the comment rail. No additional focused crop was required because the prompt heading and complete prompt are readable at the 1280 × 720 capture size. The comment heading follows immediately beneath the prompt panel.
+Production and the local branch were captured in the same 1280 × 720 viewport and Guest state. The content structure is unchanged: fixed header, status strip, role selection, and public gallery remain in the same order. The local branch changes only the visual system from pale blue/violet to black, ice blue, and mint green. The current product labels and roles remain Host, Creator, and Contributor.
 
-## Findings
+## Interaction checks
 
-- No actionable P0, P1, or P2 mismatch remains.
-- Fonts and typography: existing product font stack, weights, and small-label hierarchy are preserved; the unwanted display headline and gallery heading are removed.
-- Spacing and layout rhythm: 24px column and card rhythm is consistent; card heights vary without overlaps; the detail view returns to the top after navigation.
-- Colors and visual tokens: the existing pale blue/violet product surface, white cards, and violet accents are preserved. App content retains its own visual identity inside each iframe.
-- Image quality and asset fidelity: the requested source regions contain no product imagery that needs reproduction. Public works render their actual HTML rather than thumbnails or placeholders.
-- Copy and content: promotional copy and “当前公开作品” are absent. App title, Creator code, description, likes, initial prompt, and comments remain available in their task-relevant contexts.
-- Responsiveness: at 390 × 844 the waterfall becomes one ordered column, the detail prompt remains within the card width, and document width remains 375px with no horizontal overflow.
-- Accessibility and interaction: iframe titles remain descriptive; cards retain a dedicated “查看作品” action; focusable App iframes can be scrolled; detail comments and prompt use semantic sections.
+- Selected Host, Creator, and Contributor through the live UI; seat controls appeared normally.
+- Role fronts contain the solid icon; selected backs contain zero SVG icons. Computed state after flip: front `opacity: 0`, front `visibility: hidden`, back `backface-visibility: hidden`.
+- Pointer movement changed card CSS tilt/glow variables without React state updates.
+- Published three fixture Apps through the Creator upload/publish UI so Contributor and downstream flows could be exercised.
+- One Contributor like changed the displayed count from 0 to 1 once and produced the ring animation.
+- Submitted one real comment to each App, ended round 1 through Host controls, and observed the modal values match the three stored results returned by the existing flow.
+- Round history computed colors: background `rgb(199, 248, 251)`, text `rgb(0, 0, 0)`.
+- Tooltip computed colors: black background, white text, ice-blue border; it remained visible through the pointer spotlight state.
+- Document horizontal overflow was 0px at 1280 × 720 and 390 × 844.
+- Browser console warnings/errors: none in Host, Contributor, and mobile Guest tabs.
+- Refresh preserved the assigned role and current study data through the existing session and API flow.
+- A `prefers-reduced-motion: reduce` stylesheet rule is present and disables new strong animation/tilt effects.
 
-## Comparison history
+## Current-main differences and limits
 
-1. Initial implementation used native CSS columns. Visual evidence showed App 3 at the top of the second column while App 2 appeared below App 1, which produced a P2 reading-order mismatch.
-2. The gallery was changed to two explicit waterfall columns. Desktop now starts with App 1 and App 2 side by side, with App 3 continuing below App 1. Mobile uses explicit item order and renders App 1, App 2, App 3 vertically.
-3. Post-fix evidence shows three cards with heights 1007px, 1097px, and 837px; top positions are 399px, 1431px, and 399px in DOM query order, with visual insertion order preserved across the two columns. Browser console errors: none.
+- Latest `main` has no authoritative Winner field or Winner determination in the active Gallery flow. No Winner or trophy was fabricated, because doing so would alter or guess business semantics.
+- The active product role is named Contributor and uses P01–P20 codes. It was not renamed to the legacy Participant label.
+- Local AI redevelopment reached the existing failure state because `SUIXIANG_API_KEY` is not configured. Lottery state, result rendering, role flow, comments, likes, and visual QA still completed; no API fallback was added.
 
-## Primary interactions tested
+## Result
 
-- Open gallery with three published Apps.
-- Scroll the public App iframe canvases.
-- Open the first App detail view.
-- Verify navigation resets to the top.
-- Verify the initial prompt is public and readable.
-- Verify the comment rail remains attached to the detail view.
-- Verify desktop and mobile widths have no horizontal overflow.
-
-## Follow-up polish
-
-- P3: production Apps with exceptionally long pages may still require scrolling inside their gallery canvas; this is intentional so the outer waterfall remains reasonably sized.
-
-final result: passed
+No actionable visual P0, P1, or P2 issue remains in the tested active flow. Final result: passed with the latest-main Winner limitation documented above.
