@@ -16,7 +16,6 @@ const surfaceSelector = [
   '.archive-hero',
   '.study-stats > div',
   '[data-spotlight-surface]',
-  '[data-tooltip]',
 ].join(',');
 
 export function useGlobalPointerSpotlight() {
