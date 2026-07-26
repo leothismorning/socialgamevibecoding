@@ -1,7 +1,8 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { db, getAIProvider, type StudyAIProvider } from './studyDb.js';
 
-export type GalleryRole = 'host' | 'creator' | 'contributor';
+export type GalleryRole = 'host' | 'creator';
+type LegacyGalleryRole = GalleryRole | 'contributor';
 export type GalleryStatus =
   | 'preparing'
   | 'round_active'
@@ -19,8 +20,7 @@ export type GalleryViewer = {
 const LEGACY_STUDY_ID = 'gallery_v2_main';
 const ACTIVE_STUDY_SETTING = 'active_study_id';
 let STUDY_ID = LEGACY_STUDY_ID;
-const CREATOR_COUNT = 3;
-const CONTRIBUTOR_COUNT = 20;
+const CREATOR_COUNT = 23;
 const ROUND_ONE_DURATION_SECONDS = 15 * 60;
 const LATER_ROUND_DURATION_SECONDS = 10 * 60;
 const now = () => new Date().toISOString();
@@ -273,6 +273,55 @@ db.exec(`
   WHERE parent_comment_id IS NOT NULL;
 `);
 
+const UNIFIED_CREATOR_MIGRATION_KEY = 'unified_creator_roles_v1';
+
+function migrateContributorsToCreators() {
+  const migrated = db.prepare(`SELECT value FROM gallery_settings WHERE key = ?`).get(
+    UNIFIED_CREATOR_MIGRATION_KEY,
+  ) as { value?: string } | undefined;
+  if (migrated?.value === '1') return;
+
+  const creatorCode = (column: string) => `
+    'C' || printf('%02d', CAST(substr(${column}, 2) AS INTEGER) + 3)
+  `;
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE gallery_sessions
+      SET code = ${creatorCode('code')}
+      WHERE code GLOB 'P[0-9][0-9]'
+    `).run();
+    db.prepare(`
+      UPDATE gallery_apps
+      SET creator_code = ${creatorCode('creator_code')}
+      WHERE creator_code GLOB 'P[0-9][0-9]'
+    `).run();
+    db.prepare(`
+      UPDATE gallery_comments
+      SET author_code = ${creatorCode('author_code')}
+      WHERE author_code GLOB 'P[0-9][0-9]'
+    `).run();
+    db.prepare(`
+      UPDATE gallery_app_likes
+      SET voter_code = ${creatorCode('voter_code')}
+      WHERE voter_code GLOB 'P[0-9][0-9]'
+    `).run();
+    db.prepare(`
+      UPDATE gallery_comment_likes
+      SET voter_code = ${creatorCode('voter_code')}
+      WHERE voter_code GLOB 'P[0-9][0-9]'
+    `).run();
+    db.prepare(`UPDATE gallery_sessions SET role = 'creator' WHERE role = 'contributor'`).run();
+    db.prepare(`
+      INSERT INTO gallery_settings (key, value, updated_at)
+      VALUES (?, '1', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(UNIFIED_CREATOR_MIGRATION_KEY, now());
+  });
+  transaction();
+}
+
+migrateContributorsToCreators();
+
 const activeStudySetting = db.prepare(`SELECT value FROM gallery_settings WHERE key = ?`).get(
   ACTIVE_STUDY_SETTING,
 ) as { value?: string } | undefined;
@@ -327,29 +376,31 @@ function requireSession(clientId: string, role?: GalleryRole): GalleryViewer {
 }
 
 function codeRange(role: GalleryRole) {
-  const prefix = role === 'host' ? 'H' : role === 'creator' ? 'C' : 'P';
-  const count = role === 'host' ? 1 : role === 'creator' ? CREATOR_COUNT : CONTRIBUTOR_COUNT;
+  const prefix = role === 'host' ? 'H' : 'C';
+  const count = role === 'host' ? 1 : CREATOR_COUNT;
   return Array.from({ length: count }, (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`);
 }
 
-export function joinGallery(clientId: string, role: GalleryRole, requestedCode: string) {
-  const cleanClientId = clientId.trim();
-  const cleanCode = requestedCode.trim().toUpperCase();
-  if (!cleanClientId || cleanClientId.length > 160) throw new Error('A valid browser-tab session is required.');
-  if (role !== 'host' && role !== 'creator' && role !== 'contributor') {
-    throw new Error('Role must be Host, Creator, or Contributor.');
-  }
-  if (!codeRange(role).includes(cleanCode)) {
-    throw new Error(`Choose a valid ${role} identity number.`);
-  }
+function normalizeLegacyCreatorCode(code: string) {
+  const legacy = code.match(/^P(\d{2})$/);
+  return legacy ? `C${String(Number(legacy[1]) + 3).padStart(2, '0')}` : code;
+}
 
-  if (role === 'contributor' && publishedApps().length < CREATOR_COUNT) {
-    throw new Error('Contributors can enter after all three Creators publish their Apps.');
+export function joinGallery(clientId: string, role: LegacyGalleryRole, requestedCode: string) {
+  const cleanClientId = clientId.trim();
+  const normalizedRole: GalleryRole = role === 'contributor' ? 'creator' : role;
+  const cleanCode = normalizeLegacyCreatorCode(requestedCode.trim().toUpperCase());
+  if (!cleanClientId || cleanClientId.length > 160) throw new Error('A valid browser-tab session is required.');
+  if (normalizedRole !== 'host' && normalizedRole !== 'creator') {
+    throw new Error('Role must be Host or Creator.');
+  }
+  if (!codeRange(normalizedRole).includes(cleanCode)) {
+    throw new Error(`Choose a valid ${normalizedRole} identity number.`);
   }
 
   const existing = sessionForClient(cleanClientId);
   if (existing) {
-    if (existing.role !== role) throw new Error(`This tab is already registered as ${existing.role}.`);
+    if (existing.role !== normalizedRole) throw new Error(`This tab is already registered as ${existing.role}.`);
     return getGalleryState(cleanClientId);
   }
 
@@ -357,7 +408,7 @@ export function joinGallery(clientId: string, role: GalleryRole, requestedCode: 
   db.prepare(`
     INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(STUDY_ID, cleanClientId, role, cleanCode, timestamp, timestamp);
+  `).run(STUDY_ID, cleanClientId, normalizedRole, cleanCode, timestamp, timestamp);
   return getGalleryState(cleanClientId);
 }
 
@@ -501,7 +552,7 @@ export function startFormalGalleryGame(clientId: string) {
   requireHost(clientId);
   const currentStudy = study();
   if (currentStudy.status !== 'preparing') throw new Error('The formal game has already started.');
-  if (publishedApps().length !== CREATOR_COUNT) throw new Error('All three Creators must publish one App before starting.');
+  if (publishedApps().length < 1) throw new Error('At least one Creator must publish an App before starting.');
   startRound(1);
   return getGalleryState(clientId);
 }
@@ -517,7 +568,7 @@ export function startNextGalleryRound(clientId: string) {
     WHERE study_id = ? AND round_number = ?
   `).get(STUDY_ID, nextRound) as any;
   if (Number(opened.count) !== publishedApps().length) {
-    throw new Error('Open next-round comments for all three Apps before starting the countdown.');
+    throw new Error('Open next-round comments for every published App before starting the countdown.');
   }
   startRound(nextRound);
   return getGalleryState(clientId);

@@ -17,7 +17,6 @@ import {
   Sparkles,
   Upload,
   UserRound,
-  UsersRound,
   X,
 } from 'lucide-react';
 import { galleryApi } from './services/galleryApi';
@@ -38,7 +37,7 @@ function getClientId() {
 }
 
 const statusCopy: Record<GalleryStatus, { label: string; detail: string }> = {
-  preparing: { label: 'Creator 开发期', detail: '三位 Creator 分别完成并发布一个 App。' },
+  preparing: { label: 'Creator 开发期', detail: '所有 Creator 都可以创作并发布 App；至少发布一个作品后即可开始。' },
   round_active: { label: '评论进行中', detail: '进入任意 App 提交建议，并为其他人的评论点赞。' },
   round_processing: { label: '抽签与 AI 更新', detail: '评论已锁定，系统正在为每个 App 抽签并生成新版本。' },
   round_review: { label: '本轮完成', detail: '所有新版本已公开，Host 可以开启下一轮。' },
@@ -150,18 +149,15 @@ function IdentityPanel({ state, join, busy }: {
   busy: string;
 }) {
   const [selectedRole, setSelectedRole] = useState<GalleryRole | null>(null);
-  const contributorsOpen = state.publishedAppCount === state.creatorCount;
   const seatCodes = selectedRole === 'host'
     ? ['H01']
-    : selectedRole === 'creator'
-      ? ['C01', 'C02', 'C03']
-      : Array.from({ length: 20 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`);
+    : Array.from({ length: state.creatorCount }, (_, index) => `C${String(index + 1).padStart(2, '0')}`);
   return (
     <section className="gallery-identity-panel">
       <div>
         <span className="gallery-eyebrow">JOIN THE STUDY</span>
         <h2>选择本标签页的实验身份</h2>
-        <p>每个浏览器标签页只分配一个身份；Host 独立控制实验流程，三位 Creator 分别开发自己的 App。</p>
+        <p>Host 独立控制实验流程；其他人统一使用 Creator 身份，既可以创作 App，也可以参与评论和点赞。</p>
       </div>
       <div className="gallery-identity-picker">
         <div className="gallery-role-grid">
@@ -169,11 +165,7 @@ function IdentityPanel({ state, join, busy }: {
             <ShieldCheck /><strong>Host</strong><span>选择 H01 控制实验流程</span>
           </button>
           <button className={selectedRole === 'creator' ? 'is-selected' : ''} disabled={Boolean(busy)} onClick={() => setSelectedRole('creator')}>
-            <UserRound /><strong>Creator</strong><span>自主选择 C01–C03</span>
-          </button>
-          <button className={selectedRole === 'contributor' ? 'is-selected' : ''} disabled={Boolean(busy) || !contributorsOpen} onClick={() => setSelectedRole('contributor')}>
-            <UsersRound /><strong>Contributor</strong>
-            <span>{contributorsOpen ? '自主选择 P01–P20' : '三位 Creator 发布后开放'}</span>
+            <UserRound /><strong>Creator</strong><span>自主选择 C01–C23，可创作与评论</span>
           </button>
         </div>
         {selectedRole && (
@@ -660,7 +652,7 @@ function LotteryNotice({ state, roundNumber, close }: { state: GalleryState; rou
         <span className="gallery-lottery-burst"><Sparkles /></span>
         <span className="gallery-eyebrow">ROUND {roundNumber} · LOTTERY RESULT</span>
         <h2 id="lottery-result-title">第 {roundNumber} 轮抽签结果</h2>
-        <p>倒计时已经结束，评论和点赞已锁定。以下建议将用于生成三个 App 的新版本。</p>
+        <p>倒计时已经结束，评论和点赞已锁定。以下建议将用于生成所有已发布 App 的新版本。</p>
         <div>
           {apps.map((app) => {
             const result = state.lotteries.find(
@@ -752,7 +744,8 @@ export default function GalleryApp() {
       .filter((opening) => Number(opening.round_number) === nextRoundNumber)
       .map((opening) => opening.app_id) || [],
   );
-  const allNextRoundCommentsOpen = publishedApps.length === 3 && nextRoundOpenedAppIds.size === 3;
+  const allNextRoundCommentsOpen = publishedApps.length > 0
+    && nextRoundOpenedAppIds.size === publishedApps.length;
 
   useEffect(() => {
     if (selectedAppId) window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -808,21 +801,18 @@ export default function GalleryApp() {
         ) : (
           <section className="gallery-home">
             <div className="gallery-grid" aria-label="公开作品画廊">
-              {[0, 1, 2].map((index) => {
-                const app = publishedApps[index];
-                const developmentJob = app
-                  ? currentGenerationJobs.find((job) => job.app_id === app.id)
-                  : undefined;
+              {publishedApps.map((app, index) => {
+                const developmentJob = currentGenerationJobs.find((job) => job.app_id === app.id);
                 const developmentEvents = developmentJob
                   ? (state.generationEvents || []).filter((event) => Number(event.job_id) === Number(developmentJob.id))
                   : [];
-                const ownApp = state.viewer?.role === 'creator' && state.viewer.code === app?.creator_code;
+                const ownApp = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
                 const likeDisabled = !state.viewer || isHost || Boolean(ownApp) || state.study.status === 'ended' || Boolean(busy);
                 const likeTitle = !state.viewer ? '选择身份后可以点赞'
                   : isHost ? 'Host 只控制实验流程，不参与点赞'
                     : ownApp ? '不能点赞自己的作品'
                     : state.study.status === 'ended' ? '项目已结束' : '';
-                return app ? (
+                return (
                   <GalleryCard
                     key={app.id}
                     app={app}
@@ -839,15 +829,20 @@ export default function GalleryApp() {
                     developmentJob={developmentJob}
                     developmentEvents={developmentEvents}
                   />
-                ) : (
-                  <article className="gallery-card gallery-placeholder" style={{ order: index }} key={`placeholder-${index}`}><LoaderCircle /><strong>等待 Creator 发布</strong><p>这个画廊席位还在开发中。</p></article>
                 );
               })}
+              {publishedApps.length === 0 && (
+                <article className="gallery-card gallery-placeholder">
+                  <LoaderCircle />
+                  <strong>等待 Creator 发布</strong>
+                  <p>至少一个作品发布后，Host 就可以开始第 1 轮。</p>
+                </article>
+              )}
             </div>
 
             {state.study.status === 'round_processing' && !isHost && (
               <section className="gallery-processing-panel">
-                <LoaderCircle className="spin" /><div><h3>AI 正在同时生成三个新版本</h3><p>三个 App 独立开发，完成时间可能不同。页面会自动刷新。</p></div>
+                <LoaderCircle className="spin" /><div><h3>AI 正在生成本轮新版本</h3><p>{publishedApps.length} 个 App 独立开发，完成时间可能不同。页面会自动刷新。</p></div>
                 <div>{state.generationJobs.filter((job) => job.round_number === state.study.current_round).map((job) => <span key={job.id} className={`is-${job.status}`}>{job.app_title}<strong>{job.status}</strong></span>)}</div>
               </section>
             )}
@@ -859,9 +854,9 @@ export default function GalleryApp() {
             <header>
               <div><span className="gallery-eyebrow">HOST CONTROL · H01</span><h3>全局实验控制</h3><p>Host 只控制实验轮次、倒计时与 AI 开发任务，不参与 App 创作、评论或点赞。</p></div>
               <div className="gallery-host-primary-actions">
-                {state.study.status === 'preparing' && <button disabled={state.publishedAppCount !== 3 || Boolean(busy)} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
+                {state.study.status === 'preparing' && <button disabled={state.publishedAppCount < 1 || Boolean(busy)} title={state.publishedAppCount < 1 ? '至少等待一位 Creator 发布作品' : ''} onClick={() => action('start', () => galleryApi.start(clientId))}><Play /> 正式开始第 1 轮</button>}
                 {state.study.status === 'round_active' && <button className="is-end-round" disabled={Boolean(busy)} onClick={() => action('end-round', () => galleryApi.endRound(clientId))}><Clock3 /> 提前结束第 {state.study.current_round} 轮</button>}
-                {state.study.status === 'round_review' && <button disabled={Boolean(busy) || !allNextRoundCommentsOpen} title={!allNextRoundCommentsOpen ? '先在下方逐个开放三个 App 的下一轮评论' : ''} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>启动第 {state.study.current_round + 1} 轮倒计时 <ArrowRight /></button>}
+                {state.study.status === 'round_review' && <button disabled={Boolean(busy) || !allNextRoundCommentsOpen} title={!allNextRoundCommentsOpen ? '先在下方逐个开放所有 App 的下一轮评论' : ''} onClick={() => action('next', () => galleryApi.nextRound(clientId))}>启动第 {state.study.current_round + 1} 轮倒计时 <ArrowRight /></button>}
                 {state.study.status === 'final_voting' && <button disabled={Boolean(busy)} onClick={() => action('end', () => galleryApi.end(clientId))}><Check /> 结束最终投票</button>}
                 {state.study.status === 'ended' && <button className="is-new-experiment" disabled={Boolean(busy)} onClick={() => action('new-experiment', () => galleryApi.newExperiment(clientId))}><RefreshCw /> 开始新的实验</button>}
               </div>

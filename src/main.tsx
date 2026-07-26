@@ -1,6 +1,6 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
-import App from './GalleryApp.tsx';
+import App from './AsyncGalleryApp.tsx';
 import './index.css';
 import {ThemeProvider} from './theme.tsx';
 

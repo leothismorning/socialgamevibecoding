@@ -20,6 +20,8 @@ legacyDb.exec(`
   );
   INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
   VALUES ('gallery_v2_main', 'legacy-creator-tab', 'creator', 'C01', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+  INSERT INTO gallery_sessions (study_id, client_id, role, code, joined_at, last_seen_at)
+  VALUES ('gallery_v2_main', 'legacy-contributor-tab', 'contributor', 'P01', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
 
   CREATE TABLE gallery_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +83,13 @@ const migratedSessionsSchema = db.prepare(`
   SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'
 `).get() as { sql: string };
 assert.doesNotMatch(migratedSessionsSchema.sql, /UNIQUE\s*\(\s*study_id\s*,\s*code\s*\)/i);
+const migratedLegacyContributor = gallery.getGalleryState('legacy-contributor-tab');
+assert.equal(migratedLegacyContributor.viewer?.role, 'creator');
+assert.equal(migratedLegacyContributor.viewer?.code, 'C04');
+assert.equal(
+  (db.prepare(`SELECT value FROM gallery_settings WHERE key = 'unified_creator_roles_v1'`).get() as { value: string }).value,
+  '1',
+);
 const migratedCommentColumns = db.prepare(`PRAGMA table_info(gallery_comments)`).all() as Array<{ name: string }>;
 assert.ok(migratedCommentColumns.some((column) => column.name === 'parent_comment_id'));
 const testDurationOverride = process.env.GALLERY_ROUND_DURATION_MS;
@@ -103,17 +112,27 @@ const hostClient = 'host-tab';
 const hostState = gallery.joinGallery(hostClient, 'host', 'H01');
 assert.equal(hostState.viewer?.code, 'H01');
 assert.equal(hostState.viewer?.role, 'host');
+assert.equal(hostState.creatorCount, 23);
 const secondHostState = gallery.joinGallery('second-host-tab', 'host', 'H01');
 assert.equal(secondHostState.viewer?.code, 'H01');
 assert.equal(secondHostState.sessions.filter((session: any) => session.code === 'H01').length, 2);
-expectError(() => gallery.joinGallery('invalid-creator-tab', 'creator', 'P01'), /valid creator identity/i);
+expectError(() => gallery.joinGallery('invalid-creator-tab', 'creator', 'C24'), /valid creator identity/i);
 [2, 0, 1].forEach((index) => {
   const clientId = creatorClients[index];
   const state = gallery.joinGallery(clientId, 'creator', `C0${index + 1}`);
   assert.equal(state.viewer?.code, `C0${index + 1}`);
 });
 
-expectError(() => gallery.joinGallery('contributor-too-early', 'contributor', 'P01'), /after all three Creators/i);
+const creatorFour = gallery.joinGallery('creator-tab-4', 'creator', 'C04');
+const creatorFive = gallery.joinGallery('creator-tab-5', 'creator', 'C05');
+const duplicateCreator = gallery.joinGallery('duplicate-creator-tab', 'creator', 'C05');
+const legacyApiCreator = gallery.joinGallery('legacy-api-tab', 'contributor', 'P03');
+assert.equal(creatorFour.viewer?.code, 'C04');
+assert.equal(creatorFive.viewer?.code, 'C05');
+assert.equal(duplicateCreator.viewer?.code, 'C05');
+assert.equal(duplicateCreator.sessions.filter((session: any) => session.code === 'C05').length, 2);
+assert.equal(legacyApiCreator.viewer?.role, 'creator');
+assert.equal(legacyApiCreator.viewer?.code, 'C06');
 
 creatorClients.forEach((clientId, index) => {
   gallery.saveCreatorDraft({
@@ -127,15 +146,9 @@ creatorClients.forEach((clientId, index) => {
   gallery.publishCreatorApp(clientId);
 });
 
-const contributorOne = gallery.joinGallery('contributor-tab-1', 'contributor', 'P01');
-const contributorTwo = gallery.joinGallery('contributor-tab-2', 'contributor', 'P02');
-const duplicateContributor = gallery.joinGallery('duplicate-contributor-tab', 'contributor', 'P02');
-assert.equal(contributorOne.viewer?.code, 'P01');
-assert.equal(contributorTwo.viewer?.code, 'P02');
-assert.equal(duplicateContributor.viewer?.code, 'P02');
-assert.equal(duplicateContributor.sessions.filter((session: any) => session.code === 'P02').length, 2);
-const firstPublishedApp = (contributorOne.apps as any[]).find((app: any) => app.creator_code === 'C01');
-let state = gallery.toggleGalleryAppLike('contributor-tab-1', firstPublishedApp.id, 'showcase');
+const firstPublishedApp = (gallery.getGalleryState('creator-tab-4').apps as any[])
+  .find((app: any) => app.creator_code === 'C01');
+let state = gallery.toggleGalleryAppLike('creator-tab-4', firstPublishedApp.id, 'showcase');
 assert.equal((state.apps as any[]).find((app: any) => app.id === firstPublishedApp.id)?.viewer_showcase_liked, 1);
 expectError(
   () => gallery.toggleGalleryAppLike(creatorClients[0], firstPublishedApp.id, 'showcase'),
@@ -157,37 +170,37 @@ expectError(
 );
 
 function playRound(roundNumber: number) {
-  state = gallery.getGalleryState('contributor-tab-1');
+  state = gallery.getGalleryState('creator-tab-4');
   const apps = state.apps.filter((app: any) => app.status === 'published');
   assert.equal(apps.length, 3);
 
   for (const app of apps) {
-    gallery.saveGalleryComment('contributor-tab-1', app.id, `P01 improvement for App ${app.creator_code}, round ${roundNumber}`);
+    gallery.saveGalleryComment('creator-tab-4', app.id, `C04 improvement for App ${app.creator_code}, round ${roundNumber}`);
     const afterSecond = gallery.saveGalleryComment(
-      'contributor-tab-2',
+      'creator-tab-5',
       app.id,
-      `P02 alternative for App ${app.creator_code}, round ${roundNumber}`,
+      `C05 alternative for App ${app.creator_code}, round ${roundNumber}`,
     );
     const p1Comment = afterSecond.comments.find(
       (comment: any) => comment.app_id === app.id
         && comment.round_number === roundNumber
-        && comment.author_code === 'P01',
+        && comment.author_code === 'C04',
     );
     assert.ok(p1Comment);
-    gallery.toggleGalleryCommentLike('contributor-tab-2', p1Comment.id);
-    expectError(() => gallery.toggleGalleryCommentLike('contributor-tab-1', p1Comment.id), /own comment/i);
+    gallery.toggleGalleryCommentLike('creator-tab-5', p1Comment.id);
+    expectError(() => gallery.toggleGalleryCommentLike('creator-tab-4', p1Comment.id), /own comment/i);
     const afterReply = gallery.saveGalleryComment(
-      'contributor-tab-2',
+      'creator-tab-5',
       app.id,
-      `P02 expansion of P01 for App ${app.creator_code}, round ${roundNumber}`,
+      `C05 expansion of C04 for App ${app.creator_code}, round ${roundNumber}`,
       p1Comment.id,
     );
     const reply = afterReply.comments.find(
       (candidate: any) => Number(candidate.parent_comment_id) === Number(p1Comment.id)
-        && candidate.author_code === 'P02',
+        && candidate.author_code === 'C05',
     );
     assert.ok(reply);
-    gallery.toggleGalleryCommentLike('contributor-tab-1', reply.id);
+    gallery.toggleGalleryCommentLike('creator-tab-4', reply.id);
   }
 
   if (roundNumber === 1) {
@@ -200,12 +213,12 @@ function playRound(roundNumber: number) {
   } else {
     assert.equal(gallery.lockExpiredGalleryRound((max: number) => max - 1, true), true);
   }
-  let processing = gallery.getGalleryState('contributor-tab-1');
+  let processing = gallery.getGalleryState('creator-tab-4');
   const lotteries = processing.lotteries.filter((item: any) => item.round_number === roundNumber);
   assert.equal(lotteries.length, 3);
-  assert.ok(lotteries.every((item: any) => item.selected_author === 'P02'));
-  assert.ok(lotteries.every((item: any) => item.selected_parent_author === 'P01'));
-  assert.ok(lotteries.every((item: any) => /P01 improvement/.test(item.selected_parent_comment)));
+  assert.ok(lotteries.every((item: any) => item.selected_author === 'C05'));
+  assert.ok(lotteries.every((item: any) => item.selected_parent_author === 'C04'));
+  assert.ok(lotteries.every((item: any) => /C04 improvement/.test(item.selected_parent_comment)));
   assert.ok(lotteries.every((item: any) => item.total_weight === 5));
 
   if (roundNumber === 1) {
@@ -216,7 +229,7 @@ function playRound(roundNumber: number) {
       LIMIT 1
     `).get(roundNumber) as { id: number };
     expectError(
-      () => gallery.cancelGalleryGenerationJob('contributor-tab-1', cancellableJob.id),
+      () => gallery.cancelGalleryGenerationJob('creator-tab-4', cancellableJob.id),
       /requires the host role/i,
     );
     expectError(
@@ -238,8 +251,8 @@ function playRound(roundNumber: number) {
   }
 
   let job = gallery.nextGalleryGenerationJob();
-  assert.match(String(job?.selected_parent_comment || ''), /P01 improvement/);
-  assert.match(String(job?.selected_comment || ''), /P02 expansion/);
+  assert.match(String(job?.selected_parent_comment || ''), /C04 improvement/);
+  assert.match(String(job?.selected_comment || ''), /C05 expansion/);
   if (job) {
     gallery.recordGalleryGenerationProgress(Number(job.id), {
       step: 'plan',
@@ -255,7 +268,7 @@ function playRound(roundNumber: number) {
       title: '修改计划已经完成',
       detail: 'Preserve the existing App and implement the selected comments.',
     });
-    const liveEvent = gallery.getGalleryState('contributor-tab-1').generationEvents.find(
+    const liveEvent = gallery.getGalleryState('creator-tab-4').generationEvents.find(
       (event: any) => Number(event.job_id) === Number(job.id) && event.step_key === 'plan',
     ) as any;
     assert.equal(liveEvent?.status, 'completed');
@@ -295,18 +308,18 @@ function openAllAppsForNextRound(nextRound: number) {
   const secondApp = apps[1];
   gallery.openNextRoundComments(hostClient, firstApp.id);
   const earlyState = gallery.saveGalleryComment(
-    'contributor-tab-1',
+    'creator-tab-4',
     firstApp.id,
-    `P01 early comment for round ${nextRound}`,
+    `C04 early comment for round ${nextRound}`,
   );
   assert.ok(earlyState.comments.some(
     (comment: any) => comment.app_id === firstApp.id && comment.round_number === nextRound,
   ));
   expectError(
-    () => gallery.saveGalleryComment('contributor-tab-1', secondApp.id, 'This App is still locked'),
+    () => gallery.saveGalleryComment('creator-tab-4', secondApp.id, 'This App is still locked'),
     /not open/i,
   );
-  expectError(() => gallery.startNextGalleryRound(hostClient), /all three Apps/i);
+  expectError(() => gallery.startNextGalleryRound(hostClient), /every published App/i);
   apps.slice(1).forEach((app: any) => gallery.openNextRoundComments(hostClient, app.id));
   const opened = gallery.getGalleryState(hostClient).roundOpenings.filter(
     (opening: any) => Number(opening.round_number) === nextRound,
@@ -346,11 +359,11 @@ openAllAppsForNextRound(3);
 gallery.startNextGalleryRound(hostClient);
 playRound(3);
 
-state = gallery.getGalleryState('contributor-tab-1');
+state = gallery.getGalleryState('creator-tab-4');
 assert.ok(state.apps.every((app: any) => app.initial_version_id && app.final_version_id));
 assert.ok(state.apps.every((app: any) => app.initial_version_id !== app.final_version_id));
 
-for (const app of state.apps) gallery.toggleGalleryAppLike('contributor-tab-1', app.id, 'final');
+for (const app of state.apps) gallery.toggleGalleryAppLike('creator-tab-4', app.id, 'final');
 expectError(
   () => gallery.toggleGalleryAppLike(creatorClients[0], state.apps[0].id, 'final'),
   /own App/i,
@@ -361,7 +374,7 @@ assert.equal(state.study.status, 'ended');
 assert.ok(state.apps.every((app: any) => Number(app.final_like_count) === 1));
 const endedStudyId = String(state.study.id);
 expectError(
-  () => gallery.saveGalleryComment('contributor-tab-1', state.apps[0].id, 'Too late'),
+  () => gallery.saveGalleryComment('creator-tab-4', state.apps[0].id, 'Too late'),
   /not open/i,
 );
 
@@ -376,7 +389,7 @@ assert.equal(nextExperiment.viewer?.role, 'host');
 assert.equal(nextExperiment.viewer?.code, 'H01');
 assert.equal(nextExperiment.apps.length, 0);
 assert.equal(nextExperiment.sessions.length, 1);
-assert.equal(gallery.getGalleryState('contributor-tab-1').viewer, null);
+assert.equal(gallery.getGalleryState('creator-tab-4').viewer, null);
 assert.equal(
   (db.prepare(`SELECT status FROM gallery_studies WHERE id = ?`).get(endedStudyId) as any).status,
   'ended',
@@ -391,6 +404,19 @@ assert.equal(
 );
 const nextCreator = gallery.joinGallery('next-creator-tab', 'creator', 'C01');
 assert.equal(nextCreator.viewer?.code, 'C01');
+expectError(() => gallery.startFormalGalleryGame(hostClient), /at least one Creator/i);
+gallery.saveCreatorDraft({
+  clientId: 'next-creator-tab',
+  title: 'Single App Experiment',
+  brief: 'One published App is enough to begin.',
+  creatorPrompt: 'Build a single App.',
+  code: html('Single App Experiment'),
+  summary: 'Initial version',
+});
+gallery.publishCreatorApp('next-creator-tab');
+const singleAppRound = gallery.startFormalGalleryGame(hostClient);
+assert.equal(singleAppRound.study.status, 'round_active');
+assert.equal(singleAppRound.apps.filter((app: any) => app.status === 'published').length, 1);
 
-console.log('Gallery mechanics test passed: persistent public AI progress, one-level expansion comments, parent+reply lottery prompts, per-App early comment openings, 15/10-minute rounds, archived experiments, Host controls, weighted lotteries, AI versions, and final votes.');
+console.log('Gallery mechanics test passed: unified Creator identities, legacy Contributor migration, one-App start, persistent public AI progress, one-level expansion comments, parent+reply lottery prompts, per-App early comment openings, 15/10-minute rounds, archived experiments, Host controls, weighted lotteries, AI versions, and final votes.');
 db.close();
