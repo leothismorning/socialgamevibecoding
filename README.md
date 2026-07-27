@@ -6,7 +6,7 @@
 
 1. 12 位 Creator 分别自由创作并发布一个 Initial App。
 2. 任一 Initial App 发布后，24 位 Community Member 都可立即体验和评论，不需要等待其他 App，也不需要 Host 解锁。
-3. 两种 Creator 工作流各包含 6 位 Creator 和 6 个 Initial App；Community Member 是共享参与者池，不受作品可见性分组限制。
+3. Host 在研究开始前手动选择 6 位 Creator 和 12 位 Community Member 进入对照组；其余参与者进入 Vibe Gallery 条件。系统不再随机分组，所有参与者仍可看到全部作品。
 4. 每名 Community Member 从全部 12 个 App 中被平衡分配 3 个需要认真体验的作品，同时可以自由浏览其他作品。
 5. 普通评论区支持自由评论、连续回复和点赞，不要求填写结构化“亮点”。
 6. Vibe Gallery 条件中，用户可以把评论、回复或已有综合评论加入私有的“创意篮子”。

@@ -45,7 +45,11 @@ legacyDb.exec(`
 legacyDb.close();
 
 const gallery = await import('../server/galleryDb.js');
-const { inspectAgentArtifacts } = await import('../server/developmentAgent.js');
+const {
+  inspectAgentArtifacts,
+  inspectAgentInteractionStyles,
+  repairAgentInteractionClassNames,
+} = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
 
 assert.equal(getAIProvider(), 'gpt5', 'the former DeepSeek default should migrate to GPT-5.5');
@@ -78,6 +82,36 @@ assert.deepEqual(
   ['p-4', 'md:grid', 'w-1/2', 'left-[10px]'],
   'high-confidence utility syntax should still trigger the self-contained CSS repair',
 );
+const mismatchedInteractionJs = `
+  card.classList.add('is-selected');
+  card.classList.toggle("is-correct", true);
+  card.classList.add('is-wrong');
+`;
+const unprefixedInteractionCss = `
+  .card.selected { outline: 3px solid blue; }
+  .card.correct { background: green; }
+  .card.wrong { background: red; }
+`;
+assert.deepEqual(
+  inspectAgentInteractionStyles(mismatchedInteractionJs, unprefixedInteractionCss).missingStateClasses,
+  ['is-selected', 'is-correct', 'is-wrong'],
+  'runtime classes that do not exactly match CSS selectors must be detected before the integration gate',
+);
+const repairedInteraction = repairAgentInteractionClassNames(
+  mismatchedInteractionJs,
+  unprefixedInteractionCss,
+);
+assert.deepEqual(
+  repairedInteraction.replacements,
+  [
+    { from: 'is-selected', to: 'selected' },
+    { from: 'is-correct', to: 'correct' },
+    { from: 'is-wrong', to: 'wrong' },
+  ],
+);
+assert.deepEqual(repairedInteraction.inspection.missingStateClasses, []);
+assert.match(repairedInteraction.js, /classList\.add\('selected'\)/);
+assert.match(repairedInteraction.js, /classList\.toggle\(\"correct\", true\)/);
 
 const migratedSessionsSchema = db.prepare(`
   SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'

@@ -1,17 +1,21 @@
 import type {
   CommunityGalleryState,
   CommunitySourceType,
+  CreatorDevelopmentProgress,
 } from '../communityGalleryTypes';
 
-async function request(path: string, options?: RequestInit): Promise<CommunityGalleryState> {
+async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `请求失败（${response.status}）。`);
-  return payload;
+  return payload as T;
 }
+
+const request = (path: string, options?: RequestInit) =>
+  requestJson<CommunityGalleryState>(path, options);
 
 const body = (value: Record<string, unknown>) => JSON.stringify(value);
 
@@ -30,7 +34,7 @@ export const communityGalleryApi = {
     }),
   generateInitial: (
     clientId: string,
-    values: { title: string; brief: string; prompt: string },
+    values: { title: string; brief: string; prompt: string; operationId: string },
   ) => request('/api/community-gallery/apps/generate-initial', {
     method: 'POST',
     body: body({ clientId, ...values }),
@@ -42,13 +46,22 @@ export const communityGalleryApi = {
     method: 'POST',
     body: body({ clientId, ...values }),
   }),
-  refine: (clientId: string, message: string) =>
+  refine: (clientId: string, message: string, operationId?: string) =>
     request('/api/community-gallery/apps/refine', {
       method: 'POST',
-      body: body({ clientId, message }),
+      body: body({ clientId, message, operationId }),
     }),
+  developmentProgress: (clientId: string, operationId: string) =>
+    requestJson<CreatorDevelopmentProgress>(
+      `/api/community-gallery/development-progress?clientId=${encodeURIComponent(clientId)}&operationId=${encodeURIComponent(operationId)}`,
+    ),
   publishInitial: (clientId: string) =>
     request('/api/community-gallery/apps/publish-initial', {
+      method: 'POST',
+      body: body({ clientId }),
+    }),
+  publishProject: (clientId: string) =>
+    request('/api/community-gallery/apps/publish-project', {
       method: 'POST',
       body: body({ clientId }),
     }),
@@ -69,6 +82,11 @@ export const communityGalleryApi = {
     request(`/api/community-gallery/comments/${commentId}`, {
       method: 'DELETE',
       body: body({ clientId }),
+    }),
+  editComment: (clientId: string, commentId: number, content: string) =>
+    request(`/api/community-gallery/comments/${commentId}`, {
+      method: 'PATCH',
+      body: body({ clientId, content }),
     }),
   likeComment: (clientId: string, commentId: number) =>
     request(`/api/community-gallery/comments/${commentId}/like`, {
@@ -97,6 +115,16 @@ export const communityGalleryApi = {
     method: 'POST',
     body: body({ clientId, ...values }),
   }),
+  editSynthesis: (clientId: string, synthesisId: number, content: string) =>
+    request(`/api/community-gallery/syntheses/${synthesisId}`, {
+      method: 'PATCH',
+      body: body({ clientId, content }),
+    }),
+  deleteSynthesis: (clientId: string, synthesisId: number) =>
+    request(`/api/community-gallery/syntheses/${synthesisId}`, {
+      method: 'DELETE',
+      body: body({ clientId }),
+    }),
   withdrawSynthesisForVote: (clientId: string, synthesisId: number) =>
     request(`/api/community-gallery/syntheses/${synthesisId}/withdraw-for-vote`, {
       method: 'POST',
@@ -110,13 +138,14 @@ export const communityGalleryApi = {
   generateCommunity: (
     clientId: string,
     appId: string,
-    synthesisId: number,
+    sourceType: CommunitySourceType,
+    sourceId: number,
     creatorInstruction: string,
     baseVersionId?: number,
     selectionReason = '',
   ) => request(`/api/community-gallery/apps/${appId}/generate-community`, {
     method: 'POST',
-    body: body({ clientId, synthesisId, creatorInstruction, baseVersionId, selectionReason }),
+    body: body({ clientId, sourceType, sourceId, creatorInstruction, baseVersionId, selectionReason }),
   }),
   uploadCommunity: (
     clientId: string,
@@ -152,10 +181,23 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
+  setConditions: (
+    clientId: string,
+    controlCreatorCodes: string[],
+    controlCommunityCodes: string[],
+  ) => request('/api/community-gallery/study/conditions', {
+    method: 'POST',
+    body: body({ clientId, controlCreatorCodes, controlCommunityCodes }),
+  }),
   enterDevelopment: (clientId: string, iterationNumber: 1 | 2) =>
     request('/api/community-gallery/study/enter-development', {
       method: 'POST',
       body: body({ clientId, iterationNumber }),
+    }),
+  retryDevelopment: (clientId: string, jobId: number) =>
+    request(`/api/community-gallery/jobs/${jobId}/retry`, {
+      method: 'POST',
+      body: body({ clientId }),
     }),
   returnToPreviousStage: (clientId: string) =>
     request('/api/community-gallery/study/return-to-previous-stage', {

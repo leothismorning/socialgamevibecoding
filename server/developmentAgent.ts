@@ -67,6 +67,12 @@ type ArtifactInspection = {
   coverage: number;
 };
 
+export type InteractionStyleInspection = {
+  usedStateClasses: string[];
+  missingStateClasses: string[];
+  coverage: number;
+};
+
 type ImageResolutionReport = {
   checked: number;
   preserved: number;
@@ -110,6 +116,58 @@ export function inspectAgentArtifacts(body: string, css: string): ArtifactInspec
   const utilityClasses = usedClasses.filter(looksLikeTailwindUtility);
   const coverage = usedClasses.length === 0 ? 1 : (usedClasses.length - missingClasses.length) / usedClasses.length;
   return { usedClasses, definedClasses, missingClasses, utilityClasses, coverage };
+}
+
+function extractJsStateClasses(js: string) {
+  const values: string[] = [];
+  const addQuotedValues = (source: string) => {
+    for (const match of source.matchAll(/(["'`])([^"'`]+)\1/g)) {
+      values.push(...match[2].split(/\s+/).filter(Boolean));
+    }
+  };
+  for (const match of js.matchAll(/\.classList\.(?:add|remove|toggle|contains|replace)\s*\(([^)]*)\)/g)) {
+    addQuotedValues(match[1]);
+  }
+  for (const match of js.matchAll(/\.className\s*=\s*([^;]+)/g)) {
+    addQuotedValues(match[1]);
+  }
+  for (const match of js.matchAll(/\.setAttribute\s*\(\s*["']class["']\s*,\s*([^)]+)\)/g)) {
+    addQuotedValues(match[1]);
+  }
+  return unique(values);
+}
+
+export function inspectAgentInteractionStyles(js: string, css: string): InteractionStyleInspection {
+  const usedStateClasses = extractJsStateClasses(js);
+  const defined = new Set(extractCssClasses(css));
+  const missingStateClasses = usedStateClasses.filter((value) => !defined.has(value));
+  const coverage = usedStateClasses.length === 0
+    ? 1
+    : (usedStateClasses.length - missingStateClasses.length) / usedStateClasses.length;
+  return { usedStateClasses, missingStateClasses, coverage };
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function repairAgentInteractionClassNames(js: string, css: string) {
+  const inspection = inspectAgentInteractionStyles(js, css);
+  const defined = new Set(extractCssClasses(css));
+  const replacements: Array<{ from: string; to: string }> = [];
+  let repairedJs = js;
+  inspection.missingStateClasses.forEach((missing) => {
+    const withoutStatePrefix = missing.startsWith('is-') ? missing.slice(3) : '';
+    if (!withoutStatePrefix || !defined.has(withoutStatePrefix)) return;
+    const quotedExactClass = new RegExp(`(["'\`])${escapeRegExp(missing)}\\1`, 'g');
+    repairedJs = repairedJs.replace(quotedExactClass, (value, quote) => `${quote}${withoutStatePrefix}${quote}`);
+    replacements.push({ from: missing, to: withoutStatePrefix });
+  });
+  return {
+    js: repairedJs,
+    replacements,
+    inspection: inspectAgentInteractionStyles(repairedJs, css),
+  };
 }
 
 function stripFence(value: string) {
@@ -402,7 +460,11 @@ ${ensurePlayableFallbackScript(js)}
 </html>`;
 }
 
-function validateAssembledHtml(code: string, inspection: ArtifactInspection) {
+function validateAssembledHtml(
+  code: string,
+  inspection: ArtifactInspection,
+  interactionInspection?: InteractionStyleInspection,
+) {
   const scriptOpen = (code.match(/<script\b/gi) || []).length;
   const scriptClose = (code.match(/<\/script>/gi) || []).length;
   if (!/<\/body>/i.test(code) || !/<\/html>/i.test(code) || scriptOpen !== scriptClose) {
@@ -416,6 +478,9 @@ function validateAssembledHtml(code: string, inspection: ArtifactInspection) {
   }
   if (inspection.coverage < 0.9 || inspection.missingClasses.length > 4) {
     throw new Error(`The development agent CSS covers only ${Math.round(inspection.coverage * 100)}% of HTML classes. Missing: ${inspection.missingClasses.slice(0, 12).join(', ')}.`);
+  }
+  if (interactionInspection && interactionInspection.missingStateClasses.length > 0) {
+    throw new Error(`The development agent JavaScript applies unstyled state classes: ${interactionInspection.missingStateClasses.slice(0, 12).join(', ')}.`);
   }
 }
 
@@ -632,7 +697,7 @@ Generate replacement CSS ONLY, with no style tag. Define every HTML class, prese
   progress({ step: 'styles', order: 4, status: 'completed', title: '视觉样式已经完成', detail: `页面样式覆盖率为 ${Math.round(inspection.coverage * 100)}%。` });
 
   progress({ step: 'logic', order: 5, status: 'running', title: 'AI 正在实现交互逻辑', detail: '正在编写按钮、表单、动画或小游戏所需的 JavaScript 行为。' });
-  const js = cleanJs(await runAgentTextStep(
+  let js = cleanJs(await runAgentTextStep(
     input.provider,
     '4/4 JavaScript',
     `${context}
@@ -643,17 +708,82 @@ ${plan}
 Body fragment:
 ${truncate(body, 14000)}
 
+Existing CSS:
+${truncate(css, 10000)}
+
 Generate JavaScript ONLY. No <script> tag.
 Bind event listeners on DOMContentLoaded.
 Preserve every existing behavior not explicitly targeted by the new request; do not silently drop prior interactions.
 If a mini-game is requested, implement the actual playable mechanics, not just placeholders.
 Define all functions needed by the controls, but avoid relying on inline onclick.
+When adding, removing, toggling, replacing, or checking a CSS class at runtime, reuse the exact state class names already defined in Existing CSS. Never invent an is-* variant when CSS defines the unprefixed name, or vice versa.
+Ensure selected, correct, wrong, active, disabled, revealed, and completed states receive visibly different styles through an exact JavaScript-to-CSS class match.
 Keep JavaScript under 260 lines.`,
     6144,
     input.signal,
     input.apiKey,
   ));
-  progress({ step: 'logic', order: 5, status: 'completed', title: '交互逻辑已经完成', detail: `已生成 ${js.length} 个字符的交互逻辑。` });
+  const interactionClassRepair = repairAgentInteractionClassNames(js, css);
+  js = interactionClassRepair.js;
+  if (interactionClassRepair.replacements.length > 0) {
+    repairNotes.push(
+      `Agent aligned JavaScript state classes with existing CSS: ${interactionClassRepair.replacements
+        .map((replacement) => `${replacement.from} -> ${replacement.to}`)
+        .join(', ')}.`,
+    );
+  }
+  let interactionInspection = interactionClassRepair.inspection;
+  if (interactionInspection.missingStateClasses.length > 0) {
+    progress({
+      step: 'logic',
+      order: 5,
+      status: 'running',
+      title: '正在补全交互状态样式',
+      detail: `检查发现 ${interactionInspection.missingStateClasses.length} 个 JavaScript 状态缺少可见样式，AI 正在修复。`,
+    });
+    css = cleanCss(await runAgentTextStep(
+      input.provider,
+      '4b/4 interaction state CSS repair',
+      `${context}
+
+Body fragment:
+${truncate(body, 14000)}
+
+Current CSS:
+${truncate(css, 12000)}
+
+Final JavaScript:
+${truncate(js, 8000)}
+
+Deterministic validation found JavaScript-applied state classes with no matching CSS:
+${interactionInspection.missingStateClasses.join(', ')}
+
+Generate replacement CSS ONLY, with no style tag.
+Preserve the complete current visual design and every existing HTML class rule.
+Add clearly visible styling for every missing JavaScript state class, using the exact class names from the JavaScript.
+Selected, correct, wrong, active, disabled, revealed, and completed states must be visibly distinguishable where present.
+Keep .agent-toast and .agent-toast.show. Do not use external frameworks, @import, or remote background images.`,
+      6144,
+      input.signal,
+      input.apiKey,
+    ));
+    css = await resolveCssImageAssets(css, imageReport);
+    inspection = inspectAgentArtifacts(body, css);
+    interactionInspection = inspectAgentInteractionStyles(js, css);
+    repairNotes.push('Agent regenerated CSS to cover JavaScript-applied interaction state classes.');
+  }
+  if (interactionInspection.missingStateClasses.length > 0) {
+    throw new Error(
+      `The development agent could not style JavaScript state classes after repair: ${interactionInspection.missingStateClasses.slice(0, 12).join(', ')}.`,
+    );
+  }
+  progress({
+    step: 'logic',
+    order: 5,
+    status: 'completed',
+    title: '交互逻辑已经完成',
+    detail: `已生成 ${js.length} 个字符的交互逻辑，运行时状态样式覆盖率为 ${Math.round(interactionInspection.coverage * 100)}%。`,
+  });
 
   progress({ step: 'summary', order: 6, status: 'running', title: 'AI 正在整理本次修改', detail: '正在生成面向所有参与者的版本说明。' });
   const summary = await runAgentTextStep(
@@ -675,7 +805,7 @@ Image assets: ${imageReport.preserved} preserved, ${imageReport.replaced} replac
   progress({ step: 'summary', order: 6, status: 'completed', title: '本次修改说明已经完成', detail: summary });
 
   const code = buildHtml(input, summary, body, css, js);
-  validateAssembledHtml(code, inspection);
+  validateAssembledHtml(code, inspection, interactionInspection);
 
   progress({ step: 'validation', order: 7, status: 'running', title: '系统正在进行最终检查', detail: '正在检查页面、样式、图片与交互是否完整连接。' });
   const integrationAudit = await runAgentTextStep(
@@ -694,6 +824,8 @@ Deterministic validation:
 - HTML length: ${code.length}
 - CSS length: ${css.length}
 - JavaScript length: ${js.length}
+- JavaScript state-class coverage: ${Math.round(interactionInspection.coverage * 100)}%
+- Unstyled JavaScript state classes: ${interactionInspection.missingStateClasses.join(', ') || 'none'}
 
 HTML body excerpt:
 ${truncate(body, 6000)}
@@ -731,6 +863,7 @@ Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwi
       classCoverage: inspection.coverage,
       missingClasses: inspection.missingClasses,
       utilityClasses: inspection.utilityClasses,
+      interactionInspection,
       imageReport,
       integrationAudit,
     },

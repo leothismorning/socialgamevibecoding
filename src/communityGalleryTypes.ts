@@ -22,6 +22,8 @@ export type CommunityApp = {
   initial_version_id?: number;
   community_version_id?: number;
   selected_synthesis_id?: number;
+  selected_source_type?: CommunitySourceType;
+  selected_source_id?: number;
   published_at?: string;
   community_published_at?: string;
   community_version_count: number;
@@ -29,11 +31,13 @@ export type CommunityApp = {
   comment_count: number;
   synthesis_count: number;
   viewer_liked: number;
-  draft_kind?: 'initial' | 'community';
+  draft_kind?: 'initial' | 'community' | 'project';
   draft_code?: string;
   draft_summary?: string;
   draft_prompt?: string;
   draft_synthesis_id?: number;
+  draft_selected_source_type?: CommunitySourceType;
+  draft_selected_source_id?: number;
   draft_iteration_number?: number;
   draft_base_version_id?: number;
   draft_selection_reason?: string;
@@ -48,6 +52,8 @@ export type CommunityVersion = {
   summary: string;
   prompt: string;
   synthesis_id?: number;
+  selected_source_type?: CommunitySourceType;
+  selected_source_id?: number;
   base_version_id?: number;
   selection_reason?: string;
   created_at: string;
@@ -64,9 +70,11 @@ export type CommunityComment = {
   content: string;
   created_at: string;
   updated_at: string;
+  deleted_at?: string;
   like_count: number;
   viewer_liked: number;
   viewer_in_basket: number;
+  selected_for_iteration?: number;
 };
 
 export type CommunitySynthesis = {
@@ -77,6 +85,8 @@ export type CommunitySynthesis = {
   title: string;
   content: string;
   created_at: string;
+  updated_at: string;
+  deleted_at?: string;
   source_count: number;
   source_app_count: number;
   contributor_count: number;
@@ -92,6 +102,11 @@ export type CommunityStageSelection = {
   app_id: string;
   iteration_number: 1 | 2;
   synthesis_id: number;
+  source_type: CommunitySourceType;
+  source_id: number;
+  source_title: string;
+  source_content: string;
+  source_author_code: string;
   score: number;
   source_popularity_json: string;
   selected_at: string;
@@ -134,6 +149,8 @@ export type CommunityGenerationJob = {
   app_id: string;
   app_title: string;
   synthesis_id: number;
+  selected_source_type: CommunitySourceType;
+  selected_source_id: number;
   iteration_number: number;
   base_version_id: number;
   selection_reason?: string;
@@ -152,6 +169,8 @@ export type CommunityNotification = {
   app_title: string;
   version_number: number;
   synthesis_id: number;
+  source_type: CommunitySourceType;
+  source_id: number;
   title: string;
   content: string;
   source_count: number;
@@ -172,11 +191,34 @@ export type CommunityGenerationEvent = {
   updated_at: string;
 };
 
+export type CreatorDevelopmentProgress = {
+  id: string;
+  study_id: string;
+  client_id: string;
+  creator_code: string;
+  app_id?: string;
+  phase: 'initial' | 'project';
+  action: 'generate' | 'refine';
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+  started_at: string;
+  completed_at?: string;
+  events: Array<{
+    step_key: string;
+    sort_order: number;
+    status: 'pending' | 'running' | 'completed' | 'warning' | 'failed' | 'cancelled';
+    title: string;
+    detail: string;
+    updated_at: string;
+  }>;
+};
+
 export type CommunityGalleryState = {
   study: {
     id: string;
     status: CommunityStatus;
     workflow_stage: CommunityWorkflowStage;
+    conditions_configured: boolean;
     created_at: string;
     started_at?: string;
     closed_at?: string;
@@ -202,7 +244,7 @@ export type CommunityGalleryState = {
   developmentMessages: Array<{
     id: number;
     app_id: string;
-    phase: 'initial' | 'community';
+    phase: 'initial' | 'community' | 'project';
     role: 'creator' | 'assistant' | 'system';
     content: string;
     created_at: string;

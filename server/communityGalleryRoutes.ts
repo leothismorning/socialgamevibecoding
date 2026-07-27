@@ -1,34 +1,47 @@
 import type { Express, Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import { runDevelopmentAgent } from './developmentAgent.js';
 import {
   closeAsyncCommunityStudy,
+  completeCreatorDevelopmentOperation,
   completeCommunityGeneration,
   createSynthesis,
   deleteCommunityComment,
+  deleteCommunitySynthesis,
   enterCommunityDevelopmentStage,
   exportCommunityStudy,
+  failCreatorDevelopmentOperation,
   failCommunityGeneration,
   getCommunityGalleryState,
   getCommunityGenerationInput,
   getCommunityPreview,
+  getCreatorDevelopmentProgress,
   getCreatorDraftContext,
   joinCommunityGallery,
   markCommunityNotificationsCelebrated,
   markCommunityNotificationsRead,
   publishCommunityVersion,
   publishInitialVersion,
+  publishProjectDraft,
+  recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
+  retryCommunityGeneration,
   returnToPreviousCommunityStage,
   saveCommunityComment,
   saveInitialDraft,
   saveRefinedDraft,
+  setCommunityStudyConditions,
+  startCreatorDevelopmentOperation,
   startAsyncCommunityStudy,
+  startAutomaticCommunityGeneration,
   startCommunityGeneration,
   startNewAsyncCommunityStudy,
   toggleCommunityAppLike,
   toggleCommunityCommentLike,
   toggleCreativeBasket,
   trackCommunityEvent,
+  updateCommunityComment,
+  updateCommunitySynthesis,
   uploadControlCommunityDraft,
   voteForSynthesis,
   withdrawSynthesisForVote,
@@ -57,6 +70,53 @@ function publicAgentMessage(result: Awaited<ReturnType<typeof runDevelopmentAgen
   return [result.text, ...result.steps].filter(Boolean).join('\n\n');
 }
 
+function initialCreatorProgress(progress: Parameters<typeof recordCreatorDevelopmentProgress>[1]) {
+  if (progress.step !== 'plan') return progress;
+  return {
+    ...progress,
+    title: progress.status === 'completed' ? '创作方案已经完成' : 'AI 正在理解你的创作需求',
+    detail: progress.status === 'completed'
+      ? progress.detail
+      : '正在分析 App 目标、用户和关键交互，并制定实现方案。',
+  };
+}
+
+async function runCommunityGenerationJob(jobId: number) {
+  const input = getCommunityGenerationInput(jobId);
+  const provider = getAIProvider();
+  const result = await runDevelopmentAgent({
+    provider,
+    experimentTitle: input.job.app_title,
+    roundNumber: Number(input.job.iteration_number || 1),
+    brief: input.job.app_brief,
+    creatorPrompt: input.job.base_prompt,
+    selectedIdeas: input.sources.map((source: any) => ({
+      participant_code: source.author_code,
+      content: source.content,
+    })),
+    fusionPlan: [
+      input.selection.title,
+      input.selection.content,
+      input.sources
+        .filter((source: any) => source.contribution_note)
+        .map((source: any) => `${source.author_code}: ${source.contribution_note}`)
+        .join('\n'),
+    ].filter(Boolean).join('\n\n'),
+    currentCode: input.job.base_code,
+    creatorMessage: input.job.creator_instruction || input.selection.content,
+    apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(input.job.creator_code) : undefined,
+    onProgress: (progress) => recordCommunityGenerationProgress(jobId, progress),
+    mode: 'round-candidate',
+  });
+  completeCommunityGeneration(jobId, result.code, result.text);
+}
+
+function runCommunityGenerationInBackground(jobId: number) {
+  void runCommunityGenerationJob(jobId).catch((error) => {
+    failCommunityGeneration(jobId, error);
+  });
+}
+
 export function registerCommunityGalleryRoutes(app: Express) {
   app.get('/api/community-gallery/state', (req, res) => {
     try {
@@ -71,6 +131,17 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const payload = exportCommunityStudy(clientIdFrom(req));
       res.setHeader('Content-Disposition', `attachment; filename="${payload.study.id}.json"`);
       res.json(payload);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.get('/api/community-gallery/development-progress', (req, res) => {
+    try {
+      res.json(getCreatorDevelopmentProgress(
+        clientIdFrom(req),
+        String(req.query.operationId || ''),
+      ));
     } catch (error) {
       sendError(res, error);
     }
@@ -118,6 +189,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
   });
 
   app.post('/api/community-gallery/apps/generate-initial', async (req, res) => {
+    let operationId = '';
     try {
       const clientId = clientIdFrom(req);
       const state = getCommunityGalleryState(clientId);
@@ -127,6 +199,8 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const brief = String(req.body?.brief || '').trim();
       const prompt = String(req.body?.prompt || '').trim();
       if (!title || !prompt) throw new Error('请填写 App 名称和创作提示。');
+      operationId = String(req.body?.operationId || randomUUID()).trim();
+      startCreatorDevelopmentOperation(clientId, operationId, 'generate');
       const provider = getAIProvider();
       const result = await runDevelopmentAgent({
         provider,
@@ -136,16 +210,30 @@ export function registerCommunityGalleryRoutes(app: Express) {
         creatorMessage: prompt,
         apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(state.viewer.code) : undefined,
         mode: 'initial-project',
+        onProgress: (progress) => recordCreatorDevelopmentProgress(
+          operationId,
+          initialCreatorProgress(progress),
+        ),
       });
-      res.json(saveInitialDraft({
+      const nextState = saveInitialDraft({
         clientId,
         title,
         brief,
         prompt,
         code: result.code,
         summary: result.text,
-      }));
+        conversation: {
+          creator: prompt,
+          assistant: publicAgentMessage(result),
+        },
+      });
+      completeCreatorDevelopmentOperation(
+        operationId,
+        nextState.apps.find((item) => item.creator_code === state.viewer?.code)?.id,
+      );
+      res.json(nextState);
     } catch (error) {
+      if (operationId) failCreatorDevelopmentOperation(operationId, error);
       sendError(res, error);
     }
   });
@@ -168,14 +256,18 @@ export function registerCommunityGalleryRoutes(app: Express) {
   });
 
   app.post('/api/community-gallery/apps/refine', async (req, res) => {
+    let operationId = '';
     try {
       const clientId = clientIdFrom(req);
       const message = String(req.body?.message || '').trim();
       if (!message) throw new Error('请说明希望怎样修改当前草稿。');
       const context = getCreatorDraftContext(clientId);
-      if (context.draft.kind === 'community' && context.viewer.condition === 'control') {
-        throw new Error('对照组需要在原有外部 vibe-coding 工具中修改 Community Version。');
+      if (context.draft.kind !== 'initial' && context.viewer.condition === 'control') {
+        throw new Error('对照组需要在原有外部 vibe-coding 工具中继续修改已发布项目。');
       }
+      operationId = String(req.body?.operationId || randomUUID()).trim();
+      const operationPhase = context.draft.kind === 'initial' ? 'initial' : 'project';
+      startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
       const provider = getAIProvider();
       const result = await runDevelopmentAgent({
         provider,
@@ -186,8 +278,8 @@ export function registerCommunityGalleryRoutes(app: Express) {
           participant_code: source.author_code,
           content: source.content,
         })),
-        fusionPlan: context.synthesis
-          ? `${context.synthesis.title}\n${context.synthesis.content}`
+        fusionPlan: context.selection
+          ? `${context.selection.title || '入选普通评论'}\n${context.selection.content}`
           : undefined,
         currentCode: context.draft.code,
         creatorMessage: message,
@@ -196,15 +288,22 @@ export function registerCommunityGalleryRoutes(app: Express) {
           .join('\n'),
         apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(context.viewer.code) : undefined,
         mode: context.draft.kind === 'initial' ? 'initial-project' : 'round-candidate',
+        onProgress: (progress) => recordCreatorDevelopmentProgress(
+          operationId,
+          initialCreatorProgress(progress),
+        ),
       });
-      res.json(saveRefinedDraft(
+      const nextState = saveRefinedDraft(
         clientId,
         result.code,
         result.text,
         message,
         publicAgentMessage(result),
-      ));
+      );
+      completeCreatorDevelopmentOperation(operationId, context.app.id);
+      res.json(nextState);
     } catch (error) {
+      if (operationId) failCreatorDevelopmentOperation(operationId, error);
       sendError(res, error);
     }
   });
@@ -212,6 +311,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/apps/publish-initial', (req, res) => {
     try {
       res.json(publishInitialVersion(clientIdFrom(req)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/apps/publish-project', (req, res) => {
+    try {
+      res.json(publishProjectDraft(clientIdFrom(req)));
     } catch (error) {
       sendError(res, error);
     }
@@ -237,6 +344,18 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.delete('/api/community-gallery/comments/:commentId', (req, res) => {
     try {
       res.json(deleteCommunityComment(clientIdFrom(req), Number(req.params.commentId)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.patch('/api/community-gallery/comments/:commentId', (req, res) => {
+    try {
+      res.json(updateCommunityComment(
+        clientIdFrom(req),
+        Number(req.params.commentId),
+        String(req.body?.content || ''),
+      ));
     } catch (error) {
       sendError(res, error);
     }
@@ -282,6 +401,29 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
+  app.patch('/api/community-gallery/syntheses/:synthesisId', (req, res) => {
+    try {
+      res.json(updateCommunitySynthesis(
+        clientIdFrom(req),
+        Number(req.params.synthesisId),
+        String(req.body?.content || ''),
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.delete('/api/community-gallery/syntheses/:synthesisId', (req, res) => {
+    try {
+      res.json(deleteCommunitySynthesis(
+        clientIdFrom(req),
+        Number(req.params.synthesisId),
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/community-gallery/syntheses/:synthesisId/withdraw-for-vote', (req, res) => {
     try {
       res.json(withdrawSynthesisForVote(
@@ -311,39 +453,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const started = startCommunityGeneration(
         clientId,
         String(req.params.appId),
-        Number(req.body?.synthesisId),
+        String(req.body?.sourceType || '') as CommunitySourceType,
+        Number(req.body?.sourceId),
         String(req.body?.creatorInstruction || ''),
         req.body?.baseVersionId == null ? undefined : Number(req.body.baseVersionId),
         String(req.body?.selectionReason || ''),
       );
       jobId = started.jobId;
-      const input = getCommunityGenerationInput(jobId);
-      const provider = getAIProvider();
-      const result = await runDevelopmentAgent({
-        provider,
-        experimentTitle: input.job.app_title,
-        roundNumber: Number(input.job.iteration_number || 1),
-        brief: input.job.app_brief,
-        creatorPrompt: input.job.base_prompt,
-        selectedIdeas: input.sources.map((source: any) => ({
-          participant_code: source.author_code,
-          content: source.content,
-        })),
-        fusionPlan: [
-          input.synthesis.title,
-          input.synthesis.content,
-          input.sources
-            .filter((source: any) => source.contribution_note)
-            .map((source: any) => `${source.author_code}: ${source.contribution_note}`)
-            .join('\n'),
-        ].filter(Boolean).join('\n\n'),
-        currentCode: input.job.base_code,
-        creatorMessage: input.job.creator_instruction || input.synthesis.content,
-        apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(input.job.creator_code) : undefined,
-        onProgress: (progress) => recordCommunityGenerationProgress(jobId, progress),
-        mode: 'round-candidate',
-      });
-      completeCommunityGeneration(jobId, result.code, result.text);
+      await runCommunityGenerationJob(jobId);
       res.json(getCommunityGalleryState(clientId));
     } catch (error) {
       if (jobId) failCommunityGeneration(jobId, error);
@@ -400,14 +517,41 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/study/enter-development', (req, res) => {
     try {
+      const clientId = clientIdFrom(req);
       const iterationNumber = Number(req.body?.iterationNumber);
       if (iterationNumber !== 1 && iterationNumber !== 2) {
         throw new Error('无效的开发阶段。');
       }
-      res.json(enterCommunityDevelopmentStage(
-        clientIdFrom(req),
-        iterationNumber as 1 | 2,
-      ));
+      const existingState = getCommunityGalleryState(clientId);
+      if (existingState.viewer?.role !== 'host') throw new Error('只有 Host 可以启动开发。');
+      const lockedState = existingState.study.workflow_stage === `development_${iterationNumber}`
+        ? existingState
+        : enterCommunityDevelopmentStage(
+            clientId,
+            iterationNumber as 1 | 2,
+          );
+      const starts = lockedState.stageSelections
+        .filter((selection) => Number(selection.iteration_number) === iterationNumber)
+        .map((selection) => startAutomaticCommunityGeneration(
+          clientId,
+          selection.app_id,
+          iterationNumber as 1 | 2,
+        ));
+      res.json(getCommunityGalleryState(clientId));
+      starts
+        .filter((started) => !started.existing)
+        .forEach((started) => runCommunityGenerationInBackground(started.jobId));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/jobs/:jobId/retry', (req, res) => {
+    try {
+      const clientId = clientIdFrom(req);
+      const started = retryCommunityGeneration(clientId, Number(req.params.jobId));
+      res.json(started.state);
+      runCommunityGenerationInBackground(started.jobId);
     } catch (error) {
       sendError(res, error);
     }
@@ -424,6 +568,22 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/study/start', (req, res) => {
     try {
       res.json(startAsyncCommunityStudy(clientIdFrom(req)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/study/conditions', (req, res) => {
+    try {
+      res.json(setCommunityStudyConditions(
+        clientIdFrom(req),
+        Array.isArray(req.body?.controlCreatorCodes)
+          ? req.body.controlCreatorCodes.map(String)
+          : [],
+        Array.isArray(req.body?.controlCommunityCodes)
+          ? req.body.controlCommunityCodes.map(String)
+          : [],
+      ));
     } catch (error) {
       sendError(res, error);
     }
