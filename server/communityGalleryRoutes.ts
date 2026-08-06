@@ -8,8 +8,8 @@ import {
   createSynthesis,
   deleteCommunityComment,
   deleteCommunitySynthesis,
-  enterCommunityDevelopmentStage,
   exportCommunityStudy,
+  enterCommunityDevelopmentStage,
   failCreatorDevelopmentOperation,
   failCommunityGeneration,
   getCommunityGalleryState,
@@ -26,14 +26,12 @@ import {
   recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
   retryCommunityGeneration,
-  returnToPreviousCommunityStage,
   saveCommunityComment,
   saveInitialDraft,
   saveRefinedDraft,
   setCommunityStudyConditions,
   startCreatorDevelopmentOperation,
   startAsyncCommunityStudy,
-  startAutomaticCommunityGeneration,
   startCommunityGeneration,
   startNewAsyncCommunityStudy,
   toggleCommunityAppLike,
@@ -43,6 +41,7 @@ import {
   updateCommunityComment,
   updateCommunitySynthesis,
   uploadControlCommunityDraft,
+  useCommunityWildcard,
   voteForSynthesis,
   withdrawSynthesisForVote,
   type CommunitySourceType,
@@ -77,7 +76,7 @@ function initialCreatorProgress(progress: Parameters<typeof recordCreatorDevelop
     title: progress.status === 'completed' ? '创作方案已经完成' : 'AI 正在理解你的创作需求',
     detail: progress.status === 'completed'
       ? progress.detail
-      : '正在分析 App 目标、用户和关键交互，并制定实现方案。',
+      : '正在分析应用目标、用户和关键交互，并制定实现方案。',
   };
 }
 
@@ -179,7 +178,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/model', (req, res) => {
     try {
       const state = getCommunityGalleryState(clientIdFrom(req));
-      if (state.viewer?.role !== 'host') throw new Error('只有 Host 可以选择 AI 模型。');
+      if (state.viewer?.role !== 'host') throw new Error('只有主持人可以选择 AI 模型。');
       if (state.study.status !== 'setup') throw new Error('研究开放后不能更换统一 AI 模型。');
       setAIProvider(String(req.body?.provider || '') as StudyAIProvider);
       res.json(getCommunityGalleryState(clientIdFrom(req)));
@@ -193,12 +192,12 @@ export function registerCommunityGalleryRoutes(app: Express) {
     try {
       const clientId = clientIdFrom(req);
       const state = getCommunityGalleryState(clientId);
-      if (state.viewer?.role !== 'creator') throw new Error('请选择 Creator 身份。');
-      if (state.study.status !== 'setup') throw new Error('Initial Version 创作阶段已经结束。');
+      if (state.viewer?.role !== 'creator') throw new Error('请选择创作者身份。');
+      if (state.study.status === 'closed') throw new Error('研究已经结束，不能继续创作初始版本。');
       const title = String(req.body?.title || '').trim();
       const brief = String(req.body?.brief || '').trim();
       const prompt = String(req.body?.prompt || '').trim();
-      if (!title || !prompt) throw new Error('请填写 App 名称和创作提示。');
+      if (!title || !prompt) throw new Error('请填写应用名称和创作提示。');
       operationId = String(req.body?.operationId || randomUUID()).trim();
       startCreatorDevelopmentOperation(clientId, operationId, 'generate');
       const provider = getAIProvider();
@@ -241,14 +240,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/apps/upload-initial', (req, res) => {
     try {
       const code = String(req.body?.code || '');
-      if (!/<html|<!doctype/i.test(code)) throw new Error('请上传完整的 HTML App。');
+      if (!/<html|<!doctype/i.test(code)) throw new Error('请上传完整的 HTML 应用。');
       res.json(saveInitialDraft({
         clientId: clientIdFrom(req),
         title: String(req.body?.title || '').trim(),
         brief: String(req.body?.brief || '').trim(),
         prompt: String(req.body?.prompt || '').trim(),
         code,
-        summary: 'Creator 上传的 Initial Version。',
+        summary: '创作者上传的初始版本。',
       }));
     } catch (error) {
       sendError(res, error);
@@ -263,10 +262,10 @@ export function registerCommunityGalleryRoutes(app: Express) {
       if (!message) throw new Error('请说明希望怎样修改当前草稿。');
       const context = getCreatorDraftContext(clientId);
       if (context.draft.kind !== 'initial' && context.viewer.condition === 'control') {
-        throw new Error('对照组需要在原有外部 vibe-coding 工具中继续修改已发布项目。');
+        throw new Error('对照组需要在原有外部应用开发工具中继续修改已发布项目。');
       }
       operationId = String(req.body?.operationId || randomUUID()).trim();
-      const operationPhase = context.draft.kind === 'initial' ? 'initial' : 'project';
+      const operationPhase = context.messagePhase as 'initial' | 'community' | 'project';
       startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
       const provider = getAIProvider();
       const result = await runDevelopmentAgent({
@@ -453,11 +452,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const started = startCommunityGeneration(
         clientId,
         String(req.params.appId),
-        String(req.body?.sourceType || '') as CommunitySourceType,
-        Number(req.body?.sourceId),
+        Array.isArray(req.body?.sources)
+          ? req.body.sources.map((source: any) => ({
+              type: String(source?.type || '') as 'comment' | 'synthesis',
+              id: Number(source?.id),
+            }))
+          : [],
         String(req.body?.creatorInstruction || ''),
         req.body?.baseVersionId == null ? undefined : Number(req.body.baseVersionId),
-        String(req.body?.selectionReason || ''),
       );
       jobId = started.jobId;
       await runCommunityGenerationJob(jobId);
@@ -468,15 +470,27 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
+  app.post('/api/community-gallery/apps/:appId/wildcard', (req, res) => {
+    try {
+      res.json(useCommunityWildcard(
+        clientIdFrom(req),
+        String(req.params.appId),
+        Number(req.body?.commentId),
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/community-gallery/apps/:appId/upload-community', (req, res) => {
     try {
       const code = String(req.body?.code || '');
-      if (!/<html|<!doctype/i.test(code)) throw new Error('请上传完整的 HTML Community Version。');
+      if (!/<html|<!doctype/i.test(code)) throw new Error('请上传完整的 HTML 社区版本。');
       res.json(uploadControlCommunityDraft(
         clientIdFrom(req),
         String(req.params.appId),
         code,
-        String(req.body?.summary || 'Creator 使用外部工具开发的 Community Version。'),
+        String(req.body?.summary || '创作者使用外部工具开发的社区版本。'),
         String(req.body?.prompt || ''),
         req.body?.baseVersionId == null ? undefined : Number(req.body.baseVersionId),
         String(req.body?.selectionReason || ''),
@@ -515,51 +529,12 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
-  app.post('/api/community-gallery/study/enter-development', (req, res) => {
-    try {
-      const clientId = clientIdFrom(req);
-      const iterationNumber = Number(req.body?.iterationNumber);
-      if (iterationNumber !== 1 && iterationNumber !== 2) {
-        throw new Error('无效的开发阶段。');
-      }
-      const existingState = getCommunityGalleryState(clientId);
-      if (existingState.viewer?.role !== 'host') throw new Error('只有 Host 可以启动开发。');
-      const lockedState = existingState.study.workflow_stage === `development_${iterationNumber}`
-        ? existingState
-        : enterCommunityDevelopmentStage(
-            clientId,
-            iterationNumber as 1 | 2,
-          );
-      const starts = lockedState.stageSelections
-        .filter((selection) => Number(selection.iteration_number) === iterationNumber)
-        .map((selection) => startAutomaticCommunityGeneration(
-          clientId,
-          selection.app_id,
-          iterationNumber as 1 | 2,
-        ));
-      res.json(getCommunityGalleryState(clientId));
-      starts
-        .filter((started) => !started.existing)
-        .forEach((started) => runCommunityGenerationInBackground(started.jobId));
-    } catch (error) {
-      sendError(res, error);
-    }
-  });
-
   app.post('/api/community-gallery/jobs/:jobId/retry', (req, res) => {
     try {
       const clientId = clientIdFrom(req);
       const started = retryCommunityGeneration(clientId, Number(req.params.jobId));
       res.json(started.state);
       runCommunityGenerationInBackground(started.jobId);
-    } catch (error) {
-      sendError(res, error);
-    }
-  });
-
-  app.post('/api/community-gallery/study/return-to-previous-stage', (req, res) => {
-    try {
-      res.json(returnToPreviousCommunityStage(clientIdFrom(req)));
     } catch (error) {
       sendError(res, error);
     }
@@ -573,15 +548,25 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
+  app.post('/api/community-gallery/study/enter-development', (req, res) => {
+    try {
+      const started = enterCommunityDevelopmentStage(
+        clientIdFrom(req),
+        Number(req.body?.iterationNumber) as 1 | 2,
+      );
+      res.json(started.state);
+      started.jobIds.forEach(runCommunityGenerationInBackground);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/community-gallery/study/conditions', (req, res) => {
     try {
       res.json(setCommunityStudyConditions(
         clientIdFrom(req),
         Array.isArray(req.body?.controlCreatorCodes)
           ? req.body.controlCreatorCodes.map(String)
-          : [],
-        Array.isArray(req.body?.controlCommunityCodes)
-          ? req.body.controlCommunityCodes.map(String)
           : [],
       ));
     } catch (error) {

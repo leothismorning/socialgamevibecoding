@@ -138,15 +138,18 @@ export const communityGalleryApi = {
   generateCommunity: (
     clientId: string,
     appId: string,
-    sourceType: CommunitySourceType,
-    sourceId: number,
+    sources: Array<{ type: CommunitySourceType; id: number }>,
     creatorInstruction: string,
     baseVersionId?: number,
-    selectionReason = '',
   ) => request(`/api/community-gallery/apps/${appId}/generate-community`, {
     method: 'POST',
-    body: body({ clientId, sourceType, sourceId, creatorInstruction, baseVersionId, selectionReason }),
+    body: body({ clientId, sources, creatorInstruction, baseVersionId }),
   }),
+  useWildcard: (clientId: string, appId: string, commentId: number) =>
+    request(`/api/community-gallery/apps/${appId}/wildcard`, {
+      method: 'POST',
+      body: body({ clientId, commentId }),
+    }),
   uploadCommunity: (
     clientId: string,
     appId: string,
@@ -181,26 +184,20 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
-  setConditions: (
-    clientId: string,
-    controlCreatorCodes: string[],
-    controlCommunityCodes: string[],
-  ) => request('/api/community-gallery/study/conditions', {
-    method: 'POST',
-    body: body({ clientId, controlCreatorCodes, controlCommunityCodes }),
-  }),
   enterDevelopment: (clientId: string, iterationNumber: 1 | 2) =>
     request('/api/community-gallery/study/enter-development', {
       method: 'POST',
       body: body({ clientId, iterationNumber }),
     }),
+  setConditions: (
+    clientId: string,
+    controlCreatorCodes: string[],
+  ) => request('/api/community-gallery/study/conditions', {
+    method: 'POST',
+    body: body({ clientId, controlCreatorCodes }),
+  }),
   retryDevelopment: (clientId: string, jobId: number) =>
     request(`/api/community-gallery/jobs/${jobId}/retry`, {
-      method: 'POST',
-      body: body({ clientId }),
-    }),
-  returnToPreviousStage: (clientId: string) =>
-    request('/api/community-gallery/study/return-to-previous-stage', {
       method: 'POST',
       body: body({ clientId }),
     }),

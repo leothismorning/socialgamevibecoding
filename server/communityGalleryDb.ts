@@ -2,16 +2,17 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { db, getAIProvider } from './studyDb.js';
 import type { DevelopmentAgentProgress } from './developmentAgent.js';
 
-export type CommunityRole = 'host' | 'creator' | 'community';
+export type CommunityRole = 'host' | 'creator';
 export type CommunityCondition = 'control' | 'experimental';
 export type CommunityStatus = 'setup' | 'active' | 'closed';
 export type CommunitySourceType = 'comment' | 'synthesis';
 
 const ACTIVE_STUDY_KEY = 'active_study_id';
-const CREATOR_COUNT = 12;
-const COMMUNITY_COUNT = 24;
-const CONTROL_CREATOR_COUNT = CREATOR_COUNT / 2;
-const CONTROL_COMMUNITY_COUNT = COMMUNITY_COUNT / 2;
+const CREATOR_COUNT = 30;
+const CREATOR_CODES = Array.from(
+  { length: CREATOR_COUNT },
+  (_, index) => `C${String(index + 1).padStart(2, '0')}`,
+);
 const now = () => new Date().toISOString();
 
 db.exec(`
@@ -111,6 +112,7 @@ db.exec(`
     study_id TEXT NOT NULL,
     app_id TEXT NOT NULL,
     phase TEXT NOT NULL,
+    iteration_number INTEGER,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -318,6 +320,27 @@ db.exec(`
     PRIMARY KEY (study_id, participant_code, app_id)
   );
 
+  CREATE TABLE IF NOT EXISTS vg_async_wildcards (
+    study_id TEXT NOT NULL,
+    creator_code TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    iteration_number INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (study_id, creator_code)
+  );
+
+  CREATE TABLE IF NOT EXISTS vg_async_contributors (
+    study_id TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    iteration_number INTEGER NOT NULL,
+    participant_code TEXT NOT NULL,
+    first_selected_iteration INTEGER NOT NULL,
+    selected_in_current_iteration INTEGER NOT NULL DEFAULT 0,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (study_id, app_id, iteration_number, participant_code)
+  );
+
   CREATE TABLE IF NOT EXISTS vg_async_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     study_id TEXT NOT NULL,
@@ -341,6 +364,10 @@ db.exec(`
     ON vg_async_events (study_id, event_type, created_at);
   CREATE INDEX IF NOT EXISTS idx_vg_async_notifications_participant
     ON vg_async_notifications (study_id, participant_code, created_at);
+  CREATE INDEX IF NOT EXISTS idx_vg_async_wildcards_app
+    ON vg_async_wildcards (study_id, app_id, iteration_number);
+  CREATE INDEX IF NOT EXISTS idx_vg_async_contributors_app
+    ON vg_async_contributors (study_id, app_id, iteration_number);
 `);
 
 const versionsDefinition = db.prepare(`
@@ -391,6 +418,7 @@ ensureColumn('vg_async_drafts', 'base_version_id', 'INTEGER');
 ensureColumn('vg_async_drafts', 'selection_reason', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('vg_async_drafts', 'selected_source_type', 'TEXT');
 ensureColumn('vg_async_drafts', 'selected_source_id', 'INTEGER');
+ensureColumn('vg_async_development_messages', 'iteration_number', 'INTEGER');
 ensureColumn('vg_async_generation_jobs', 'iteration_number', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('vg_async_generation_jobs', 'base_version_id', 'INTEGER');
 ensureColumn('vg_async_generation_jobs', 'selection_reason', `TEXT NOT NULL DEFAULT ''`);
@@ -401,6 +429,7 @@ ensureColumn('vg_async_syntheses', 'layer', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('vg_async_syntheses', 'withdrawn_at', 'TEXT');
 ensureColumn('vg_async_syntheses', 'withdrawn_for_vote', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('vg_async_syntheses', 'deleted_at', 'TEXT');
+ensureColumn('vg_async_syntheses', 'is_development_brief', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('vg_async_apps', 'selected_source_type', 'TEXT');
 ensureColumn('vg_async_apps', 'selected_source_id', 'INTEGER');
 ensureColumn('vg_async_stage_selections', 'source_type', `TEXT NOT NULL DEFAULT 'synthesis'`);
@@ -410,6 +439,148 @@ ensureColumn('vg_async_stage_selections', 'source_content', `TEXT NOT NULL DEFAU
 ensureColumn('vg_async_stage_selections', 'source_author_code', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('vg_async_notifications', 'source_type', `TEXT NOT NULL DEFAULT 'synthesis'`);
 ensureColumn('vg_async_notifications', 'source_id', 'INTEGER');
+// Older studies used Community Member as a separate role.  Keep their existing
+// codes and contributions, but give every non-Host participant Creator access.
+db.exec(`
+  UPDATE vg_async_participants
+  SET role = 'creator'
+  WHERE role = 'community'
+`);
+// A legacy study already has 12 C-codes and 24 P-codes.  If it was opened
+// once by the unified Creator build, C13-C36 may have been added before the
+// legacy population was detected.  Those codes had no possible prior login;
+// remove this temporary duplicate set while retaining every legacy record.
+db.exec(`
+  DELETE FROM vg_async_sessions
+  WHERE participant_code GLOB 'C[0-9][0-9]'
+    AND CAST(SUBSTR(participant_code, 2) AS INTEGER) BETWEEN 13 AND 36
+    AND EXISTS (
+      SELECT 1 FROM vg_async_participants legacy
+      WHERE legacy.study_id = vg_async_sessions.study_id
+        AND legacy.code GLOB 'P[0-9][0-9]'
+    );
+  DELETE FROM vg_async_participants
+  WHERE code GLOB 'C[0-9][0-9]'
+    AND CAST(SUBSTR(code, 2) AS INTEGER) BETWEEN 13 AND 36
+    AND EXISTS (
+      SELECT 1 FROM vg_async_participants legacy
+      WHERE legacy.study_id = vg_async_participants.study_id
+        AND legacy.code GLOB 'P[0-9][0-9]'
+  );
+`);
+
+// Normalize empty legacy studies from the former C01–C12 + P01–P24 roster.
+// No App data exists in these studies, so their participants can safely move to
+// the current, Creator-only C01–C30 roster without losing project provenance.
+const emptyLegacyStudies = db.prepare(`
+  SELECT s.id
+  FROM vg_async_studies s
+  WHERE NOT EXISTS (
+    SELECT 1 FROM vg_async_apps a WHERE a.study_id = s.id
+  )
+    AND EXISTS (
+      SELECT 1 FROM vg_async_participants p
+      WHERE p.study_id = s.id AND p.code GLOB 'P[0-9][0-9]'
+    )
+`).all() as Array<{ id: string }>;
+emptyLegacyStudies.forEach(({ id: studyId }) => {
+  const timestamp = now();
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      DELETE FROM vg_async_sessions
+      WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'
+    `).run(studyId);
+    db.prepare(`
+      DELETE FROM vg_async_participants
+      WHERE study_id = ? AND code GLOB 'P[0-9][0-9]'
+    `).run(studyId);
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO vg_async_participants
+        (study_id, code, role, condition_name, created_at)
+      VALUES (?, ?, 'creator', 'experimental', ?)
+    `);
+    CREATOR_CODES.forEach((code) => insert.run(studyId, code, timestamp));
+  });
+  transaction();
+});
+
+// The active study can contain work created with the legacy C01–C12 + P01–P24
+// roster. Keep the eighteen legacy Creator codes that have live work (and fill
+// remaining seats by code order), then move them to C13–C30. This keeps current
+// App, comment, synthesis, and session provenance while retiring six unused
+// legacy slots.
+const activeStudySetting = db.prepare(`
+  SELECT value FROM vg_async_settings WHERE key = ?
+`).get(ACTIVE_STUDY_KEY) as { value?: string } | undefined;
+const activeLegacyStudyId = activeStudySetting?.value || '';
+if (activeLegacyStudyId) {
+  const legacyCodes = (db.prepare(`
+    SELECT code FROM vg_async_participants
+    WHERE study_id = ? AND code GLOB 'P[0-9][0-9]'
+    ORDER BY CAST(SUBSTR(code, 2) AS INTEGER)
+  `).all(activeLegacyStudyId) as Array<{ code: string }>).map(({ code }) => code);
+  if (legacyCodes.length) {
+    const referenceQueries = [
+      `SELECT participant_code AS code FROM vg_async_sessions WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT creator_code AS code FROM vg_async_apps WHERE study_id = ? AND creator_code GLOB 'P[0-9][0-9]'`,
+      `SELECT author_code AS code FROM vg_async_comments WHERE study_id = ? AND author_code GLOB 'P[0-9][0-9]'`,
+      `SELECT author_code AS code FROM vg_async_syntheses WHERE study_id = ? AND author_code GLOB 'P[0-9][0-9]'`,
+      `SELECT participant_code AS code FROM vg_async_comment_likes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT participant_code AS code FROM vg_async_app_likes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT participant_code AS code FROM vg_async_synthesis_likes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT participant_code AS code FROM vg_async_basket_items WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT participant_code AS code FROM vg_async_synthesis_votes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT participant_code AS code FROM vg_async_assignments WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT creator_code AS code FROM vg_async_creator_revisions WHERE study_id = ? AND creator_code GLOB 'P[0-9][0-9]'`,
+      `SELECT creator_code AS code FROM vg_async_creator_operations WHERE study_id = ? AND creator_code GLOB 'P[0-9][0-9]'`,
+    ];
+    const referencedCodes = new Set(referenceQueries.flatMap((query) => (
+      (db.prepare(query).all(activeLegacyStudyId) as Array<{ code: string }>).map(({ code }) => code)
+    )));
+    const retainedLegacyCodes = [
+      ...legacyCodes.filter((code) => referencedCodes.has(code)),
+      ...legacyCodes.filter((code) => !referencedCodes.has(code)),
+    ].slice(0, CREATOR_COUNT - 12).sort((left, right) => (
+      Number(left.slice(1)) - Number(right.slice(1))
+    ));
+    if (retainedLegacyCodes.length === CREATOR_COUNT - 12) {
+      const codeColumns = [
+        ['vg_async_sessions', 'participant_code'],
+        ['vg_async_apps', 'creator_code'],
+        ['vg_async_comments', 'author_code'],
+        ['vg_async_syntheses', 'author_code'],
+        ['vg_async_comment_likes', 'participant_code'],
+        ['vg_async_app_likes', 'participant_code'],
+        ['vg_async_synthesis_likes', 'participant_code'],
+        ['vg_async_basket_items', 'participant_code'],
+        ['vg_async_synthesis_votes', 'participant_code'],
+        ['vg_async_assignments', 'participant_code'],
+        ['vg_async_creator_revisions', 'creator_code'],
+        ['vg_async_creator_operations', 'creator_code'],
+        ['vg_async_events', 'participant_code'],
+      ] as const;
+      const transaction = db.transaction(() => {
+        retainedLegacyCodes.forEach((legacyCode, index) => {
+          const creatorCode = CREATOR_CODES[index + 12];
+          codeColumns.forEach(([table, column]) => {
+            db.prepare(`UPDATE ${table} SET ${column} = ? WHERE study_id = ? AND ${column} = ?`)
+              .run(creatorCode, activeLegacyStudyId, legacyCode);
+          });
+          db.prepare(`UPDATE vg_async_participants SET code = ? WHERE study_id = ? AND code = ?`)
+            .run(creatorCode, activeLegacyStudyId, legacyCode);
+        });
+        const retiredLegacyCodes = legacyCodes.filter((code) => !retainedLegacyCodes.includes(code));
+        retiredLegacyCodes.forEach((legacyCode) => {
+          db.prepare(`DELETE FROM vg_async_sessions WHERE study_id = ? AND participant_code = ?`)
+            .run(activeLegacyStudyId, legacyCode);
+          db.prepare(`DELETE FROM vg_async_participants WHERE study_id = ? AND code = ?`)
+            .run(activeLegacyStudyId, legacyCode);
+        });
+      });
+      transaction();
+    }
+  }
+}
 db.exec(`
   UPDATE vg_async_stage_selections
   SET source_id = synthesis_id
@@ -453,23 +624,20 @@ if (!synthesisColumns.some((column) => column.name === 'target_version_id')) {
 }
 
 function seedParticipants(studyId: string) {
+  const existingParticipants = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM vg_async_participants
+    WHERE study_id = ? AND role <> 'host'
+  `).get(studyId) as { count: number };
+  if (Number(existingParticipants.count) > 0) return;
   const insert = db.prepare(`
     INSERT OR IGNORE INTO vg_async_participants
       (study_id, code, role, condition_name, created_at)
     VALUES (?, ?, ?, ?, ?)
   `);
   const timestamp = now();
-  const creatorCodes = Array.from(
-    { length: CREATOR_COUNT },
-    (_, index) => `C${String(index + 1).padStart(2, '0')}`,
-  );
-  const communityCodes = Array.from(
-    { length: COMMUNITY_COUNT },
-    (_, index) => `P${String(index + 1).padStart(2, '0')}`,
-  );
   insert.run(studyId, 'H01', 'host', null, timestamp);
-  creatorCodes.forEach((code) => insert.run(studyId, code, 'creator', 'experimental', timestamp));
-  communityCodes.forEach((code) => insert.run(studyId, code, 'community', 'experimental', timestamp));
+  CREATOR_CODES.forEach((code) => insert.run(studyId, code, 'creator', 'experimental', timestamp));
 }
 
 function conditionAssignmentKey(studyId: string) {
@@ -486,21 +654,15 @@ function conditionsConfigured(studyId: string) {
 export function setCommunityStudyConditions(
   clientId: string,
   controlCreatorCodes: string[],
-  controlCommunityCodes: string[],
 ) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = study();
-  if (currentStudy.status !== 'setup') throw new Error('研究开始后不能修改实验分组。');
-  const normalize = (values: string[]) => [...new Set(
-    values.map((value) => String(value).trim().toUpperCase()).filter(Boolean),
+  if (currentStudy.status === 'closed') throw new Error('研究结束后不能修改实验分组。');
+  const creators = [...new Set(
+    controlCreatorCodes.map((value) => String(value).trim().toUpperCase()).filter(Boolean),
   )].sort();
-  const creators = normalize(controlCreatorCodes);
-  const communityMembers = normalize(controlCommunityCodes);
-  if (creators.length !== CONTROL_CREATOR_COUNT) {
-    throw new Error(`请选择恰好 ${CONTROL_CREATOR_COUNT} 名 Creator 作为对照组。`);
-  }
-  if (communityMembers.length !== CONTROL_COMMUNITY_COUNT) {
-    throw new Error(`请选择恰好 ${CONTROL_COMMUNITY_COUNT} 名 Community Member 作为对照组。`);
+  if (creators.some((code) => !CREATOR_CODES.includes(code))) {
+    throw new Error(`对照组只能选择 C01–C${String(CREATOR_COUNT).padStart(2, '0')}。`);
   }
   const participantRows = db.prepare(`
     SELECT code, role FROM vg_async_participants WHERE study_id = ?
@@ -509,27 +671,15 @@ export function setCommunityStudyConditions(
     participant.code,
     participant.role,
   ]));
-  if (creators.some((code) => roleByCode.get(code) !== 'creator')) {
-    throw new Error('对照组 Creator 列表中包含无效编号。');
-  }
-  if (communityMembers.some((code) => roleByCode.get(code) !== 'community')) {
-    throw new Error('对照组 Community Member 列表中包含无效编号。');
-  }
-  const advancedActivity = db.prepare(`
-    SELECT
-      (SELECT COUNT(*) FROM vg_async_syntheses WHERE study_id = ?) +
-      (SELECT COUNT(*) FROM vg_async_versions WHERE study_id = ? AND kind = 'community') +
-      (SELECT COUNT(*) FROM vg_async_generation_jobs WHERE study_id = ?) AS count
-  `).get(currentStudy.id, currentStudy.id, currentStudy.id) as { count: number };
-  if (Number(advancedActivity.count) > 0) {
-    throw new Error('已经产生综合评论或 Community Version，不能再修改实验分组。');
+  if (CREATOR_CODES.some((code) => roleByCode.get(code) !== 'creator')) {
+    throw new Error('当前研究的创作者编号不完整，请新建研究后重试。');
   }
   const timestamp = now();
   const transaction = db.transaction(() => {
     db.prepare(`
       UPDATE vg_async_participants
       SET condition_name = 'experimental'
-      WHERE study_id = ? AND role IN ('creator', 'community')
+      WHERE study_id = ? AND role = 'creator'
     `).run(currentStudy.id);
     const setControl = db.prepare(`
       UPDATE vg_async_participants
@@ -537,7 +687,6 @@ export function setCommunityStudyConditions(
       WHERE study_id = ? AND code = ?
     `);
     creators.forEach((code) => setControl.run(currentStudy.id, code));
-    communityMembers.forEach((code) => setControl.run(currentStudy.id, code));
     db.prepare(`
       UPDATE vg_async_apps
       SET condition_name = (
@@ -556,9 +705,12 @@ export function setCommunityStudyConditions(
     `).run(conditionAssignmentKey(currentStudy.id), timestamp);
   });
   transaction();
-  recordEvent(viewer.code, 'configure_study_conditions', 'study', currentStudy.id, {
+  recordEvent(viewer.code, currentStudy.status === 'setup'
+    ? 'configure_study_conditions'
+    : 'update_study_conditions', 'study', currentStudy.id, {
+    controlCreatorCount: creators.length,
+    experimentalCreatorCount: CREATOR_COUNT - creators.length,
     controlCreatorCodes: creators,
-    controlCommunityCodes: communityMembers,
   });
   return getCommunityGalleryState(clientId);
 }
@@ -620,7 +772,9 @@ export function getCommunityViewer(clientId = '') {
 function requireViewer(clientId: string, role?: CommunityRole) {
   const viewer = getCommunityViewer(clientId);
   if (!viewer) throw new Error('请先选择实验身份。');
-  if (role && viewer.role !== role) throw new Error(`该操作需要 ${role} 身份。`);
+  if (role && viewer.role !== role) {
+    throw new Error(`该操作需要${role === 'host' ? '主持人' : '创作者'}身份。`);
+  }
   db.prepare(`
     UPDATE vg_async_sessions SET last_seen_at = ? WHERE study_id = ? AND client_id = ?
   `).run(now(), study().id, clientId);
@@ -629,13 +783,21 @@ function requireViewer(clientId: string, role?: CommunityRole) {
 
 function requireParticipant(clientId: string) {
   const viewer = requireViewer(clientId);
-  if (viewer.role === 'host') throw new Error('Host 不参与社区创作。');
+  if (viewer.role === 'host') throw new Error('主持人不参与社区创作。');
   return viewer;
 }
 
 function requireOpenStudy() {
   const currentStudy = study();
   if (currentStudy.status === 'closed') throw new Error('研究已经结束，当前内容保持只读。');
+  return currentStudy;
+}
+
+function requireActiveStudy() {
+  const currentStudy = requireOpenStudy();
+  if (currentStudy.status !== 'active') {
+    throw new Error('主持人点击开始后才能发表评论。');
+  }
   return currentStudy;
 }
 
@@ -665,6 +827,9 @@ export function joinCommunityGallery(clientId: string, requestedCode: string) {
   const cleanClientId = clientId.trim();
   const cleanCode = requestedCode.trim().toUpperCase();
   if (!cleanClientId || cleanClientId.length > 160) throw new Error('缺少有效的浏览器会话。');
+  if (cleanCode !== 'H01' && !CREATOR_CODES.includes(cleanCode)) {
+    throw new Error(`请选择 C01–C${String(CREATOR_COUNT).padStart(2, '0')} 中的创作者编号。`);
+  }
   const currentStudy = study();
   const selectedParticipant = participant(currentStudy.id, cleanCode);
   if (!selectedParticipant) throw new Error('请选择有效的参与者编号。');
@@ -710,10 +875,7 @@ function versionById(versionId: number) {
 function accessibleApp(clientId: string, appId: string) {
   const viewer = requireViewer(clientId);
   const app = appById(appId);
-  if (!app) throw new Error('App 不存在。');
-  if (viewer.role === 'creator' && viewer.condition !== app.condition_name) {
-    throw new Error('不能访问另一实验条件的 App。');
-  }
+  if (!app) throw new Error('应用不存在。');
   return { viewer, app };
 }
 
@@ -724,7 +886,7 @@ function ownedApp(clientId: string, appId?: string) {
     : db.prepare(`
         SELECT * FROM vg_async_apps WHERE study_id = ? AND creator_code = ?
       `).get(study().id, viewer.code) as any;
-  if (!app || app.creator_code !== viewer.code) throw new Error('只有 App Creator 可以执行该操作。');
+  if (!app || app.creator_code !== viewer.code) throw new Error('只有该应用的创作者可以执行此操作。');
   return { viewer, app };
 }
 
@@ -741,14 +903,14 @@ export function saveInitialDraft(input: {
   };
 }) {
   const viewer = requireViewer(input.clientId, 'creator');
-  if (!input.title.trim()) throw new Error('请填写 App 名称。');
-  if (!input.code.trim()) throw new Error('Initial Version 代码不能为空。');
+  if (!input.title.trim()) throw new Error('请填写应用名称。');
+  if (!input.code.trim()) throw new Error('初始版本代码不能为空。');
   const currentStudy = study();
-  if (currentStudy.status === 'closed') throw new Error('研究已经结束，不能继续创建 Initial Version。');
+  if (currentStudy.status === 'closed') throw new Error('研究已经结束，不能继续创建初始版本。');
   const existing = db.prepare(`
     SELECT * FROM vg_async_apps WHERE study_id = ? AND creator_code = ?
   `).get(currentStudy.id, viewer.code) as any;
-  if (existing?.initial_version_id) throw new Error('Initial Version 已经发布，不能覆盖。');
+  if (existing?.initial_version_id) throw new Error('初始版本已经发布，不能覆盖。');
   const appId = existing?.id || randomUUID();
   const timestamp = now();
   const transaction = db.transaction(() => {
@@ -822,15 +984,15 @@ export function startCreatorDevelopmentOperation(
   clientId: string,
   operationId: string,
   action: 'generate' | 'refine',
-  phase: 'initial' | 'project' = 'initial',
+  phase: 'initial' | 'community' | 'project' = 'initial',
 ) {
   const viewer = requireViewer(clientId, 'creator');
   const currentStudy = study();
   if (currentStudy.status === 'closed') {
     throw new Error('研究已经结束，不能继续修改项目。');
   }
-  if (phase === 'initial' && currentStudy.status !== 'setup') {
-    throw new Error('Initial Version 创作阶段已经结束。');
+  if (phase === 'project') {
+    throw new Error('创作者不能自行启动已发布项目的开发。请等待主持人启动下一轮开发。');
   }
   const normalizedId = operationId.trim();
   if (!/^[a-zA-Z0-9_-]{8,100}$/.test(normalizedId)) {
@@ -844,7 +1006,6 @@ export function startCreatorDevelopmentOperation(
   const app = db.prepare(`
     SELECT id FROM vg_async_apps WHERE study_id = ? AND creator_code = ?
   `).get(currentStudy.id, viewer.code) as { id?: string } | undefined;
-  if (phase === 'project' && !app?.id) throw new Error('请先创建并发布项目。');
   const timestamp = now();
   db.prepare(`
     INSERT INTO vg_async_creator_operations
@@ -863,6 +1024,9 @@ export function startCreatorDevelopmentOperation(
   recordEvent(viewer.code, 'start_creator_development', 'creator_operation', normalizedId, {
     action,
     phase,
+    developmentTrigger: phase === 'community'
+      ? 'host_locked_draw_followup'
+      : 'creator_initial_creation',
   });
   return normalizedId;
 }
@@ -958,16 +1122,16 @@ export function getCreatorDevelopmentProgress(clientId: string, operationId: str
 export function publishInitialVersion(clientId: string) {
   const viewer = requireViewer(clientId, 'creator');
   const currentStudy = study();
-  if (currentStudy.status === 'closed') throw new Error('研究已经结束，不能继续发布 Initial Version。');
+  if (currentStudy.status === 'closed') throw new Error('研究已经结束，不能继续发布初始版本。');
   const app = db.prepare(`
     SELECT * FROM vg_async_apps WHERE study_id = ? AND creator_code = ?
   `).get(currentStudy.id, viewer.code) as any;
-  if (!app) throw new Error('请先创建或上传 Initial Version。');
+  if (!app) throw new Error('请先创建或上传初始版本。');
   if (app.initial_version_id) return getCommunityGalleryState(clientId);
   const draft = db.prepare(`
     SELECT * FROM vg_async_drafts WHERE study_id = ? AND app_id = ? AND kind = 'initial'
   `).get(currentStudy.id, app.id) as any;
-  if (!draft?.code) throw new Error('Initial Version 草稿为空。');
+  if (!draft?.code) throw new Error('初始版本草稿为空。');
   const timestamp = now();
   const transaction = db.transaction(() => {
     const result = db.prepare(`
@@ -994,37 +1158,37 @@ export function getCreatorDraftContext(clientId: string) {
   const app = db.prepare(`
     SELECT * FROM vg_async_apps WHERE study_id = ? AND creator_code = ?
   `).get(study().id, viewer.code) as any;
-  if (!app) throw new Error('请先创建 App。');
+  if (!app) throw new Error('请先创建应用。');
   const persistedDraft = db.prepare(`
     SELECT * FROM vg_async_drafts WHERE study_id = ? AND app_id = ?
   `).get(study().id, app.id) as any;
-  const latestPublishedVersion = db.prepare(`
-    SELECT * FROM vg_async_versions
-    WHERE study_id = ? AND app_id = ?
-    ORDER BY version_number DESC, id DESC
-    LIMIT 1
-  `).get(study().id, app.id) as any;
-  const draft = persistedDraft?.code
-    ? persistedDraft
-    : latestPublishedVersion?.code
-      ? {
-          ...latestPublishedVersion,
-          kind: 'project',
-          version_id: latestPublishedVersion.id,
-          base_version_id: latestPublishedVersion.id,
-        }
-      : null;
-  if (!draft?.code) throw new Error('当前没有可继续修改的项目。');
+  if (!persistedDraft?.code) {
+    throw new Error('当前没有可修改的开发草稿。请等待主持人锁定点赞并启动本轮开发。');
+  }
+  if (persistedDraft.kind === 'project') {
+    throw new Error('创作者不能自行继续开发已发布项目。请等待主持人启动下一轮开发。');
+  }
+  const draft = persistedDraft;
   const messagePhase = draft.kind === 'initial'
     ? 'initial'
     : draft.kind === 'project'
       ? 'project'
       : 'community';
+  const messageIterationNumber = messagePhase === 'community'
+    ? Number(draft.iteration_number || 0)
+    : 0;
   const messages = db.prepare(`
     SELECT * FROM vg_async_development_messages
     WHERE study_id = ? AND app_id = ? AND phase = ?
+      AND (? = 0 OR iteration_number = ? OR iteration_number IS NULL)
     ORDER BY id DESC LIMIT 8
-  `).all(study().id, app.id, messagePhase) as any[];
+  `).all(
+    study().id,
+    app.id,
+    messagePhase,
+    messageIterationNumber,
+    messageIterationNumber,
+  ) as any[];
   let synthesis = null;
   let selection = null;
   let sources: any[] = [];
@@ -1064,6 +1228,9 @@ export function saveRefinedDraft(
 ) {
   const context = getCreatorDraftContext(clientId);
   const timestamp = now();
+  const messageIterationNumber = context.messagePhase === 'community'
+    ? Number(context.draft.iteration_number || 0) || null
+    : null;
   const transaction = db.transaction(() => {
     if (context.draft.kind === 'project') {
       const versionId = Number(
@@ -1114,80 +1281,47 @@ export function saveRefinedDraft(
     }
     const insertMessage = db.prepare(`
       INSERT INTO vg_async_development_messages
-        (study_id, app_id, phase, role, content, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+        (study_id, app_id, phase, iteration_number, role, content, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    insertMessage.run(study().id, context.app.id, context.messagePhase, 'creator', creatorMessage, timestamp);
-    insertMessage.run(study().id, context.app.id, context.messagePhase, 'assistant', assistantMessage, timestamp);
+    insertMessage.run(
+      study().id,
+      context.app.id,
+      context.messagePhase,
+      messageIterationNumber,
+      'creator',
+      creatorMessage,
+      timestamp,
+    );
+    insertMessage.run(
+      study().id,
+      context.app.id,
+      context.messagePhase,
+      messageIterationNumber,
+      'assistant',
+      assistantMessage,
+      timestamp,
+    );
   });
   transaction();
   recordEvent(context.viewer.code, 'refine_draft', 'app', context.app.id, {
     kind: context.draft.kind,
-    publishedProjectUpdated: false,
-    projectDraftSaved: context.draft.kind === 'project',
+    developmentTrigger: context.draft.kind === 'community'
+      ? 'host_locked_draw_followup'
+      : 'creator_initial_creation',
+    iterationNumber: context.draft.kind === 'community'
+      ? Number(context.draft.iteration_number || 0)
+      : 0,
+    baseVersionId: context.draft.base_version_id || null,
+    selectedSourceType: context.draft.selected_source_type || null,
+    selectedSourceId: context.draft.selected_source_id || context.draft.synthesis_id || null,
   });
   return getCommunityGalleryState(clientId);
 }
 
 export function publishProjectDraft(clientId: string) {
-  const viewer = requireViewer(clientId, 'creator');
-  const currentStudy = study();
-  if (currentStudy.status === 'closed') {
-    throw new Error('研究已经结束，不能继续发布项目更新。');
-  }
-  const app = db.prepare(`
-    SELECT * FROM vg_async_apps
-    WHERE study_id = ? AND creator_code = ? AND status = 'published'
-  `).get(currentStudy.id, viewer.code) as any;
-  if (!app) throw new Error('当前没有可以更新的已发布项目。');
-  const draft = db.prepare(`
-    SELECT * FROM vg_async_drafts
-    WHERE study_id = ? AND app_id = ? AND kind = 'project'
-  `).get(currentStudy.id, app.id) as any;
-  if (!draft?.code) throw new Error('请先发送更新并生成项目草稿。');
-  const latestVersion = db.prepare(`
-    SELECT * FROM vg_async_versions
-    WHERE study_id = ? AND app_id = ?
-    ORDER BY version_number DESC, id DESC
-    LIMIT 1
-  `).get(currentStudy.id, app.id) as any;
-  const versionId = Number(draft.base_version_id || 0);
-  if (!latestVersion || Number(latestVersion.id) !== versionId) {
-    throw new Error('项目已经出现更新版本，请刷新后基于最新版本重新修改。');
-  }
-  const timestamp = now();
-  const transaction = db.transaction(() => {
-    db.prepare(`
-      UPDATE vg_async_versions SET code = ?, summary = ?
-      WHERE study_id = ? AND app_id = ? AND id = ?
-    `).run(draft.code, draft.summary, currentStudy.id, app.id, versionId);
-    db.prepare(`
-      UPDATE vg_async_apps SET updated_at = ?
-      WHERE study_id = ? AND id = ?
-    `).run(timestamp, currentStudy.id, app.id);
-    db.prepare(`
-      INSERT INTO vg_async_creator_revisions
-        (study_id, app_id, version_id, creator_code, code, summary, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      currentStudy.id,
-      app.id,
-      versionId,
-      viewer.code,
-      draft.code,
-      draft.summary,
-      timestamp,
-    );
-    db.prepare(`
-      DELETE FROM vg_async_drafts
-      WHERE study_id = ? AND app_id = ? AND kind = 'project'
-    `).run(currentStudy.id, app.id);
-  });
-  transaction();
-  recordEvent(viewer.code, 'publish_project_revision', 'app', app.id, {
-    versionId,
-  });
-  return getCommunityGalleryState(clientId);
+  requireViewer(clientId, 'creator');
+  throw new Error('创作者不能自行发布普通项目更新。请等待主持人启动下一轮开发。');
 }
 
 function commentById(commentId: number) {
@@ -1296,6 +1430,135 @@ function resolveSynthesisSources(synthesisId: number, revealDeletedContent = fal
     .filter((source) => source.content);
 }
 
+type ContributorSource = { source_type: CommunitySourceType; source_id: number };
+
+function contributorCodesForSources(studyId: string, sources: ContributorSource[]) {
+  const contributors = new Set<string>();
+  const visitedSyntheses = new Set<number>();
+  const creatorCodes = new Set((db.prepare(`
+    SELECT code FROM vg_async_participants WHERE study_id = ? AND role = 'creator'
+  `).all(studyId) as Array<{ code: string }>).map((participant) => participant.code));
+  const visit = (sourceType: CommunitySourceType, sourceId: number) => {
+    if (sourceType === 'comment') {
+      const comment = db.prepare(`
+        SELECT author_code FROM vg_async_comments WHERE study_id = ? AND id = ?
+      `).get(studyId, sourceId) as { author_code?: string } | undefined;
+      if (comment?.author_code && creatorCodes.has(comment.author_code)) {
+        contributors.add(comment.author_code);
+      }
+      return;
+    }
+    if (visitedSyntheses.has(sourceId)) return;
+    visitedSyntheses.add(sourceId);
+    const synthesis = db.prepare(`
+      SELECT author_code, COALESCE(is_development_brief, 0) AS is_development_brief
+      FROM vg_async_syntheses WHERE study_id = ? AND id = ?
+    `).get(studyId, sourceId) as { author_code?: string; is_development_brief?: number } | undefined;
+    if (!synthesis) return;
+    if (!synthesis.is_development_brief
+      && synthesis.author_code
+      && creatorCodes.has(synthesis.author_code)) {
+      contributors.add(synthesis.author_code);
+    }
+    const nestedSources = db.prepare(`
+      SELECT source_type, source_id FROM vg_async_synthesis_sources
+      WHERE study_id = ? AND synthesis_id = ? ORDER BY source_order
+    `).all(studyId, sourceId) as ContributorSource[];
+    nestedSources.forEach((source) => visit(source.source_type, Number(source.source_id)));
+  };
+  sources.forEach((source) => visit(source.source_type, Number(source.source_id)));
+  return contributors;
+}
+
+function recordContributorSnapshot(
+  studyId: string,
+  appId: string,
+  iterationNumber: number,
+  sources: ContributorSource[],
+  recordedAt: string,
+) {
+  const selectedNow = contributorCodesForSources(studyId, sources);
+  const previousRows = iterationNumber > 1
+    ? db.prepare(`
+        SELECT participant_code, first_selected_iteration
+        FROM vg_async_contributors
+        WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+      `).all(studyId, appId, iterationNumber - 1) as Array<{
+        participant_code: string;
+        first_selected_iteration: number;
+      }>
+    : [];
+  const cumulative = new Map(previousRows.map((row) => [
+    row.participant_code,
+    Number(row.first_selected_iteration),
+  ]));
+  selectedNow.forEach((participantCode) => {
+    if (!cumulative.has(participantCode)) cumulative.set(participantCode, iterationNumber);
+  });
+  db.prepare(`
+    DELETE FROM vg_async_contributors
+    WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+  `).run(studyId, appId, iterationNumber);
+  const insert = db.prepare(`
+    INSERT INTO vg_async_contributors
+      (study_id, app_id, iteration_number, participant_code,
+       first_selected_iteration, selected_in_current_iteration, recorded_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  cumulative.forEach((firstSelectedIteration, participantCode) => {
+    insert.run(
+      studyId,
+      appId,
+      iterationNumber,
+      participantCode,
+      firstSelectedIteration,
+      selectedNow.has(participantCode) ? 1 : 0,
+      recordedAt,
+    );
+  });
+}
+
+function backfillContributorSnapshots() {
+  const selections = db.prepare(`
+    SELECT study_id, app_id, iteration_number, source_type, source_id,
+      source_popularity_json, selected_at
+    FROM vg_async_stage_selections
+    ORDER BY study_id, app_id, iteration_number, selected_at
+  `).all() as any[];
+  selections.forEach((selection) => {
+    let sources: ContributorSource[] = [];
+    try {
+      const audit = JSON.parse(selection.source_popularity_json || '{}');
+      if (Array.isArray(audit.developed_sources)) {
+        sources = audit.developed_sources.map((source: any) => ({
+          source_type: source.source_type,
+          source_id: Number(source.source_id),
+        })).filter((source: ContributorSource) => (
+          (source.source_type === 'comment' || source.source_type === 'synthesis')
+          && Number.isInteger(source.source_id)
+        ));
+      }
+    } catch {
+      sources = [];
+    }
+    if (!sources.length && selection.source_id) {
+      sources = [{
+        source_type: selection.source_type as CommunitySourceType,
+        source_id: Number(selection.source_id),
+      }];
+    }
+    recordContributorSnapshot(
+      selection.study_id,
+      selection.app_id,
+      Number(selection.iteration_number),
+      sources,
+      selection.selected_at || now(),
+    );
+  });
+}
+
+backfillContributorSnapshots();
+
 function synthesisContributionAuthors(rootSynthesisId: number) {
   const contributions = new Map<string, Set<string>>();
   const visited = new Set<number>();
@@ -1362,8 +1625,8 @@ function createContributionNotifications(
       sourceType === 'synthesis' ? sourceId : 0,
       sourceType,
       sourceId,
-      `你的创意进入 Community Version ${iterationNumber} 开发`,
-      `Creator 已在《${app.title}》中采用“${selectedSource.title || selectedSource.content}”。你的 ${sources.size} 条创意贡献已经进入实际开发流程。`,
+      `你的创意进入社区版本 ${iterationNumber} 开发`,
+      `你的想法已在《${app.title}》中被纳入开发：“${selectedSource.title || selectedSource.content}”。你的 ${sources.size} 条创意贡献已经进入实际开发流程。`,
       sources.size,
       timestamp,
     );
@@ -1405,6 +1668,7 @@ function scoredSynthesisCandidates(appId: string, layer: 1 | 2) {
     SELECT * FROM vg_async_syntheses
     WHERE study_id = ? AND target_app_id = ? AND layer = ?
       AND withdrawn_at IS NULL AND deleted_at IS NULL
+      AND COALESCE(is_development_brief, 0) = 0
     ORDER BY created_at, id
   `).all(study().id, appId, layer) as any[];
   const candidateIds = new Set(candidates.map((candidate) => Number(candidate.id)));
@@ -1512,6 +1776,79 @@ function scoredDevelopmentCandidates(appId: string, iterationNumber: 1 | 2) {
   ];
 }
 
+function drawWeightedDevelopmentCandidate(candidates: any[]) {
+  const weightedCandidates = candidates.map((candidate) => ({
+    candidate,
+    likeCount: Math.max(0, Math.trunc(Number(candidate.score || 0))),
+  })).map((entry) => ({
+    ...entry,
+    // A +1 smoothing weight keeps new ideas eligible while still making every
+    // additional like increase their chance of being selected.
+    weight: entry.likeCount + 1,
+  }));
+  const totalWeight = weightedCandidates.reduce((sum, entry) => sum + entry.weight, 0);
+  const draw = randomInt(totalWeight);
+  let cursor = draw;
+  const selected = weightedCandidates.find((entry) => {
+    cursor -= entry.weight;
+    return cursor < 0;
+  }) || weightedCandidates[weightedCandidates.length - 1];
+  return {
+    candidate: selected.candidate,
+    audit: {
+      method: 'weighted_random_like_count_plus_one',
+      total_weight: totalWeight,
+      draw,
+      candidates: weightedCandidates.map((entry) => ({
+        source_type: entry.candidate.source_type,
+        source_id: Number(entry.candidate.source_id),
+        like_count: entry.likeCount,
+        weight: entry.weight,
+      })),
+      selected_source_type: selected.candidate.source_type,
+      selected_source_id: Number(selected.candidate.source_id),
+    },
+  };
+}
+
+export function useCommunityWildcard(clientId: string, appId: string, commentId: number) {
+  const { viewer, app } = ownedApp(clientId, appId);
+  const currentStudy = requireOpenStudy();
+  if (currentStudy.status !== 'active') throw new Error('主持人开始研究后才能使用万能卡。');
+  if (app.condition_name !== 'experimental' || app.status !== 'published') {
+    throw new Error('万能卡只能用于已发布的实验组应用。');
+  }
+  const iterationNumber = communityIterationCount(app.id) + 1;
+  if (iterationNumber !== 1 && iterationNumber !== 2) {
+    throw new Error('该应用已完成两次社区开发，不能再使用万能卡。');
+  }
+  const expectedStage = iterationNumber === 1 ? 'synthesis_1' : 'development_1';
+  if (currentStudy.workflow_stage !== expectedStage) {
+    throw new Error('本轮点赞已经锁定，万能卡不能再加入本轮开发。');
+  }
+  const eligibleComment = scoredDevelopmentCandidates(app.id, iterationNumber as 1 | 2).find((candidate) => (
+    candidate.source_type === 'comment' && Number(candidate.source_id) === Number(commentId)
+  ));
+  if (!eligibleComment) {
+    throw new Error('万能卡只能选择当前版本下的一条普通评论。');
+  }
+  const existing = db.prepare(`
+    SELECT 1 FROM vg_async_wildcards WHERE study_id = ? AND creator_code = ?
+  `).get(currentStudy.id, viewer.code);
+  if (existing) throw new Error('每位创作者在本研究中只能使用一次万能卡。');
+  const timestamp = now();
+  db.prepare(`
+    INSERT INTO vg_async_wildcards
+      (study_id, creator_code, app_id, iteration_number, source_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(currentStudy.id, viewer.code, app.id, iterationNumber, commentId, timestamp);
+  recordEvent(viewer.code, 'use_community_wildcard', 'comment', commentId, {
+    appId: app.id,
+    iterationNumber,
+  });
+  return getCommunityGalleryState(clientId);
+}
+
 export function enterCommunityDevelopmentStage(clientId: string, iterationNumber: 1 | 2) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = requireOpenStudy();
@@ -1525,7 +1862,7 @@ export function enterCommunityDevelopmentStage(clientId: string, iterationNumber
     WHERE study_id = ? AND condition_name = 'experimental' AND status = 'published'
     ORDER BY published_at, creator_code
   `).all(currentStudy.id) as any[];
-  if (!experimentalApps.length) throw new Error('当前没有已发布的 Vibe Gallery App。');
+  if (!experimentalApps.length) throw new Error('当前没有已发布的实验组应用。');
 
   const candidatesByApp = experimentalApps.map((app) => ({
     app,
@@ -1534,43 +1871,72 @@ export function enterCommunityDevelopmentStage(clientId: string, iterationNumber
   if (iterationNumber === 2) {
     const missingFirstVersion = experimentalApps.filter((app) => communityIterationCount(app.id) < 1);
     if (missingFirstVersion.length) {
-      throw new Error(`仍有 ${missingFirstVersion.length} 个 App 未发布 Community Version 1。`);
+      throw new Error(`仍有 ${missingFirstVersion.length} 个应用未发布社区版本 1。`);
     }
   }
   const missingCandidates = candidatesByApp.filter((entry) => entry.candidates.length === 0);
   if (missingCandidates.length) {
     throw new Error(iterationNumber === 2
-      ? `仍有 ${missingCandidates.length} 个 App 没有针对 Community V1 的第二轮普通评论或第二轮综合评论。`
-      : `仍有 ${missingCandidates.length} 个 App 没有可参与点赞评选的第一轮评论。`);
+      ? `仍有 ${missingCandidates.length} 个应用没有针对社区版本 1 的第二轮普通评论或第二轮综合评论。`
+      : `仍有 ${missingCandidates.length} 个应用没有可参与点赞评选的第一轮评论。`);
   }
 
   const winners = candidatesByApp.map(({ app, candidates }) => {
-    const highestLikeCount = Math.max(...candidates.map((candidate) => Number(candidate.score || 0)));
-    const likeLeaders = candidates.filter(
-      (candidate) => Number(candidate.score || 0) === highestLikeCount,
-    );
-    const highestSourceCount = Math.max(
-      ...likeLeaders.map((candidate) => Number(candidate.source_count || 0)),
-    );
-    const finalists = likeLeaders.filter(
-      (candidate) => Number(candidate.source_count || 0) === highestSourceCount,
-    );
-    const selectedIndex = finalists.length > 1 ? randomInt(finalists.length) : 0;
-    const selected = finalists[selectedIndex];
+    const wildcard = db.prepare(`
+      SELECT * FROM vg_async_wildcards
+      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+    `).get(currentStudy.id, app.id, iterationNumber) as any;
+    const wildcardSource = wildcard
+      ? candidates.find((candidate) => (
+          candidate.source_type === 'comment'
+          && Number(candidate.source_id) === Number(wildcard.source_id)
+        ))
+      : undefined;
+    if (wildcard && !wildcardSource) {
+      throw new Error(`《${app.title}》的万能卡评论已不符合本轮开发条件。`);
+    }
+    const randomCandidates = wildcardSource
+      ? candidates.filter((candidate) => !(
+          candidate.source_type === 'comment'
+          && Number(candidate.source_id) === Number(wildcardSource.source_id)
+        ))
+      : candidates;
+    const randomSelection = randomCandidates.length
+      ? drawWeightedDevelopmentCandidate(randomCandidates)
+      : null;
+    const primarySource = randomSelection?.candidate || wildcardSource;
+    if (!primarySource) throw new Error(`《${app.title}》没有可用于本轮开发的来源。`);
+    const sources = [randomSelection?.candidate, wildcardSource]
+      .filter(Boolean)
+      .filter((candidate, index, list) => list.findIndex((item) => (
+        item.source_type === candidate.source_type && Number(item.source_id) === Number(candidate.source_id)
+      )) === index);
     const winner = {
-      ...selected,
+      ...primarySource,
       source_popularity_json: JSON.stringify({
-        like_count: highestLikeCount,
-        source_count: highestSourceCount,
-        random_tie_break: finalists.length > 1,
-        random_pool: finalists.map((candidate) => ({
-          source_type: candidate.source_type,
-          source_id: Number(candidate.source_id),
+        ...(randomSelection?.audit || {
+          method: 'weighted_random_like_count_plus_one',
+          total_weight: 0,
+          draw: null,
+          candidates: [],
+          selected_source_type: null,
+          selected_source_id: null,
+        }),
+        wildcard_excluded_from_random_pool: Boolean(wildcardSource),
+        random_pool_exhausted: Boolean(wildcardSource && !randomSelection),
+        wildcard: wildcard ? {
+          creator_code: wildcard.creator_code,
+          source_type: 'comment',
+          source_id: Number(wildcard.source_id),
+          excluded_from_random_pool: true,
+        } : null,
+        developed_sources: sources.map((source) => ({
+          source_type: source.source_type,
+          source_id: Number(source.source_id),
         })),
-        selected_random_index: selectedIndex,
       }),
     };
-    return { app, winner };
+    return { app, winner, sources };
   });
   const timestamp = now();
   let notificationCount = 0;
@@ -1593,7 +1959,7 @@ export function enterCommunityDevelopmentStage(clientId: string, iterationNumber
         selected_at = excluded.selected_at,
         host_code = excluded.host_code
     `);
-    winners.forEach(({ app, winner }) => {
+    winners.forEach(({ app, winner, sources }) => {
       insert.run(
         currentStudy.id,
         app.id,
@@ -1622,36 +1988,63 @@ export function enterCommunityDevelopmentStage(clientId: string, iterationNumber
         currentStudy.id,
         app.id,
       );
-      notificationCount += createContributionNotifications(
-        app,
-        winner.source_type,
-        Number(winner.source_id),
+      recordContributorSnapshot(
+        currentStudy.id,
+        app.id,
         iterationNumber,
-        app.creator_code,
+        sources.map((source) => ({
+          source_type: source.source_type as CommunitySourceType,
+          source_id: Number(source.source_id),
+        })),
+        timestamp,
       );
+      sources.forEach((source) => {
+        notificationCount += createContributionNotifications(
+          app,
+          source.source_type,
+          Number(source.source_id),
+          iterationNumber,
+          app.creator_code,
+        );
+      });
     });
     db.prepare(`
       UPDATE vg_async_studies SET workflow_stage = ?, updated_at = ? WHERE id = ?
     `).run(`development_${iterationNumber}`, timestamp, currentStudy.id);
   });
   transaction();
+  const jobIds = winners.map(({ app, winner, sources }) => createCommunityGenerationJob({
+    actorCode: viewer.code,
+    app,
+    sources: sources.map((source) => ({
+      type: source.source_type as CommunitySourceType,
+      id: Number(source.source_id),
+    })),
+    creatorInstruction: sources.map((source) => source.content).filter(Boolean).join('\n\n'),
+    selectionReason: 'host_weighted_random_draw',
+    automated: true,
+  }));
   recordEvent(viewer.code, `enter_development_${iterationNumber}`, 'study', currentStudy.id, {
-    winners: winners.map(({ app, winner }) => ({
+    winners: winners.map(({ app, winner, sources }) => ({
       appId: app.id,
       sourceType: winner.source_type,
       sourceId: winner.source_id,
       score: winner.score,
-      sourceCount: Number(winner.source_count || 0),
-      rankingRule: 'like_count_desc,source_count_desc,random_tie_break',
+      sourceCount: sources.length,
+      rankingRule: 'weighted_random_like_count_plus_one',
       eligibleRound: iterationNumber,
       selectionAudit: JSON.parse(winner.source_popularity_json),
     })),
     notificationCount,
+    jobIds,
   });
-  return getCommunityGalleryState(clientId);
+  return { jobIds, state: getCommunityGalleryState(clientId) };
 }
 
 export function returnToPreviousCommunityStage(clientId: string) {
+  void clientId;
+  throw new Error('主持人的旧开发阶段控制已移除。');
+  /* Legacy audit implementation retained below for migrated historical studies. */
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = requireOpenStudy();
   if (currentStudy.status !== 'active') throw new Error('当前研究不在进行中。');
@@ -1754,8 +2147,11 @@ export function saveCommunityComment(input: {
   targetId?: string;
 }) {
   const viewer = requireParticipant(input.clientId);
-  requireOpenStudy();
+  requireActiveStudy();
   const { app } = accessibleApp(input.clientId, input.appId);
+  if (app.creator_code === viewer.code) {
+    throw new Error('创作者不能在自己的应用中评论。');
+  }
   const content = input.content.trim();
   if (!content) throw new Error('评论内容不能为空。');
   if (content.length > 3000) throw new Error('评论不能超过 3000 字。');
@@ -1765,7 +2161,7 @@ export function saveCommunityComment(input: {
     const synthesis = synthesisById(Number(targetId));
     if (!synthesis || synthesis.target_app_id !== app.id) throw new Error('综合评论不存在。');
   } else if (targetId !== app.id) {
-    throw new Error('普通评论必须属于当前 App。');
+    throw new Error('普通评论必须属于当前应用。');
   }
   if (input.parentCommentId) {
     const parent = commentById(input.parentCommentId);
@@ -1806,7 +2202,7 @@ export function saveCommunityComment(input: {
 
 export function updateCommunityComment(clientId: string, commentId: number, nextContent: string) {
   const viewer = requireParticipant(clientId);
-  requireOpenStudy();
+  requireActiveStudy();
   const comment = commentById(commentId);
   if (!comment || comment.author_code !== viewer.code) throw new Error('只能编辑自己的评论。');
   accessibleApp(clientId, comment.app_id);
@@ -1831,9 +2227,14 @@ export function updateCommunityComment(clientId: string, commentId: number, next
 
 export function deleteCommunityComment(clientId: string, commentId: number) {
   const viewer = requireParticipant(clientId);
-  requireOpenStudy();
+  requireActiveStudy();
   const comment = commentById(commentId);
   if (!comment || comment.author_code !== viewer.code) throw new Error('只能删除自己的评论。');
+  const wildcard = db.prepare(`
+    SELECT 1 FROM vg_async_wildcards
+    WHERE study_id = ? AND source_id = ?
+  `).get(study().id, commentId);
+  if (wildcard) throw new Error('这条评论已被万能卡锁定，等待进入开发后才能删除。');
   accessibleApp(clientId, comment.app_id);
   const timestamp = now();
   const transaction = db.transaction(() => {
@@ -1862,7 +2263,7 @@ export function deleteCommunityComment(clientId: string, commentId: number) {
 
 export function toggleCommunityCommentLike(clientId: string, commentId: number) {
   const viewer = requireParticipant(clientId);
-  requireOpenStudy();
+  requireActiveStudy();
   const comment = commentById(commentId);
   if (!comment) throw new Error('评论不存在。');
   accessibleApp(clientId, comment.app_id);
@@ -1889,7 +2290,7 @@ export function toggleCommunityCommentLike(clientId: string, commentId: number) 
 export function toggleCommunityAppLike(clientId: string, appId: string) {
   const viewer = requireParticipant(clientId);
   const { app } = accessibleApp(clientId, appId);
-  if (app.creator_code === viewer.code) throw new Error('不能点赞自己的 App。');
+  if (app.creator_code === viewer.code) throw new Error('不能点赞自己的应用。');
   const exists = db.prepare(`
     SELECT 1 FROM vg_async_app_likes
     WHERE study_id = ? AND app_id = ? AND participant_code = ?
@@ -1917,8 +2318,8 @@ export function toggleCreativeBasket(
 ) {
   const viewer = requireParticipant(clientId);
   requireOpenStudy();
-  if (viewer.role !== 'community' && viewer.condition !== 'experimental') {
-    throw new Error('收藏夹只对 Community Commenter 和 Vibe Gallery Creator 开放。');
+  if (viewer.condition !== 'experimental') {
+    throw new Error('创意篮子只对实验组创作者开放。');
   }
   const source = sourceRecord(sourceType, sourceId);
   if (!source) throw new Error('创意素材不存在。');
@@ -1944,10 +2345,9 @@ export function toggleCreativeBasket(
 }
 
 function openSynthesisLayerForApp(app: any): 1 | 2 | null {
-  const currentStudy = study();
   const completedIterations = communityIterationCount(app.id);
-  if (currentStudy.workflow_stage === 'synthesis_1') return 1;
-  if (currentStudy.workflow_stage === 'development_1' && completedIterations >= 1) return 2;
+  if (completedIterations === 0) return 1;
+  if (completedIterations === 1) return 2;
   return null;
 }
 
@@ -1960,21 +2360,24 @@ export function createSynthesis(input: {
 }) {
   const viewer = requireParticipant(input.clientId);
   requireOpenStudy();
-  if (viewer.role !== 'community' && viewer.condition !== 'experimental') {
-    throw new Error('综合评论只对 Community Commenter 和 Vibe Gallery Creator 开放。');
+  if (viewer.condition !== 'experimental') {
+    throw new Error('综合评论只对实验组创作者开放。');
   }
   const { app } = accessibleApp(input.clientId, input.targetAppId);
-  if (app.condition_name !== 'experimental') throw new Error('综合评论只能发布到 Vibe Gallery App。');
+  if (app.creator_code === viewer.code) {
+    throw new Error('不能在自己的应用中创建综合评论。');
+  }
+  if (app.condition_name !== 'experimental') throw new Error('综合评论只能发布到实验组应用。');
   const currentStudy = study();
-  if (currentStudy.status !== 'active') throw new Error('Host 开始研究后才能创建综合评论。');
+  if (currentStudy.status !== 'active') throw new Error('主持人开始研究后才能创建综合评论。');
   const layer = openSynthesisLayerForApp(app);
   if (!layer) throw new Error('当前阶段没有开放新的综合评论。');
   const existingSynthesis = db.prepare(`
     SELECT 1 FROM vg_async_syntheses
     WHERE study_id = ? AND author_code = ? AND target_app_id = ? AND layer = ?
-      AND withdrawn_at IS NULL
+      AND withdrawn_at IS NULL AND COALESCE(is_development_brief, 0) = 0
   `).get(currentStudy.id, viewer.code, app.id, layer);
-  if (existingSynthesis) throw new Error('每个人在每个 App 的本轮只能创建一条综合评论。');
+  if (existingSynthesis) throw new Error('每个人在每个应用的本轮只能创建一条综合评论。');
   const title = input.title.trim();
   const content = input.content.trim();
   if (!title || !content) throw new Error('请填写综合评论标题和完整的新方向。');
@@ -2055,6 +2458,9 @@ export function updateCommunitySynthesis(
   if (!synthesis || synthesis.author_code !== viewer.code) {
     throw new Error('只能编辑自己的综合评论。');
   }
+  if (synthesis.is_development_brief) {
+    throw new Error('已进入开发流程的开发方向不能编辑。');
+  }
   accessibleApp(clientId, synthesis.target_app_id);
   const content = nextContent.trim();
   if (!content) throw new Error('综合评论内容不能为空。');
@@ -2084,6 +2490,9 @@ export function deleteCommunitySynthesis(clientId: string, synthesisId: number) 
   const synthesis = synthesisById(synthesisId);
   if (!synthesis || synthesis.author_code !== viewer.code) {
     throw new Error('只能删除自己的综合评论。');
+  }
+  if (synthesis.is_development_brief) {
+    throw new Error('已进入开发流程的开发方向不能删除。');
   }
   accessibleApp(clientId, synthesis.target_app_id);
   const timestamp = now();
@@ -2121,11 +2530,14 @@ export function withdrawSynthesisForVote(clientId: string, synthesisId: number) 
 export function voteForSynthesis(clientId: string, synthesisId: number) {
   const viewer = requireParticipant(clientId);
   const currentStudy = requireOpenStudy();
-  if (viewer.role !== 'community' && viewer.condition !== 'experimental') {
-    throw new Error('综合评论点赞只对 Community Commenter 和 Vibe Gallery Creator 开放。');
+  if (viewer.condition !== 'experimental') {
+    throw new Error('综合评论点赞只对实验组创作者开放。');
   }
   const synthesis = synthesisById(synthesisId);
   if (!synthesis) throw new Error('要点赞的综合评论不存在。');
+  if (synthesis.is_development_brief) {
+    throw new Error('开发方向不参与点赞。');
+  }
   const { app } = accessibleApp(clientId, synthesis.target_app_id);
   const existingLike = db.prepare(`
     SELECT 1 FROM vg_async_synthesis_likes
@@ -2150,46 +2562,123 @@ export function voteForSynthesis(clientId: string, synthesisId: number) {
   return getCommunityGalleryState(clientId);
 }
 
+type DevelopmentSourceInput = { type: CommunitySourceType; id: number };
+
+function createCreatorDevelopmentBrief(input: {
+  actorCode: string;
+  app: any;
+  iterationNumber: 1 | 2;
+  baseVersionId: number;
+  sources: DevelopmentSourceInput[];
+  content: string;
+}) {
+  const content = input.content.trim();
+  if (!content) throw new Error('请先填写开发提示词。');
+  const uniqueSources = input.sources.filter(
+    (source, index, list) => (
+      (source.type === 'comment' || source.type === 'synthesis')
+      && Number.isInteger(Number(source.id))
+      && Number(source.id) > 0
+      && list.findIndex((candidate) => (
+        candidate.type === source.type && Number(candidate.id) === Number(source.id)
+      )) === index
+    ),
+  );
+  if (!uniqueSources.length) throw new Error('请至少选择一条评论或综合评论。');
+  const resolved = uniqueSources.map((source) => ({
+    ...source,
+    record: sourceRecord(source.type, Number(source.id)),
+  }));
+  if (resolved.some((source) => !source.record)) {
+    throw new Error('所选评论已不存在，请重新选择。');
+  }
+  const invalidSource = resolved.find((source) => {
+    const record = source.record!;
+    if (record.app_id !== input.app.id) return true;
+    if (Number(record.version_id || 0) !== input.baseVersionId) return true;
+    if (source.type === 'synthesis') {
+      const synthesis = synthesisById(Number(source.id));
+      return !synthesis
+        || Boolean(synthesis.is_development_brief)
+        || Number(synthesis.layer) !== input.iterationNumber;
+    }
+    return false;
+  });
+  if (invalidSource) {
+    throw new Error(input.iterationNumber === 2
+      ? '第二轮只能选择针对社区版本 1 的评论或第二轮综合评论。'
+      : '请选择针对初始版本的评论或第一轮综合评论。');
+  }
+
+  const firstLine = content.split(/\r?\n/).find((line) => line.trim())?.trim() || content;
+  const title = firstLine.length > 30 ? `${firstLine.slice(0, 30)}…` : firstLine;
+  const timestamp = now();
+  let synthesisId = 0;
+  const transaction = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO vg_async_syntheses
+        (study_id, target_app_id, target_version_id, layer, author_code, title, content,
+         is_development_brief, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    `).run(
+      study().id,
+      input.app.id,
+      input.baseVersionId,
+      input.iterationNumber,
+      input.actorCode,
+      title,
+      content,
+      timestamp,
+      timestamp,
+    );
+    synthesisId = Number(result.lastInsertRowid);
+    const insertSource = db.prepare(`
+      INSERT INTO vg_async_synthesis_sources
+        (study_id, synthesis_id, source_type, source_id, source_order, contribution_note, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    resolved.forEach((source, index) => {
+      insertSource.run(
+        study().id,
+        synthesisId,
+        source.type,
+        source.id,
+        index,
+        '创作者选择用于本轮开发',
+        timestamp,
+      );
+    });
+  });
+  transaction();
+  recordEvent(input.actorCode, 'select_sources_for_community_development', 'synthesis', synthesisId, {
+    appId: input.app.id,
+    iterationNumber: input.iterationNumber,
+    sourceCount: resolved.length,
+    sourceTypes: resolved.map((source) => source.type),
+  });
+  return synthesisId;
+}
+
 function createCommunityGenerationJob(input: {
   actorCode: string;
   app: any;
-  sourceType: CommunitySourceType,
-  sourceId: number,
+  sourceType?: CommunitySourceType;
+  sourceId?: number;
+  sources?: DevelopmentSourceInput[];
   creatorInstruction: string,
   requestedBaseVersionId?: number;
   selectionReason?: string;
   automated?: boolean;
 }) {
   const currentStudy = requireOpenStudy();
+  if (currentStudy.status !== 'active') {
+    throw new Error('请在主持人开始研究后进入社区开发流程。');
+  }
   const { app } = input;
   if (app.condition_name !== 'experimental') throw new Error('对照组不提供平台内 AI 原型化。');
   const completedIterations = communityIterationCount(app.id);
   const iterationNumber = completedIterations + 1;
-  if (iterationNumber > 2) throw new Error('该 App 已经完成两次 Community 开发。');
-  if (currentStudy.workflow_stage !== `development_${iterationNumber}`) {
-    throw new Error(`Host 尚未进入第 ${iterationNumber} 次开发阶段。`);
-  }
-  if (!['comment', 'synthesis'].includes(input.sourceType)) throw new Error('入选评论类型无效。');
-  const selectedSource = sourceRecord(input.sourceType, input.sourceId, {
-    includeDeleted: true,
-    revealDeletedContent: true,
-  });
-  if (!selectedSource || selectedSource.app_id !== app.id) throw new Error('请选择当前 App 的入选评论。');
-  const stageSelection = db.prepare(`
-    SELECT * FROM vg_async_stage_selections
-    WHERE study_id = ? AND app_id = ? AND iteration_number = ?
-  `).get(currentStudy.id, app.id, iterationNumber) as any;
-  if (
-    !stageSelection
-    || stageSelection.source_type !== input.sourceType
-    || Number(stageSelection.source_id) !== Number(input.sourceId)
-  ) {
-    throw new Error('只能开发 Host 在当前阶段锁定的最高赞评论。');
-  }
-  const developmentPrompt = input.creatorInstruction.trim()
-    || String(stageSelection.source_content || '').trim()
-    || selectedSource.content.trim();
-  if (!developmentPrompt) throw new Error('入选评论缺少可用于开发的提示词。');
+  if (iterationNumber > 2) throw new Error('该应用已经完成两次社区开发。');
   const firstCommunityVersion = versionsForApp(app.id)
     .find((version) => version.kind === 'community' && Number(version.version_number) === 2);
   const defaultBaseVersionId = iterationNumber === 1
@@ -2199,19 +2688,42 @@ function createCommunityGenerationJob(input: {
   const baseVersion = versionById(baseVersionId);
   if (!baseVersion || baseVersion.app_id !== app.id) {
     throw new Error(iterationNumber === 1
-      ? 'Initial Version 不存在。'
-      : 'Community Version 1 不存在。');
+      ? '初始版本不存在。'
+      : '社区版本 1 不存在。');
   }
   if (input.requestedBaseVersionId && Number(input.requestedBaseVersionId) !== baseVersionId) {
     throw new Error(iterationNumber === 1
-      ? '第一次开发固定基于 Initial Version。'
-      : '第二次开发固定基于 Community Version 1。');
+      ? '第一次开发固定基于初始版本。'
+      : '第二次开发固定基于社区版本 1。');
   }
   const running = db.prepare(`
     SELECT 1 FROM vg_async_generation_jobs
     WHERE study_id = ? AND app_id = ? AND status = 'running'
   `).get(study().id, app.id);
-  if (running) throw new Error('当前已经有一个 Community Version 生成任务。');
+  if (running) throw new Error('当前已经有一个社区版本生成任务。');
+  let sourceType = input.sourceType;
+  let sourceId = Number(input.sourceId || 0);
+  if (input.sources) {
+    sourceId = createCreatorDevelopmentBrief({
+      actorCode: input.actorCode,
+      app,
+      iterationNumber: iterationNumber as 1 | 2,
+      baseVersionId,
+      sources: input.sources,
+      content: input.creatorInstruction,
+    });
+    sourceType = 'synthesis';
+  }
+  if (sourceType !== 'comment' && sourceType !== 'synthesis') {
+    throw new Error('开发来源无效。');
+  }
+  const selectedSource = sourceRecord(sourceType, sourceId, {
+    includeDeleted: true,
+    revealDeletedContent: true,
+  });
+  if (!selectedSource || selectedSource.app_id !== app.id) throw new Error('请选择当前应用的开发来源。');
+  const developmentPrompt = input.creatorInstruction.trim() || selectedSource.content.trim();
+  if (!developmentPrompt) throw new Error('开发提示词不能为空。');
   const timestamp = now();
   let jobId = 0;
   const transaction = db.transaction(() => {
@@ -2224,9 +2736,9 @@ function createCommunityGenerationJob(input: {
     `).run(
       study().id,
       app.id,
-      input.sourceType === 'synthesis' ? input.sourceId : 0,
-      input.sourceType,
-      input.sourceId,
+      sourceType === 'synthesis' ? sourceId : 0,
+      sourceType,
+      sourceId,
       iterationNumber,
       baseVersionId,
       input.selectionReason?.trim() || '',
@@ -2239,13 +2751,13 @@ function createCommunityGenerationJob(input: {
   transaction();
   recordEvent(input.actorCode, 'start_community_generation', 'generation_job', jobId, {
     appId: app.id,
-    sourceType: input.sourceType,
-    sourceId: input.sourceId,
+    sourceType,
+    sourceId,
     iterationNumber,
     baseVersionId,
     baseVersionNumber: baseVersion.version_number,
     selectionReason: input.selectionReason?.trim() || '',
-    promptSource: input.creatorInstruction.trim() ? 'creator_adjusted' : 'selected_comment',
+    promptSource: input.sources ? 'creator_selected_sources' : 'selected_source',
     automated: Boolean(input.automated),
   });
   return jobId;
@@ -2254,61 +2766,16 @@ function createCommunityGenerationJob(input: {
 export function startCommunityGeneration(
   clientId: string,
   appId: string,
-  sourceType: CommunitySourceType,
-  sourceId: number,
+  sources: Array<{ type: CommunitySourceType; id: number }> ,
   creatorInstruction: string,
   requestedBaseVersionId?: number,
-  selectionReason = '',
-) {
-  const { viewer, app } = ownedApp(clientId, appId);
-  requireOpenStudy();
-  const jobId = createCommunityGenerationJob({
-    actorCode: viewer.code,
-    app,
-    sourceType,
-    sourceId,
-    creatorInstruction,
-    requestedBaseVersionId,
-    selectionReason,
-  });
-  return { jobId, state: getCommunityGalleryState(clientId) };
-}
-
-export function startAutomaticCommunityGeneration(
-  clientId: string,
-  appId: string,
-  iterationNumber: 1 | 2,
-) {
-  const viewer = requireViewer(clientId, 'host');
-  const currentStudy = requireOpenStudy();
-  if (currentStudy.workflow_stage !== `development_${iterationNumber}`) {
-    throw new Error(`当前不在第 ${iterationNumber} 次开发阶段。`);
-  }
-  const app = appById(appId);
-  if (!app || app.condition_name !== 'experimental' || app.status !== 'published') {
-    throw new Error('自动开发的实验组 App 不存在。');
-  }
-  const selection = db.prepare(`
-    SELECT * FROM vg_async_stage_selections
-    WHERE study_id = ? AND app_id = ? AND iteration_number = ?
-  `).get(currentStudy.id, appId, iterationNumber) as any;
-  if (!selection) throw new Error('该 App 还没有 Host 锁定的开发方向。');
-  const existingJob = db.prepare(`
-    SELECT id FROM vg_async_generation_jobs
-    WHERE study_id = ? AND app_id = ? AND iteration_number = ?
-  `).get(currentStudy.id, appId, iterationNumber) as { id: number } | undefined;
-  if (existingJob) {
-    return { jobId: Number(existingJob.id), state: getCommunityGalleryState(clientId), existing: true };
-  }
-  const jobId = createCommunityGenerationJob({
-    actorCode: viewer.code,
-    app,
-    sourceType: selection.source_type,
-    sourceId: Number(selection.source_id),
-    creatorInstruction: '',
-    automated: true,
-  });
-  return { jobId, state: getCommunityGalleryState(clientId), existing: false };
+): { jobId: number; state: ReturnType<typeof getCommunityGalleryState> } {
+  void appId;
+  void sources;
+  void creatorInstruction;
+  void requestedBaseVersionId;
+  requireViewer(clientId, 'creator');
+  throw new Error('开发来源由主持人锁定点赞后统一加权抽取，创作者不能直接启动社区开发。');
 }
 
 export function retryCommunityGeneration(clientId: string, failedJobId: number) {
@@ -2323,43 +2790,34 @@ export function retryCommunityGeneration(clientId: string, failedJobId: number) 
   if (!failedJob) throw new Error('要重新开发的任务不存在。');
   if (failedJob.status !== 'failed') throw new Error('只有失败的开发任务可以重新开发。');
   if (failedJob.condition_name !== 'experimental' || failedJob.app_status !== 'published') {
-    throw new Error('只有已发布的实验组 App 可以重新开发。');
+    throw new Error('只有已发布的实验组应用可以重新开发。');
   }
   const iterationNumber = Number(failedJob.iteration_number);
   if (iterationNumber !== 1 && iterationNumber !== 2) throw new Error('失败任务的开发阶段无效。');
-  if (currentStudy.workflow_stage !== `development_${iterationNumber}`) {
-    throw new Error(`当前已经不在第 ${iterationNumber} 次开发阶段，不能重新开发。`);
-  }
   const latestJob = db.prepare(`
     SELECT id, status FROM vg_async_generation_jobs
     WHERE study_id = ? AND app_id = ? AND iteration_number = ?
     ORDER BY id DESC LIMIT 1
   `).get(currentStudy.id, failedJob.app_id, iterationNumber) as any;
   if (!latestJob || Number(latestJob.id) !== Number(failedJobId)) {
-    throw new Error('该 App 已经有更新的开发任务。');
+    throw new Error('该应用已经有更新的开发任务。');
   }
   const publishedVersion = db.prepare(`
     SELECT 1 FROM vg_async_versions
     WHERE study_id = ? AND app_id = ? AND kind = 'community' AND version_number = ?
   `).get(currentStudy.id, failedJob.app_id, iterationNumber + 1);
-  if (publishedVersion) throw new Error(`Community V${iterationNumber} 已经发布，不能重新开发。`);
-  const stageSelection = db.prepare(`
-    SELECT * FROM vg_async_stage_selections
-    WHERE study_id = ? AND app_id = ? AND iteration_number = ?
-  `).get(currentStudy.id, failedJob.app_id, iterationNumber) as any;
-  if (!stageSelection) throw new Error('该 App 当前没有已锁定的开发方向。');
-
+  if (publishedVersion) throw new Error(`社区版本 ${iterationNumber} 已经发布，不能重新开发。`);
   const app = appById(failedJob.app_id);
-  if (!app) throw new Error('失败任务对应的 App 不存在。');
+  if (!app) throw new Error('失败任务对应的应用不存在。');
   const jobId = createCommunityGenerationJob({
     actorCode: viewer.code,
     app,
-    sourceType: stageSelection.source_type,
-    sourceId: Number(stageSelection.source_id),
-    creatorInstruction: '',
+    sourceType: failedJob.selected_source_type as CommunitySourceType,
+    sourceId: Number(failedJob.selected_source_id || failedJob.synthesis_id),
+    creatorInstruction: failedJob.creator_instruction || '',
     requestedBaseVersionId: Number(failedJob.base_version_id),
     selectionReason: failedJob.selection_reason || '',
-    automated: true,
+    automated: false,
   });
   recordEvent(viewer.code, 'retry_community_generation', 'generation_job', jobId, {
     retryOfJobId: Number(failedJobId),
@@ -2378,7 +2836,7 @@ export function getCommunityGenerationInput(jobId: number) {
     JOIN vg_async_versions v ON v.id = j.base_version_id
     WHERE j.study_id = ? AND j.id = ?
   `).get(study().id, jobId) as any;
-  if (!job) throw new Error('Community Version 生成任务不存在。');
+  if (!job) throw new Error('社区版本生成任务不存在。');
   const sourceType = (job.selected_source_type || 'synthesis') as CommunitySourceType;
   const sourceId = Number(job.selected_source_id || job.synthesis_id);
   const selection = sourceRecord(sourceType, sourceId, {
@@ -2457,6 +2915,31 @@ export function completeCommunityGeneration(jobId: number, code: string, summary
       timestamp,
     );
     db.prepare(`
+      DELETE FROM vg_async_development_messages
+      WHERE study_id = ? AND app_id = ? AND phase = 'community' AND iteration_number = ?
+    `).run(study().id, input.job.app_id, Number(input.job.iteration_number || 1));
+    const insertMessage = db.prepare(`
+      INSERT INTO vg_async_development_messages
+        (study_id, app_id, phase, iteration_number, role, content, created_at)
+      VALUES (?, ?, 'community', ?, ?, ?, ?)
+    `);
+    insertMessage.run(
+      study().id,
+      input.job.app_id,
+      Number(input.job.iteration_number || 1),
+      'creator',
+      input.job.creator_instruction || input.selection.content,
+      timestamp,
+    );
+    insertMessage.run(
+      study().id,
+      input.job.app_id,
+      Number(input.job.iteration_number || 1),
+      'assistant',
+      summary,
+      timestamp,
+    );
+    db.prepare(`
       UPDATE vg_async_generation_jobs
       SET status = 'completed', completed_at = ?, error = NULL
       WHERE study_id = ? AND id = ?
@@ -2464,9 +2947,6 @@ export function completeCommunityGeneration(jobId: number, code: string, summary
   });
   transaction();
   recordEvent(input.job.creator_code, 'complete_community_generation', 'generation_job', jobId);
-  const app = appById(input.job.app_id);
-  if (!app) throw new Error('生成完成后找不到需要自动发布的 App。');
-  publishCommunityVersionForApp(input.job.creator_code, app, true);
 }
 
 export function failCommunityGeneration(jobId: number, error: unknown) {
@@ -2493,11 +2973,7 @@ export function uploadControlCommunityDraft(
   if (viewer.condition !== 'control') throw new Error('该入口仅用于对照组上传外部原型。');
   const completedIterations = communityIterationCount(app.id);
   const iterationNumber = completedIterations + 1;
-  if (iterationNumber > 2) throw new Error('该 App 已经完成两次 Community 开发。');
-  const currentStudy = study();
-  if (currentStudy.workflow_stage !== `development_${iterationNumber}`) {
-    throw new Error(`Host 尚未进入第 ${iterationNumber} 次开发阶段。`);
-  }
+  if (iterationNumber > 2) throw new Error('该应用已经完成两次社区开发。');
   const firstCommunityVersion = versionsForApp(app.id)
     .find((version) => version.kind === 'community' && Number(version.version_number) === 2);
   const baseVersionId = Number(
@@ -2552,14 +3028,31 @@ function publishCommunityVersionForApp(actorCode: string, app: any, automated = 
     SELECT * FROM vg_async_drafts
     WHERE study_id = ? AND app_id = ? AND kind = 'community'
   `).get(study().id, app.id) as any;
-  if (!draft?.code) throw new Error('请先生成或上传 Community Version 草稿。');
+  if (!draft?.code) throw new Error('请先生成或上传社区版本草稿。');
   const iterationNumber = completedIterations + 1;
   if (Number(draft.iteration_number || iterationNumber) !== iterationNumber) {
-    throw new Error('当前草稿不属于下一次 Community 开发，请重新选择方向。');
+    throw new Error('当前草稿不属于下一次社区开发，请重新选择方向。');
   }
   const baseVersion = versionById(Number(draft.base_version_id || app.initial_version_id));
   if (!baseVersion || baseVersion.app_id !== app.id) throw new Error('草稿的开发基础版本不存在。');
   const timestamp = now();
+  const communityCreatorPrompts = draft.synthesis_id
+    ? (db.prepare(`
+        SELECT content FROM vg_async_development_messages
+        WHERE study_id = ? AND app_id = ? AND phase = 'community'
+          AND iteration_number = ? AND role = 'creator'
+        ORDER BY id
+      `).all(
+        study().id,
+        app.id,
+        iterationNumber,
+      ) as Array<{ content: string }>)
+      .map((message) => message.content.trim())
+      .filter(Boolean)
+    : [];
+  const followUpPrompts = communityCreatorPrompts[0] === String(draft.prompt || '').trim()
+    ? communityCreatorPrompts.slice(1)
+    : communityCreatorPrompts;
   const transaction = db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO vg_async_versions
@@ -2598,11 +3091,38 @@ function publishCommunityVersionForApp(actorCode: string, app: any, automated = 
       study().id,
       app.id,
     );
+    if (draft.synthesis_id && followUpPrompts.length) {
+      const developmentBrief = synthesisByIdIncludingDeleted(Number(draft.synthesis_id));
+      if (developmentBrief?.is_development_brief) {
+        const transcript = followUpPrompts.map(
+          (prompt, index) => `第 ${index + 2} 轮提示词：${prompt}`,
+        ).join('\n\n');
+        db.prepare(`
+          UPDATE vg_async_syntheses
+          SET content = ?, updated_at = ?
+          WHERE study_id = ? AND id = ?
+        `).run(
+          `${developmentBrief.content.trim()}\n\n后续开发提示词\n${transcript}`,
+          timestamp,
+          study().id,
+          Number(draft.synthesis_id),
+        );
+      }
+    }
     db.prepare(`
       DELETE FROM vg_async_drafts WHERE study_id = ? AND app_id = ?
     `).run(study().id, app.id);
   });
   transaction();
+  if (draft.selected_source_type && draft.selected_source_id) {
+    createContributionNotifications(
+      app,
+      draft.selected_source_type as CommunitySourceType,
+      Number(draft.selected_source_id),
+      iterationNumber,
+      actorCode,
+    );
+  }
   recordEvent(actorCode, 'publish_community_version', 'app', app.id, {
     synthesisId: draft.synthesis_id || null,
     sourceType: draft.selected_source_type || null,
@@ -2611,6 +3131,7 @@ function publishCommunityVersionForApp(actorCode: string, app: any, automated = 
     baseVersionId: baseVersion.id,
     baseVersionNumber: baseVersion.version_number,
     selectionReason: draft.selection_reason || '',
+    promptRounds: followUpPrompts.length + 1,
     automated,
   });
 }
@@ -2649,28 +3170,6 @@ function ensureAssignments() {
     });
   };
 
-  const communityExisting = db.prepare(`
-    SELECT COUNT(*) AS count FROM vg_async_assignments a
-    JOIN vg_async_participants p
-      ON p.study_id = a.study_id AND p.code = a.participant_code
-    WHERE a.study_id = ? AND p.role = 'community'
-  `).get(currentStudy.id) as { count: number };
-  if (Number(communityExisting.count) === 0) {
-    const allApps = db.prepare(`
-      SELECT * FROM vg_async_apps
-      WHERE study_id = ? AND status = 'published'
-      ORDER BY creator_code
-    `).all(currentStudy.id) as any[];
-    if (allApps.length === 12) {
-      const communityMembers = db.prepare(`
-        SELECT * FROM vg_async_participants
-        WHERE study_id = ? AND role = 'community'
-        ORDER BY code
-      `).all(currentStudy.id) as any[];
-      assignBalanced(communityMembers, allApps);
-    }
-  }
-
   for (const condition of ['control', 'experimental'] as CommunityCondition[]) {
     const existing = db.prepare(`
       SELECT COUNT(*) AS count FROM vg_async_assignments a
@@ -2679,17 +3178,17 @@ function ensureAssignments() {
       WHERE a.study_id = ? AND p.role = 'creator' AND p.condition_name = ?
     `).get(currentStudy.id, condition) as { count: number };
     if (Number(existing.count) > 0) continue;
-    const apps = db.prepare(`
-      SELECT * FROM vg_async_apps
-      WHERE study_id = ? AND condition_name = ? AND status = 'published'
-      ORDER BY creator_code
-    `).all(currentStudy.id, condition) as any[];
-    if (apps.length !== 6) continue;
     const participants = db.prepare(`
       SELECT * FROM vg_async_participants
       WHERE study_id = ? AND role = 'creator' AND condition_name = ?
       ORDER BY code
     `).all(currentStudy.id, condition) as any[];
+    const apps = db.prepare(`
+      SELECT * FROM vg_async_apps
+      WHERE study_id = ? AND condition_name = ? AND status = 'published'
+      ORDER BY creator_code
+    `).all(currentStudy.id, condition) as any[];
+    if (!participants.length || apps.length !== participants.length) continue;
     assignBalanced(participants, apps);
   }
 }
@@ -2699,29 +3198,21 @@ export function startAsyncCommunityStudy(clientId: string) {
   const currentStudy = study();
   if (currentStudy.status !== 'setup') throw new Error('正式研究已经开始或结束。');
   if (!conditionsConfigured(currentStudy.id)) {
-    throw new Error('请先由 Host 选择并保存对照组成员。');
+    throw new Error('请先由主持人选择并保存对照组成员。');
   }
   const conditionCounts = db.prepare(`
-    SELECT role, condition_name, COUNT(*) AS count
+    SELECT condition_name, COUNT(*) AS count
     FROM vg_async_participants
-    WHERE study_id = ? AND role IN ('creator', 'community')
-    GROUP BY role, condition_name
+    WHERE study_id = ? AND role = 'creator'
+    GROUP BY condition_name
   `).all(currentStudy.id) as Array<{
-    role: CommunityRole;
     condition_name: CommunityCondition;
     count: number;
   }>;
-  const countFor = (role: CommunityRole, condition: CommunityCondition) => Number(
-    conditionCounts.find((row) => (
-      row.role === role && row.condition_name === condition
-    ))?.count || 0,
+  const countFor = (condition: CommunityCondition) => Number(
+    conditionCounts.find((row) => row.condition_name === condition)?.count || 0,
   );
-  if (
-    countFor('creator', 'control') !== CONTROL_CREATOR_COUNT
-    || countFor('creator', 'experimental') !== CREATOR_COUNT - CONTROL_CREATOR_COUNT
-    || countFor('community', 'control') !== CONTROL_COMMUNITY_COUNT
-    || countFor('community', 'experimental') !== COMMUNITY_COUNT - CONTROL_COMMUNITY_COUNT
-  ) {
+  if (countFor('control') + countFor('experimental') !== CREATOR_COUNT) {
     throw new Error('实验分组人数不完整，请重新保存对照组设置。');
   }
   const published = db.prepare(`
@@ -2729,7 +3220,7 @@ export function startAsyncCommunityStudy(clientId: string) {
     FROM vg_async_apps
     WHERE study_id = ? AND status = 'published'
   `).get(currentStudy.id) as { count: number };
-  if (Number(published.count) < 1) throw new Error('至少发布一个 Initial App 后才能记录正式研究开始。');
+  if (Number(published.count) < 1) throw new Error('至少发布一个初始应用后才能记录正式研究开始。');
   ensureAssignments();
   const timestamp = now();
   db.prepare(`
@@ -2808,6 +3299,7 @@ export function exportCommunityStudy(clientId: string) {
     'vg_async_generation_events',
     'vg_async_notifications',
     'vg_async_assignments',
+    'vg_async_contributors',
     'vg_async_events',
   ];
   const data = Object.fromEntries(tables.map((table) => [
@@ -2830,7 +3322,7 @@ export function getCommunityPreview(
 ) {
   const { viewer, app } = accessibleApp(clientId, appId);
   if (version === 'draft') {
-    if (viewer.role !== 'creator' || viewer.code !== app.creator_code) throw new Error('只有 Creator 可以预览草稿。');
+    if (viewer.role !== 'creator' || viewer.code !== app.creator_code) throw new Error('只有创作者可以预览自己的草稿。');
     const draft = db.prepare(`
       SELECT code FROM vg_async_drafts WHERE study_id = ? AND app_id = ?
     `).get(study().id, app.id) as { code?: string } | undefined;
@@ -2850,7 +3342,7 @@ export function getCommunityGalleryState(clientId = '') {
   const currentStudy = study();
   if (currentStudy.status !== 'closed') ensureAssignments();
   const viewer = getCommunityViewer(clientId);
-  const visibleCondition = viewer?.role === 'creator' ? viewer.condition : null;
+  const visibleCondition = null;
   const apps = viewer
     ? db.prepare(`
         SELECT a.*,
@@ -2988,19 +3480,28 @@ export function getCommunityGalleryState(clientId = '') {
       synthesis_id: synthesis.id,
     })),
   );
-  const stageSelections = appIds.length
+  // Stage selections are retained in the database only as legacy-study audit data.
+  // New studies never expose or use a Host-selected source.
+  const stageSelections: any[] = [];
+  // Wildcard choices are part of the public creative provenance: everyone who
+  // can view the study should see which idea the app creator guaranteed.
+  const wildcards = viewer
     ? db.prepare(`
-        SELECT * FROM vg_async_stage_selections
+        SELECT * FROM vg_async_wildcards
+        WHERE study_id = ?
+        ORDER BY created_at
+      `).all(currentStudy.id) as any[]
+    : [];
+  const contributors = appIds.length
+    ? db.prepare(`
+        SELECT study_id, app_id, iteration_number, participant_code,
+          first_selected_iteration, selected_in_current_iteration, recorded_at
+        FROM vg_async_contributors
         WHERE study_id = ? AND app_id IN (${placeholders})
-        ORDER BY iteration_number, app_id
+        ORDER BY app_id, iteration_number, participant_code
       `).all(currentStudy.id, ...appIds) as any[]
     : [];
-  const selectedIterationBySource = new Map(
-    stageSelections.map((selection) => [
-      `${selection.source_type}:${Number(selection.source_id)}`,
-      Number(selection.iteration_number),
-    ]),
-  );
+  const selectedIterationBySource = new Map<string, number>();
   const enrichedComments = comments.map((comment) => ({
     ...comment,
     content: comment.deleted_at ? '该评论已由作者删除。' : comment.content,
@@ -3048,7 +3549,7 @@ export function getCommunityGalleryState(clientId = '') {
       community_score: deleted ? 0 : liveStats?.score || 0,
       vote_count: deleted ? 0 : liveStats?.votes || 0,
       viewer_voted: deleted ? 0 : viewerLike ? 1 : 0,
-      viewer_vote_available: !deleted && viewer
+      viewer_vote_available: !deleted && !synthesis.is_development_brief && viewer
         && viewer.role !== 'host'
         && currentStudy.status !== 'closed'
         ? 1
@@ -3124,6 +3625,13 @@ export function getCommunityGalleryState(clientId = '') {
         WHERE p.study_id = ?
         ORDER BY p.role, p.code
       `).all(currentStudy.id)
+    : !viewer
+      ? db.prepare(`
+          SELECT code, role, condition_name, 0 AS joined
+          FROM vg_async_participants
+          WHERE study_id = ?
+          ORDER BY code
+        `).all(currentStudy.id)
     : [];
 
   const publishedCounts = db.prepare(`
@@ -3146,6 +3654,8 @@ export function getCommunityGalleryState(clientId = '') {
     syntheses: enrichedSyntheses,
     synthesisSources,
     stageSelections,
+    wildcards,
+    contributors,
     basket,
     assignments,
     generationJobs,
@@ -3156,7 +3666,6 @@ export function getCommunityGalleryState(clientId = '') {
     aiProvider: getAIProvider(),
     counts: {
       creators: CREATOR_COUNT,
-      communityMembers: COMMUNITY_COUNT,
       controlApps: Number(publishedCounts.find((row) => row.condition_name === 'control')?.count || 0),
       experimentalApps: Number(publishedCounts.find((row) => row.condition_name === 'experimental')?.count || 0),
     },

@@ -1,4 +1,4 @@
-export type CommunityRole = 'host' | 'creator' | 'community';
+export type CommunityRole = 'host' | 'creator';
 export type CommunityCondition = 'control' | 'experimental';
 export type CommunityStatus = 'setup' | 'active' | 'closed';
 export type CommunitySourceType = 'comment' | 'synthesis';
@@ -80,10 +80,12 @@ export type CommunityComment = {
 export type CommunitySynthesis = {
   id: number;
   target_app_id: string;
+  target_version_id?: number;
   layer: 1 | 2;
   author_code: string;
   title: string;
   content: string;
+  is_development_brief?: number;
   created_at: string;
   updated_at: string;
   deleted_at?: string;
@@ -230,6 +232,21 @@ export type CommunityGalleryState = {
   syntheses: CommunitySynthesis[];
   synthesisSources: CommunitySource[];
   stageSelections: CommunityStageSelection[];
+  wildcards: Array<{
+    creator_code: string;
+    app_id: string;
+    iteration_number: 1 | 2;
+    source_id: number;
+    created_at: string;
+  }>;
+  contributors: Array<{
+    app_id: string;
+    iteration_number: 1 | 2;
+    participant_code: string;
+    first_selected_iteration: 1 | 2;
+    selected_in_current_iteration: number;
+    recorded_at: string;
+  }>;
   basket: CreativeBasketItem[];
   assignments: Array<{
     participant_code: string;
@@ -245,6 +262,7 @@ export type CommunityGalleryState = {
     id: number;
     app_id: string;
     phase: 'initial' | 'community' | 'project';
+    iteration_number?: number | null;
     role: 'creator' | 'assistant' | 'system';
     content: string;
     created_at: string;
@@ -258,7 +276,6 @@ export type CommunityGalleryState = {
   aiProvider: 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';
   counts: {
     creators: number;
-    communityMembers: number;
     controlApps: number;
     experimentalApps: number;
   };

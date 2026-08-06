@@ -31,7 +31,6 @@ import {
   Trash2,
   Upload,
   UserRound,
-  UsersRound,
   Workflow,
   X,
 } from 'lucide-react';
@@ -84,8 +83,27 @@ function formatDate(value?: string) {
   }).format(new Date(value));
 }
 
+function contributorCodesForIteration(
+  state: CommunityGalleryState,
+  appId: string,
+  iterationNumber: number,
+) {
+  return state.contributors
+    .filter((contributor) => (
+      contributor.app_id === appId && Number(contributor.iteration_number) === iterationNumber
+    ))
+    .map((contributor) => contributor.participant_code)
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+function contributorListLabel(codes: string[], limit = 6) {
+  if (!codes.length) return '暂无平台内贡献者';
+  const visible = codes.slice(0, limit).join('、');
+  return codes.length > limit ? `${visible} 等 ${codes.length} 人` : visible;
+}
+
 function canUseCreativeTools(state: CommunityGalleryState) {
-  return state.viewer?.role === 'community' || state.viewer?.condition === 'experimental';
+  return state.viewer?.role === 'creator' && state.viewer.condition === 'experimental';
 }
 
 type CommentFeedbackBurstKind = 'like' | 'synthesis';
@@ -154,39 +172,36 @@ function AppPreview({
 function IdentityGate({
   join,
   busy,
+  participants,
 }: {
   join: (code: string) => void;
   busy: string;
+  participants: CommunityGalleryState['participants'];
 }) {
-  const [role, setRole] = useState<'host' | 'creator' | 'community' | null>(null);
-  const codes = role === 'host'
+  const [entry, setEntry] = useState<'creator' | 'host' | null>(null);
+  const codes = entry === 'host'
     ? ['H01']
-    : role === 'creator'
-      ? Array.from({ length: 12 }, (_, index) => `C${String(index + 1).padStart(2, '0')}`)
-      : role === 'community'
-        ? Array.from({ length: 24 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`)
-        : [];
+    : entry === 'creator'
+      ? participants.filter((participant) => participant.role === 'creator').map((participant) => participant.code)
+      : [];
   return (
     <section className="async-identity-gate">
       <div className="async-identity-copy">
-        <span className="async-eyebrow">JOIN VIBE GALLERY</span>
+        <span className="async-eyebrow">加入创意共创社区</span>
         <h1>把社区讨论变成可以运行的作品</h1>
-        <p>选择老师分配给你的参与者编号。Community Member 可以浏览全部已发布 App，系统也会显示需要认真体验的作品。</p>
+        <p>选择你的创作者编号，发布自己的应用，也可以浏览、评论和综合其他作品中的想法。</p>
       </div>
       <div className="async-identity-picker">
         <div className="async-role-options">
-          <button className={role === 'creator' ? 'is-selected' : ''} onClick={() => setRole('creator')}>
-            <UserRound /><strong>Creator</strong><span>创作 Initial App，也参与社区讨论</span>
+          <button className={entry === 'creator' ? 'is-selected' : ''} onClick={() => setEntry('creator')}>
+            <UserRound /><strong>创作者</strong><span>发布自己的应用，也参与讨论与共创</span>
           </button>
-          <button className={role === 'community' ? 'is-selected' : ''} onClick={() => setRole('community')}>
-            <UsersRound /><strong>Community Member</strong><span>体验、评论与综合社区创意</span>
-          </button>
-          <button className={role === 'host' ? 'is-selected' : ''} onClick={() => setRole('host')}>
-            <Lock /><strong>Host</strong><span>开放研究、查看进度与结束研究</span>
+          <button className={entry === 'host' ? 'is-selected' : ''} onClick={() => setEntry('host')}>
+            <Lock /><strong>主持人</strong><span>开放研究、查看进度与结束研究</span>
           </button>
         </div>
-        {role && (
-          <div className={`async-code-grid is-${role}`}>
+        {entry && (
+          <div className={`async-code-grid is-${entry}`}>
             {codes.map((code) => (
               <button key={code} disabled={Boolean(busy)} onClick={() => join(code)}>
                 <strong>{code}</strong><span>进入</span>
@@ -217,7 +232,7 @@ function PublishedCreatorStudio({
   const messages = state.developmentMessages.filter(
     (message) => message.app_id === ownApp?.id && message.phase === 'project',
   );
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const workspaceOpen = false;
   const [message, setMessage] = useState('');
   const [developmentProgress, setDevelopmentProgress] = useState<CreatorDevelopmentProgress | null>(null);
   const progressTimer = useRef<number | null>(null);
@@ -291,35 +306,27 @@ function PublishedCreatorStudio({
       <section className="async-studio async-studio-published">
         <CheckCircle2 />
         <div>
-          <span className="async-eyebrow">LATEST VERSION 已发布</span>
+          <span className="async-eyebrow">最新版本已发布</span>
           <h2>{ownApp.title}</h2>
           <p>
             当前为 {latestVersion.kind === 'initial'
-              ? 'Initial Version'
-              : `Community Version ${latestVersion.version_number - 1}`}。
-            Creator 可以随时继续开发；AI 修改会先保存为草稿，只有主动发布后才会更新公开版本。
+              ? '初始版本'
+              : `社区版本 ${latestVersion.version_number - 1}`}。
+            下一轮开发只能由主持人锁定本轮点赞并完成抽取后启动；生成草稿后，你可以继续修改并决定是否发布。
           </p>
         </div>
-        {state.viewer?.condition === 'experimental' ? (
-          <button
-            className="async-primary"
-            disabled={Boolean(busy)}
-            onClick={() => setWorkspaceOpen((current) => !current)}
-          ><Code2 /> {workspaceOpen ? '收起开发空间' : '继续开发项目'}</button>
-        ) : (
-          <span className="async-control-continue-note">请继续使用原有外部 vibe-coding 工具修改</span>
-        )}
+        <span className="async-control-continue-note">等待主持人启动下一轮开发</span>
       </section>
 
       {workspaceOpen && state.viewer?.condition === 'experimental' && (
         <section className="async-studio async-continuation-studio">
           <header>
             <div>
-              <span className="async-eyebrow">CREATOR · CONTINUOUS DEVELOPMENT</span>
+              <span className="async-eyebrow">创作者 · 持续开发</span>
               <h2>继续开发 {ownApp.title}</h2>
               <p>以当前已发布版本为基础进行多轮对话。每轮修改先保存为草稿，确认满意后再单独发布。</p>
             </div>
-            <span className="async-step-chip">Live Project</span>
+            <span className="async-step-chip">已上线项目</span>
           </header>
 
           {developmentProgress && (
@@ -381,7 +388,7 @@ function PublishedCreatorStudio({
                   : '可以开始新的多轮开发对话'}</small></span></div>
                 <em>草稿模式</em>
               </header>
-              <div className="async-creator-chat-history" role="log" aria-label="Creator 持续开发对话">
+              <div className="async-creator-chat-history" role="log" aria-label="创作者持续开发对话">
                 {messages.length ? messages.map((item) => (
                   <article key={item.id} className={`is-${item.role}`}>
                     <span>{item.role === 'creator' ? state.viewer?.code : 'AI'}</span>
@@ -536,17 +543,6 @@ function InitialCreatorStudio({
     );
   }
 
-  const upload = async (file?: File) => {
-    if (!file) return;
-    const code = await file.text();
-    await action('upload-initial', () => communityGalleryApi.uploadInitial(clientId, {
-      title,
-      brief,
-      prompt,
-      code,
-    }));
-  };
-
   const isDeveloping = busy === 'generate-initial' || busy === 'refine-initial';
   const progressSteps = [
     ['plan', '理解需求'],
@@ -570,11 +566,11 @@ function InitialCreatorStudio({
     <section className="async-studio">
       <header>
         <div>
-          <span className="async-eyebrow">CREATION · INITIAL VERSION</span>
+          <span className="async-eyebrow">创作 · 初始版本</span>
           <h2>先完成你的独立作品</h2>
           <p>先让 AI 生成可运行草稿，再通过多轮对话继续修改。只有你确认满意并主动发布后，作品才会出现在首页。</p>
         </div>
-        <span className="async-step-chip">1 / 4 Creation</span>
+        <span className="async-step-chip">第 1 / 4 步 · 创作</span>
       </header>
       {developmentProgress && (
         <section className={`async-creator-progress is-${developmentProgress.status}`} aria-live="polite">
@@ -630,9 +626,9 @@ function InitialCreatorStudio({
         <div className="async-studio-controls">
           {!ownApp?.draft_code ? (
             <>
-              <label>App 名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：周末去哪玩" /></label>
-              <label>一句话简介<input value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="让社区快速理解它能做什么" /></label>
-              <label>创作提示<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} placeholder="描述你想做的 App、用户和关键交互" /></label>
+              <label>应用名称<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+              <label>一句话简介<input value={brief} onChange={(event) => setBrief(event.target.value)} /></label>
+              <label>创作提示<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} /></label>
               <div className="async-button-row">
                 <button
                   className="async-primary"
@@ -644,16 +640,7 @@ function InitialCreatorStudio({
                       { title, brief, prompt, operationId },
                     ),
                   )}
-                ><Sparkles /> {busy === 'generate-initial' ? 'AI 正在开发…' : 'AI 生成 App 草稿'}</button>
-                <label className="async-upload-button">
-                  <Upload /> 上传 HTML
-                  <input
-                    type="file"
-                    accept=".html,text/html"
-                    disabled={!title.trim() || Boolean(busy)}
-                    onChange={(event) => void upload(event.target.files?.[0])}
-                  />
-                </label>
+                ><Sparkles /> {busy === 'generate-initial' ? 'AI 正在开发…' : 'AI 生成应用草稿'}</button>
               </div>
             </>
           ) : (
@@ -670,7 +657,7 @@ function InitialCreatorStudio({
                     : '可以开始多轮对话修改'}</small></span></div>
                   <em>发布前草稿</em>
                 </header>
-                <div className="async-creator-chat-history" role="log" aria-label="Creator 与 AI 的修改对话">
+                <div className="async-creator-chat-history" role="log" aria-label="创作者与 AI 的修改对话">
                   {initialMessages.length ? initialMessages.map((message) => (
                     <article key={message.id} className={`is-${message.role}`}>
                       <span>{message.role === 'creator' ? state.viewer?.code : 'AI'}</span>
@@ -717,7 +704,7 @@ function InitialCreatorStudio({
             className="async-publish"
             disabled={!ownApp?.draft_code || Boolean(busy)}
             onClick={() => action('publish-initial', () => communityGalleryApi.publishInitial(clientId))}
-          ><Check /> 满意后发布 Initial Version</button>
+          ><Check /> 满意后发布初始版本</button>
         </div>
       </div>
     </section>
@@ -784,6 +771,9 @@ function GalleryVersionCard({
   const selectedSynthesis = state.syntheses.find(
     (item) => Number(item.id) === Number(latestCommunityVersion?.synthesis_id),
   );
+  const contributorCodes = isCommunity
+    ? contributorCodesForIteration(state, app.id, Number(app.community_version_count || 0))
+    : [];
   const canLike = state.viewer?.role !== 'host' && state.viewer?.code !== app.creator_code;
   return (
     <article
@@ -808,16 +798,16 @@ function GalleryVersionCard({
         <div>
           {assigned && <span className="async-assigned-badge"><CheckCircle2 /> 指定体验</span>}
           {isCommunity && <span className="async-community-badge"><GitMerge /> 社区共创</span>}
-          {state.viewer?.role === 'host' && <span>{app.condition_name}</span>}
+          {state.viewer?.role === 'host' && <span>{app.condition_name === 'control' ? '对照组' : '实验组'}</span>}
         </div>
       </header>
       <section className="async-version-preview">
-        <span>{isCommunity ? `Community Version ${app.community_version_count}` : 'Initial Version'}</span>
+        <span>{isCommunity ? `社区版本 ${app.community_version_count}` : '初始版本'}</span>
         <AppPreview
           clientId={clientId}
           app={app}
           version={version}
-          title={`${app.title} ${isCommunity ? `Community Version ${app.community_version_count}` : 'Initial Version'}`}
+          title={`${app.title} ${isCommunity ? `社区版本 ${app.community_version_count}` : '初始版本'}`}
           compact
           cacheKey={String(isCommunity ? app.community_version_id : app.initial_version_id || '')}
         />
@@ -826,24 +816,26 @@ function GalleryVersionCard({
         <div>
           <div className="async-card-kicker-row">
             <span className="async-eyebrow">
-              {isCommunity ? '社区共同创作 · 最新版本' : `${app.creator_code} · 原创 App`}
+              {isCommunity ? '社区共同创作 · 最新版本' : `${app.creator_code} · 原创应用`}
             </span>
             <span className={isCommunity ? 'async-feed-status is-ready' : 'async-feed-status'}>
               {isCommunity
-                ? `Community V${app.community_version_count}`
-                : app.community_version_id ? 'Initial Version' : '等待社区版本'}
+                ? `社区版本 ${app.community_version_count}`
+                : app.community_version_id ? '初始版本' : '等待社区版本'}
             </span>
           </div>
-          <h2>{isCommunity ? `${app.title} · Community V${app.community_version_count}` : app.title}</h2>
+          <h2>{isCommunity ? `${app.title} · 社区版本 ${app.community_version_count}` : app.title}</h2>
           <p>{isCommunity
             ? latestCommunityVersion?.summary || '社区综合讨论后形成的最新可运行版本。'
-            : app.brief || '一个由 Creator 自由创作的 vibe-coded App。'}</p>
+            : app.brief || '一个由创作者自由创作的应用。'}</p>
         </div>
-        {isCommunity && selectedSynthesis && (
+        {isCommunity && (selectedSynthesis || contributorCodes.length > 0) && (
           <div className="async-card-provenance">
             <GitMerge />
-            <span>最新社区版本来自“{selectedSynthesis.title}”</span>
-            <small>{selectedSynthesis.contributor_count} 位贡献者 · {selectedSynthesis.source_app_count} 个 App</small>
+            <span>{selectedSynthesis
+              ? `最新社区版本来自“${selectedSynthesis.title}”`
+              : '最新社区版本由社区想法推动开发'}</span>
+            <small title={contributorCodes.join('、')}>累计贡献者：{contributorListLabel(contributorCodes)}</small>
           </div>
         )}
         <footer>
@@ -852,7 +844,7 @@ function GalleryVersionCard({
               className={app.viewer_liked ? 'async-social-button is-liked' : 'async-social-button'}
               disabled={!canLike}
               onClick={like}
-              title={canLike ? '表达喜欢，不参与版本选择' : '不能点赞自己的 App'}
+              title={canLike ? '表达喜欢，不参与版本选择' : '不能点赞自己的应用'}
             ><Heart /> {app.like_count}</button>
             <span><MessageCircle /> {app.comment_count}</span>
             {app.condition_name === 'experimental' && <span><Lightbulb /> {app.synthesis_count}</span>}
@@ -928,8 +920,9 @@ function CommentThread({
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState('');
   const [likedCommentKeys, playLikedCommentBurst] = useTimedBurst();
-  const canParticipate = Boolean(state.viewer && state.viewer.role !== 'host' && state.study.status !== 'closed');
-  const showBasket = canUseCreativeTools(state) && state.study.status !== 'closed';
+  const canParticipate = Boolean(state.viewer && state.viewer.role !== 'host' && state.study.status === 'active');
+  const canComment = canParticipate && app.creator_code !== state.viewer?.code;
+  const showBasket = canUseCreativeTools(state) && state.study.status === 'active';
 
   const roots = comments.filter((comment) => !comment.parent_comment_id);
   const children = (id: number) => comments.filter((comment) => Number(comment.parent_comment_id) === Number(id));
@@ -1074,7 +1067,7 @@ function CommentThread({
               void action(`like-comment-${comment.id}`, () => communityGalleryApi.likeComment(clientId, comment.id));
             }}
           ><Heart /> {comment.like_count}</button>
-          <button className="async-icon-text" disabled={!canParticipate} onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}>
+          <button className="async-icon-text" disabled={!canComment} onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)}>
             <Reply /> 回复
           </button>
           {showBasket && (
@@ -1085,7 +1078,7 @@ function CommentThread({
           )}
         </footer>
       )}
-      {!deleted && replyTo === comment.id && (
+      {!deleted && canComment && replyTo === comment.id && (
         <div className="async-reply-composer">
           <textarea value={reply} onChange={(event) => setReply(event.target.value)} rows={2} placeholder={`回复 ${comment.author_code}`} />
           <button disabled={!reply.trim() || Boolean(busy)} onClick={() => submitReply(comment.id)}><Send /> 发布回复</button>
@@ -1102,7 +1095,7 @@ function CommentThread({
 
   return (
     <div className={compact ? 'async-thread is-compact' : 'async-thread'}>
-      {canParticipate && (
+      {canComment && (
         <div className="async-comment-composer">
           <textarea
             value={content}
@@ -1137,10 +1130,10 @@ function SourceDrawer({
     <div className="async-overlay" role="dialog" aria-modal="true" aria-label="综合评论来源">
       <aside className="async-side-drawer">
         <header>
-          <div><span className="async-eyebrow">CREATIVE PROVENANCE</span><h2>{synthesis.title}</h2></div>
+          <div><span className="async-eyebrow">创意来源</span><h2>{synthesis.title}</h2></div>
           <button onClick={close}><X /></button>
         </header>
-        <p className="async-drawer-intro">这条综合评论连接了以下直接创意来源。原作者、来源 App 和讨论位置都会被保留。</p>
+        <p className="async-drawer-intro">这条综合评论连接了以下直接创意来源。原作者、来源应用和讨论位置都会被保留。</p>
         <div className="async-source-list">
           {sources.map((source, index) => (
             <article key={`${source.source_type}-${source.source_id}`}>
@@ -1150,7 +1143,7 @@ function SourceDrawer({
                   <strong>{source.author_code}</strong>
                   <small>
                     {source.app_title}
-                    {source.version_kind ? ` · ${source.version_kind === 'initial' ? 'Initial Version' : 'Community Version'}` : ''}
+                    {source.version_kind ? ` · ${source.version_kind === 'initial' ? '初始版本' : '社区版本'}` : ''}
                     {` · ${source.source_type === 'synthesis' ? '综合评论' : '普通讨论'}`}
                   </small>
                 </header>
@@ -1215,16 +1208,17 @@ function VersionLineage({
     <section className="async-version-lineage" aria-label="版本开发关系">
       <header>
         <GitBranch />
-        <div><strong>版本开发关系</strong><small>先比点赞数，再比综合评论来源数，仍同分则随机；V1 基于 Initial，V2 固定基于 V1</small></div>
+        <div><strong>版本开发关系</strong><small>作者从社区讨论中选择一个或多个方向；社区版本 1 基于初始版本，社区版本 2 固定基于社区版本 1</small></div>
       </header>
       <div className="async-version-lineage-grid">
         <article className="is-initial">
           <span>起点</span>
-          <strong>Initial Version</strong>
+          <strong>初始版本</strong>
           <small>{formatDate(initial.created_at)}</small>
         </article>
         {communityVersions.map((version) => {
           const iteration = version.version_number - 1;
+          const contributorCodes = contributorCodesForIteration(state, app.id, iteration);
           const base = versions.find((candidate) => Number(candidate.id) === Number(version.base_version_id));
           const synthesis = state.syntheses.find(
             (candidate) => Number(candidate.id) === Number(version.synthesis_id),
@@ -1239,9 +1233,12 @@ function VersionLineage({
             <div className="async-version-lineage-step" key={version.id}>
               <span className="async-lineage-arrow"><ArrowRight /></span>
               <article className="is-community">
-                <span>基于 {base?.kind === 'community' ? `Community V${base.version_number - 1}` : 'Initial'}</span>
-                <strong>Community Version {iteration}</strong>
+                <span>基于 {base?.kind === 'community' ? `社区版本 ${base.version_number - 1}` : '初始版本'}</span>
+                <strong>社区版本 {iteration}</strong>
                 <small>{selectedLabel ? `采用“${selectedLabel}”` : '外部开发版本'} · {formatDate(version.created_at)}</small>
+                <small className="async-version-contributors" title={contributorCodes.join('、')}>
+                  累计贡献者：{contributorListLabel(contributorCodes)}
+                </small>
               </article>
             </div>
           );
@@ -1251,8 +1248,8 @@ function VersionLineage({
             <span className="async-lineage-arrow"><ArrowRight /></span>
             <article>
               <span>可选</span>
-              <strong>Community Version {communityVersions.length + 1}</strong>
-              <small>{communityVersions.length ? '等待 Host 锁定第二次最高赞评论' : '等待 Host 锁定第一次最高赞评论'}</small>
+              <strong>社区版本 {communityVersions.length + 1}</strong>
+              <small>{communityVersions.length ? '等待作者从第二轮讨论中选择开发方向' : '等待作者从评论区选择开发方向'}</small>
             </article>
           </div>
         )}
@@ -1285,8 +1282,8 @@ function LegacyIdeaFlowBoard({
   const [replyContent, setReplyContent] = useState('');
   const [discussionSynthesis, setDiscussionSynthesis] = useState<CommunitySynthesis | null>(null);
   const [focusedNode, setFocusedNode] = useState('');
-  const canParticipate = Boolean(state.viewer && state.viewer.role !== 'host' && state.study.status !== 'closed');
-  const creativeToolsAvailable = canUseCreativeTools(state) && state.study.status !== 'closed';
+  const canParticipate = Boolean(state.viewer && state.viewer.role !== 'host' && state.study.status === 'active');
+  const creativeToolsAvailable = canUseCreativeTools(state) && state.study.status === 'active';
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const targetSyntheses = state.syntheses
     .filter((synthesis) => synthesis.target_app_id === app.id)
@@ -1507,7 +1504,7 @@ function LegacyIdeaFlowBoard({
     <section className="async-flow-section">
       <header className="async-flow-heading">
         <div>
-          <span className="async-eyebrow">VISIBLE CREATIVE EVOLUTION</span>
+          <span className="async-eyebrow">可视化创意演化</span>
           <h2>创意演化画布</h2>
           <p>位置由系统自动排列。被采用的评论置顶，连线显示它们如何进入综合方向；向右代表继续综合。</p>
         </div>
@@ -1616,9 +1613,9 @@ function LegacyIdeaFlowBoard({
                     {node.kind === 'comment'
                       ? node.comment?.target_type === 'synthesis' ? '综合下的讨论' : '普通评论'
                       : node.kind === 'external-comment'
-                        ? '跨 App 收藏夹素材'
+                        ? '跨应用收藏夹素材'
                         : node.kind === 'external-synthesis'
-                          ? '跨 App 综合'
+                          ? '跨应用综合'
                           : `第 ${node.column} 层综合`}
                   </span>
                   <small>{node.author} · {formatDate(node.createdAt)}</small>
@@ -1631,7 +1628,7 @@ function LegacyIdeaFlowBoard({
                     {node.used && <span className="async-flow-used"><GitBranch /> 已采用 · {relatedEdges} 条线</span>}
                     {selectedIterations.map((iteration) => (
                       <span className="async-flow-selected" key={iteration}>
-                        <Check /> Community V{iteration} 已采用
+                        <Check /> 社区版本 {iteration} 已采用
                       </span>
                     ))}
                     {draftSynthesisId === node.sourceId && (
@@ -1684,15 +1681,15 @@ function LegacyIdeaFlowBoard({
 
       <footer className="async-flow-legend">
         <span><i className="is-comment" /> 普通评论</span>
-        <span><i className="is-external" /> 跨 App 收藏夹素材</span>
+        <span><i className="is-external" /> 跨应用收藏夹素材</span>
         <span><i className="is-synthesis" /> 综合评论</span>
-        <span><i className="is-selected" /> Creator 选择开发</span>
+        <span><i className="is-selected" /> 创作者选择开发</span>
       </footer>
 
       {replyingTo && (
         <div className="async-overlay" role="dialog" aria-modal="true" aria-label="回复评论">
           <section className="async-flow-reply-dialog">
-            <header><div><span className="async-eyebrow">REPLY TO IDEA</span><h2>回复 {replyingTo.author_code}</h2></div><button onClick={() => setReplyingTo(null)}><X /></button></header>
+            <header><div><span className="async-eyebrow">回复想法</span><h2>回复 {replyingTo.author_code}</h2></div><button onClick={() => setReplyingTo(null)}><X /></button></header>
             <blockquote>{replyingTo.content}</blockquote>
             <textarea value={replyContent} onChange={(event) => setReplyContent(event.target.value)} rows={4} placeholder="继续补充、追问或发展这个想法…" />
             <button className="async-primary" disabled={!replyContent.trim() || Boolean(busy)} onClick={submitReply}><Send /> 发布回复</button>
@@ -1704,7 +1701,7 @@ function LegacyIdeaFlowBoard({
         <div className="async-overlay" role="dialog" aria-modal="true" aria-label="综合评论讨论">
           <aside className="async-side-drawer async-flow-discussion-drawer">
             <header>
-              <div><span className="async-eyebrow">DISCUSS THIS DIRECTION</span><h2>{discussionSynthesis.title}</h2></div>
+              <div><span className="async-eyebrow">讨论这个方向</span><h2>{discussionSynthesis.title}</h2></div>
               <button onClick={() => setDiscussionSynthesis(null)}><X /></button>
             </header>
             <p className="async-drawer-intro">{discussionSynthesis.content}</p>
@@ -1753,14 +1750,6 @@ type PositionedStagedFlowNode = StagedFlowNode & {
   y: number;
 };
 
-type DevelopmentCandidate = {
-  sourceType: CommunitySourceType;
-  sourceId: number;
-  title: string;
-  content: string;
-  author: string;
-};
-
 function IdeaFlowBoard({
   state,
   app,
@@ -1769,7 +1758,6 @@ function IdeaFlowBoard({
   busy,
   openBasket,
   viewSources,
-  generate,
 }: {
   state: CommunityGalleryState;
   app: CommunityApp;
@@ -1778,7 +1766,6 @@ function IdeaFlowBoard({
   busy: string;
   openBasket: () => void;
   viewSources: (synthesis: CommunitySynthesis) => void;
-  generate: (candidate: DevelopmentCandidate) => void;
 }) {
   const [commentContent, setCommentContent] = useState('');
   const [commentComposerOpen, setCommentComposerOpen] = useState(false);
@@ -1791,10 +1778,10 @@ function IdeaFlowBoard({
   const [discussionSynthesis, setDiscussionSynthesis] = useState<CommunitySynthesis | null>(null);
   const [focusedNode, setFocusedNode] = useState('');
   const [selectionLayer, setSelectionLayer] = useState<1 | 2 | null>(null);
+  const [developmentSelectionIteration, setDevelopmentSelectionIteration] = useState<1 | 2 | null>(null);
+  const [wildcardSelectionActive, setWildcardSelectionActive] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [departingKeys, setDepartingKeys] = useState<string[]>([]);
-  const [returningKey, setReturningKey] = useState('');
-  const [sourcesConfirmed, setSourcesConfirmed] = useState(false);
   const [synthesisPrompt, setSynthesisPrompt] = useState('');
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [likedBurstKeys, playLikedBurst] = useTimedBurst();
@@ -1805,7 +1792,7 @@ function IdeaFlowBoard({
     selectionAnimationTimers.current.forEach((timer) => window.clearTimeout(timer));
   }, []);
   useEffect(() => {
-    if (!selectionLayer) return;
+    if (!selectionLayer && !developmentSelectionIteration) return;
     const frame = window.requestAnimationFrame(() => {
       synthesisBasketRef.current?.scrollIntoView({
         behavior: 'smooth',
@@ -1813,7 +1800,7 @@ function IdeaFlowBoard({
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [selectionLayer]);
+  }, [selectionLayer, developmentSelectionIteration]);
 
   const sourceKey = (type: CommunitySourceType, id: number) => `${type}:${id}`;
   const expandedKeySet = new Set(expandedKeys);
@@ -1821,18 +1808,24 @@ function IdeaFlowBoard({
     content.length > 46 || content.split(/\r?\n/).length > 2
   );
   const canParticipate = Boolean(
-    state.viewer && state.viewer.role !== 'host' && state.study.status !== 'closed',
+    state.viewer && state.viewer.role !== 'host' && state.study.status === 'active',
   );
   const creativeToolsAvailable = canUseCreativeTools(state) && state.study.status === 'active';
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const completedIterations = Number(app.community_version_count || 0);
-  const openLayer: 1 | 2 | null = state.study.workflow_stage === 'synthesis_1'
+  const openLayer: 1 | 2 | null = completedIterations === 0
     ? 1
-    : state.study.workflow_stage === 'development_1' && completedIterations >= 1
+    : completedIterations === 1
       ? 2
       : null;
-  const showSecondLayer = completedIterations >= 1
-    || state.study.workflow_stage === 'development_2';
+  const showSecondLayer = completedIterations >= 1;
+  const developmentBaseVersionId = completedIterations === 0
+    ? Number(app.initial_version_id)
+    : Number(state.versions.find((version) => (
+        version.app_id === app.id
+        && version.kind === 'community'
+        && Number(version.version_number) === 2
+      ))?.id || 0);
 
   const targetSyntheses = state.syntheses
     .filter((synthesis) => synthesis.target_app_id === app.id)
@@ -1841,6 +1834,7 @@ function IdeaFlowBoard({
     openLayer && targetSyntheses.some((synthesis) => (
       Number(synthesis.layer) === Number(openLayer)
       && synthesis.author_code === state.viewer?.code
+      && !synthesis.is_development_brief
     )),
   );
   const targetSynthesisIds = new Set(targetSyntheses.map((synthesis) => Number(synthesis.id)));
@@ -1867,6 +1861,11 @@ function IdeaFlowBoard({
   childrenByParent.forEach((children) => children.sort(
     (left, right) => Date.parse(left.created_at) - Date.parse(right.created_at),
   ));
+  const wildcardSourceIds = new Set(
+    state.wildcards
+      .filter((wildcard) => wildcard.app_id === app.id)
+      .map((wildcard) => Number(wildcard.source_id)),
+  );
 
   const commentNode = (
     comment: CommunityComment,
@@ -1876,6 +1875,7 @@ function IdeaFlowBoard({
     const key = sourceKey('comment', comment.id);
     const expandable = isLongContent(comment.content);
     const expanded = expandable && expandedKeySet.has(key);
+    const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id)) ? 48 : 0;
     return {
       key,
       kind,
@@ -1896,8 +1896,8 @@ function IdeaFlowBoard({
       expandable,
       width: kind === 'reply' ? FLOW_NODE_WIDTH - 18 : FLOW_NODE_WIDTH,
       height: kind === 'reply'
-        ? (expanded ? 190 : expandable ? 146 : 112)
-        : (expanded ? 224 : expandable ? 178 : FLOW_NODE_HEIGHT),
+        ? (expanded ? 190 : expandable ? 146 : 112) + wildcardExtraHeight
+        : (expanded ? 224 : expandable ? 178 : FLOW_NODE_HEIGHT) + wildcardExtraHeight,
       indent: kind === 'reply' ? 18 : 0,
       comment,
     };
@@ -2068,11 +2068,12 @@ function IdeaFlowBoard({
     };
   });
 
+  const selectionActive = Boolean(selectionLayer || developmentSelectionIteration || wildcardSelectionActive);
   const selectedKeySet = new Set(selectedKeys);
   const departingKeySet = new Set(departingKeys);
   const allFlowNodes = [...sourceNodes, ...synthesisNodes];
   const visibleDuringSelection = (node: StagedFlowNode) => (
-    !selectionLayer || !selectedKeySet.has(node.key) || departingKeySet.has(node.key)
+    !selectionActive || !selectedKeySet.has(node.key) || departingKeySet.has(node.key)
   );
   const columns = [
     {
@@ -2082,7 +2083,9 @@ function IdeaFlowBoard({
     {
       column: 1 as const,
       nodes: allFlowNodes.filter((node) => node.column === 1 && visibleDuringSelection(node)).sort((left, right) => (
-        Number(Boolean(right.synthesis?.selected_for_iteration))
+        Number(Boolean(right.synthesis?.is_development_brief))
+        - Number(Boolean(left.synthesis?.is_development_brief))
+        || Number(Boolean(right.synthesis?.selected_for_iteration))
         - Number(Boolean(left.synthesis?.selected_for_iteration))
         || Number(right.synthesis?.vote_count || 0)
         - Number(left.synthesis?.vote_count || 0)
@@ -2098,7 +2101,9 @@ function IdeaFlowBoard({
           {
             column: 3 as const,
             nodes: synthesisNodes.filter((node) => node.column === 3 && visibleDuringSelection(node)).sort((left, right) => (
-              Number(Boolean(right.synthesis?.selected_for_iteration))
+              Number(Boolean(right.synthesis?.is_development_brief))
+              - Number(Boolean(left.synthesis?.is_development_brief))
+              || Number(Boolean(right.synthesis?.selected_for_iteration))
               - Number(Boolean(left.synthesis?.selected_for_iteration))
               || Number(right.synthesis?.vote_count || 0)
               - Number(left.synthesis?.vote_count || 0)
@@ -2156,7 +2161,7 @@ function IdeaFlowBoard({
     ? Math.max(...currentCommentColumnNodes.map((node) => node.y + node.height)) + 20
     : FLOW_START_Y;
   const currentCommentEntryHeight = commentComposerOpen ? 230 : 164;
-  const showCommentEntry = canParticipate && !selectionLayer;
+  const showCommentEntry = canParticipate && !isOwner && !selectionActive;
   const canvasHeight = Math.max(
     440,
     showCommentEntry ? currentCommentEntryTop + currentCommentEntryHeight + 36 : 0,
@@ -2169,16 +2174,46 @@ function IdeaFlowBoard({
 
   const eligibleForLayer = (node: StagedFlowNode, layer: 1 | 2) => {
     if (node.comment?.deleted_at || node.synthesis?.deleted_at) return false;
+    if (node.synthesis?.is_development_brief) return false;
     if (layer === 1) return node.sourceType === 'comment';
     if (node.sourceType === 'comment') return true;
     return node.synthesis?.layer === 1;
   };
+  const eligibleForDevelopment = (node: StagedFlowNode) => {
+    if (!developmentSelectionIteration || node.appId !== app.id) return false;
+    if (node.comment?.deleted_at || node.synthesis?.deleted_at || node.synthesis?.is_development_brief) return false;
+    if (node.sourceType === 'comment') {
+      return Number(node.comment?.version_id || 0) === developmentBaseVersionId;
+    }
+    return Number(node.synthesis?.layer || 0) === developmentSelectionIteration
+      && Number(node.synthesis?.target_version_id || 0) === developmentBaseVersionId;
+  };
+  const eligibleForWildcard = (node: StagedFlowNode) => (
+    wildcardSelectionActive
+    && node.appId === app.id
+    && node.sourceType === 'comment'
+    && node.comment?.target_type === 'app'
+    && !node.comment.deleted_at
+    && Number(node.comment.version_id || 0) === developmentBaseVersionId
+  );
   const scheduleSelectionAnimation = (callback: () => void, delay: number) => {
     const timer = window.setTimeout(callback, delay);
     selectionAnimationTimers.current.push(timer);
   };
   const selectSource = (node: StagedFlowNode) => {
-    if (!selectionLayer || sourcesConfirmed || !eligibleForLayer(node, selectionLayer)) return;
+    if (wildcardSelectionActive) {
+      if (!eligibleForWildcard(node)) return;
+      void action(`use-wildcard-${node.sourceId}`, async () => {
+        const next = await communityGalleryApi.useWildcard(clientId, app.id, node.sourceId);
+        setWildcardSelectionActive(false);
+        return next;
+      });
+      return;
+    }
+    const eligible = selectionLayer
+      ? eligibleForLayer(node, selectionLayer)
+      : eligibleForDevelopment(node);
+    if (!eligible) return;
     if (selectedKeySet.has(node.key)) return;
     setSelectedKeys((current) => {
       if (current.includes(node.key)) return current;
@@ -2187,23 +2222,19 @@ function IdeaFlowBoard({
     setDepartingKeys((current) => (
       current.includes(node.key) ? current : [...current, node.key]
     ));
+    const sourceContent = node.content.trim();
+    if (sourceContent) {
+      setSynthesisPrompt((current) => (
+        current.trim() ? `${current.trim()}\n\n${sourceContent}` : sourceContent
+      ));
+    }
     scheduleSelectionAnimation(() => {
       setDepartingKeys((current) => current.filter((key) => key !== node.key));
     }, 620);
   };
-  const returnSource = (key: string) => {
-    if (sourcesConfirmed) return;
-    setSelectedKeys((current) => current.filter((item) => item !== key));
-    setDepartingKeys((current) => current.filter((item) => item !== key));
-    setReturningKey(key);
-    scheduleSelectionAnimation(() => {
-      setReturningKey((current) => current === key ? '' : current);
-    }, 520);
-  };
   const selectedNodes = selectedKeys
     .map((key) => allFlowNodes.find((node) => node.key === key))
     .filter(Boolean) as StagedFlowNode[];
-  const canConfirmSources = selectedNodes.length >= 1;
   const toggleExpanded = (key: string) => {
     setExpandedKeys((current) => (
       current.includes(key)
@@ -2212,30 +2243,32 @@ function IdeaFlowBoard({
     ));
   };
   const startSelection = (layer: 1 | 2) => {
-    if (viewerHasSubmittedCurrentSynthesis) return;
+    if (isOwner || viewerHasSubmittedCurrentSynthesis) return;
     setCommentComposerOpen(false);
+    setWildcardSelectionActive(false);
+    setDevelopmentSelectionIteration(null);
     setSelectionLayer(layer);
     setSelectedKeys([]);
     setDepartingKeys([]);
-    setReturningKey('');
-    setSourcesConfirmed(false);
+    setSynthesisPrompt('');
+  };
+  const startDevelopmentSelection = () => {
+    if (!openLayer) return;
+    setCommentComposerOpen(false);
+    setWildcardSelectionActive(false);
+    setSelectionLayer(null);
+    setDevelopmentSelectionIteration(openLayer);
+    setSelectedKeys([]);
+    setDepartingKeys([]);
     setSynthesisPrompt('');
   };
   const cancelSelection = () => {
     setSelectionLayer(null);
+    setDevelopmentSelectionIteration(null);
     setSelectedKeys([]);
     setDepartingKeys([]);
-    setReturningKey('');
-    setSourcesConfirmed(false);
     setSynthesisPrompt('');
-  };
-  const confirmSelectedSources = () => {
-    if (!selectedNodes.length) return;
-    setSynthesisPrompt(selectedNodes
-      .map((node) => node.content.trim())
-      .filter(Boolean)
-      .join('\n\n'));
-    setSourcesConfirmed(true);
+    setWildcardSelectionActive(false);
   };
   const publishSynthesis = async () => {
     if (!selectionLayer) return;
@@ -2255,6 +2288,20 @@ function IdeaFlowBoard({
       return next;
     });
   };
+  const generateSelectedDevelopment = async () => {
+    if (!developmentSelectionIteration) return;
+    await action(`generate-community-${developmentSelectionIteration}`, async () => {
+      const next = await communityGalleryApi.generateCommunity(
+        clientId,
+        app.id,
+        selectedNodes.map((node) => ({ type: node.sourceType, id: node.sourceId })),
+        synthesisPrompt,
+        developmentBaseVersionId,
+      );
+      cancelSelection();
+      return next;
+    });
+  };
 
   const hasRunningGeneration = state.generationJobs.some(
     (job) => job.app_id === app.id && job.status === 'running',
@@ -2262,16 +2309,35 @@ function IdeaFlowBoard({
   const hasActiveDraft = app.draft_kind === 'community'
     && Number(app.draft_iteration_number || 0) > completedIterations
     && Boolean(app.draft_code);
-  const stageSelection = state.stageSelections.find(
-    (selection) => selection.app_id === app.id
-      && Number(selection.iteration_number) === completedIterations + 1,
-  );
   const canStartDevelopment = isOwner
-    && Boolean(stageSelection)
-    && state.study.workflow_stage === `development_${completedIterations + 1}`
     && completedIterations < 2
     && !hasRunningGeneration
     && !hasActiveDraft;
+  const hasSelectableDevelopmentSource = state.comments.some((comment) => (
+    comment.app_id === app.id
+    && !comment.deleted_at
+    && Number(comment.version_id) === developmentBaseVersionId
+  )) || state.syntheses.some((synthesis) => (
+    synthesis.target_app_id === app.id
+    && !synthesis.deleted_at
+    && !synthesis.is_development_brief
+    && Number(synthesis.layer) === completedIterations + 1
+    && Number(synthesis.target_version_id || 0) === developmentBaseVersionId
+  ));
+  const ownWildcard = state.wildcards.find((wildcard) => (
+    wildcard.creator_code === state.viewer?.code
+  ));
+  const wildcardStageIsOpen = openLayer === 1
+    ? state.study.workflow_stage === 'synthesis_1'
+    : openLayer === 2
+      ? state.study.workflow_stage === 'development_1'
+      : false;
+  const canUseWildcard = isOwner
+    && app.condition_name === 'experimental'
+    && Boolean(openLayer)
+    && !ownWildcard
+    && wildcardStageIsOpen
+    && !selectionActive;
 
   const submitComment = async () => {
     await action('flow-comment', async () => {
@@ -2365,17 +2431,37 @@ function IdeaFlowBoard({
     });
   };
   const stop = (event: React.MouseEvent) => event.stopPropagation();
+  const activeSelectionIteration = selectionLayer || developmentSelectionIteration;
+  const isDevelopmentSelection = Boolean(developmentSelectionIteration);
 
   return (
     <section className="async-flow-section">
       <header className="async-flow-heading">
         <div>
-          <span className="async-eyebrow">STAGED COLLECTIVE CREATION</span>
+          <span className="async-eyebrow">分阶段集体创作</span>
           <h2>创意演化画布</h2>
-          <p>普通评论和综合评论都可以随时点赞或取消赞；Host 启动开发时，系统先选择点赞数最高者，同赞时优先来源更多的综合评论，仍同分则随机选择。</p>
+          <p>普通评论和综合评论都可以随时点赞或取消赞；主持人锁定本轮点赞后，会按点赞数加权随机抽取并立即启动开发。</p>
         </div>
         <div className="async-flow-heading-actions">
           <span><Workflow /> {edges.length} 条采用连线</span>
+          {canUseWildcard && (
+            <button
+              className="async-primary async-development-start"
+              disabled={Boolean(busy)}
+              title="使用一次性万能卡，指定一条当前版本的普通评论进入本轮开发"
+              onClick={() => {
+                setCommentComposerOpen(false);
+                setSelectionLayer(null);
+                setDevelopmentSelectionIteration(null);
+                setSelectedKeys([]);
+                setDepartingKeys([]);
+                setWildcardSelectionActive(true);
+              }}
+            ><Sparkles /> 使用万能卡</button>
+          )}
+          {isOwner && ownWildcard && (
+            <span className="async-wildcard-status"><Check /> 万能卡已用于第 {ownWildcard.iteration_number} 轮</span>
+          )}
           {canParticipate && (
             <button onClick={openBasket}>
               <ShoppingBasket /> 收藏夹 <strong>{state.basket.length}</strong>
@@ -2385,6 +2471,13 @@ function IdeaFlowBoard({
       </header>
 
       <VersionLineage state={state} app={app} />
+
+      {wildcardSelectionActive && (
+        <div className="async-wildcard-picker-note">
+          <span><Sparkles /> 点击当前版本的一条普通评论，使用万能卡保证它进入本轮开发。</span>
+          <button onClick={() => setWildcardSelectionActive(false)}><X /> 取消</button>
+        </div>
+      )}
 
       <div className="async-flow-scroll">
         <div className="async-flow-canvas" style={{ width: canvasWidth, height: canvasHeight }}>
@@ -2422,15 +2515,15 @@ function IdeaFlowBoard({
                           ? '第二轮评论与采用来源'
                           : '第二次综合'}</strong>
                     <small>{column === 0
-                      ? selectionLayer === 1
+                      ? selectionLayer === 1 || developmentSelectionIteration === 1
                         ? '可选择 Initial 评论及收藏夹来源'
-                        : 'Initial Version 下产生的评论与第一轮外部来源'
+                        : '初始版本下产生的评论与第一轮外部来源'
                       : column === 1
                         ? `${nodes.length} 个第一次综合评论 · 按点赞数排序`
                         : column === 2
-                          ? selectionLayer === 2
-                            ? 'V1 新评论及本轮收藏夹来源，可与前两列共同选用'
-                            : 'Community V1 下产生的新评论与第二轮外部来源'
+                          ? selectionLayer === 2 || developmentSelectionIteration === 2
+                            ? '社区版本 1 的新评论及本轮收藏夹来源，可与前两列共同选用'
+                            : '社区版本 1 下产生的新评论与第二轮外部来源'
                           : `${nodes.length} 个第二次综合评论 · 按点赞数排序`}</small>
                   </div>
                 </div>
@@ -2444,8 +2537,8 @@ function IdeaFlowBoard({
                         <span><MessageCircle /></span>
                         <div>
                           <strong>{completedIterations >= 1
-                            ? '针对 Community V1 提出普通评论'
-                            : '针对 Initial Version 提出普通评论'}</strong>
+                            ? '针对社区版本 1 提出普通评论'
+                            : '针对初始版本提出普通评论'}</strong>
                           <small>发布后会成为本列中的一张普通评论卡片</small>
                         </div>
                         <button
@@ -2481,14 +2574,14 @@ function IdeaFlowBoard({
                     >
                       <MessageCircle />
                       <strong>{completedIterations >= 1
-                        ? '针对 Community V1 提出普通评论'
-                        : '针对 Initial Version 提出普通评论'}</strong>
+                        ? '针对社区版本 1 提出普通评论'
+                        : '针对初始版本提出普通评论'}</strong>
                       <span>分享体验、建议、技术细节或新的使用场景。</span>
                       <em><span>开始输入</span> <ArrowRight /></em>
                     </button>
                   )
                 )}
-                {layerIsOpen && !selectionLayer && (
+                {layerIsOpen && !selectionActive && !isOwner && (
                   <button
                     className="async-flow-next-step is-stage-action"
                     style={{ left: x, top: nodes.length
@@ -2502,7 +2595,7 @@ function IdeaFlowBoard({
                       ? `你已提交第 ${layer} 次综合评论`
                       : `创建第 ${layer} 次综合评论`}</strong>
                     <span>{viewerHasSubmittedCurrentSynthesis
-                      ? '每个人在当前 App 的本轮只能提交一条；你仍可给其他综合评论点赞。'
+                      ? '每个人在当前应用的本轮只能提交一条；你仍可给其他综合评论点赞。'
                       : layer === 1
                         ? '可以选择一条或任意多条普通评论、回复和收藏夹评论。'
                         : '可以从前三列选择一条或任意多条评论、第一次综合。'}</span>
@@ -2517,9 +2610,14 @@ function IdeaFlowBoard({
 
           {positionedNodes.map((node) => {
             const selectable = Boolean(
-              selectionLayer && !sourcesConfirmed && eligibleForLayer(node, selectionLayer),
+              eligibleForWildcard(node)
+              || (selectionLayer && eligibleForLayer(node, selectionLayer))
+              || (!selectionLayer && developmentSelectionIteration && eligibleForDevelopment(node)),
             );
             const sourceSelected = selectedKeySet.has(node.key);
+            const selectedByWildcard = node.sourceType === 'comment' && state.wildcards.some((wildcard) => (
+              wildcard.app_id === app.id && Number(wildcard.source_id) === node.sourceId
+            ));
             const contentExpanded = expandedKeySet.has(node.key);
             const outgoingSynthesisCount = edges.filter(
               (edge) => edge.source.key === node.key,
@@ -2531,15 +2629,9 @@ function IdeaFlowBoard({
             const canLikeComment = node.comment
               && !node.comment.deleted_at
               && canParticipate;
-            const selectedForIteration = Number(
-              node.comment?.selected_for_iteration
-              || node.synthesis?.selected_for_iteration
-              || 0,
-            );
-            const isCurrentWinner = stageSelection?.source_type === node.sourceType
-              && Number(stageSelection.source_id) === node.sourceId;
             const canLikeSynthesis = Boolean(
               node.synthesis
+              && !node.synthesis.is_development_brief
               && node.synthesis.viewer_vote_available
               && canParticipate,
             );
@@ -2553,14 +2645,14 @@ function IdeaFlowBoard({
                   'async-flow-node',
                   `is-${node.kind}`,
                   node.used ? 'is-used' : '',
+                  node.synthesis?.is_development_brief ? 'is-creator-development-brief' : '',
                   selectable ? 'is-selectable-source' : '',
                   sourceSelected ? 'is-source-selected' : '',
+                  selectedByWildcard ? 'is-wildcard-selected' : '',
                   departingKeySet.has(node.key) ? 'is-source-departing' : '',
-                  returningKey === node.key ? 'is-source-returning' : '',
                   node.expandable ? 'has-expandable-content' : '',
                   contentExpanded ? 'is-content-expanded' : '',
                   node.comment?.deleted_at || node.synthesis?.deleted_at ? 'is-deleted' : '',
-                  selectedForIteration ? 'is-selected-for-build' : '',
                   focusedNode && focusedNode !== node.key ? 'is-dimmed' : '',
                 ].filter(Boolean).join(' ')}
                 style={{ left: node.x, top: node.y, width: node.width, height: node.height }}
@@ -2580,14 +2672,16 @@ function IdeaFlowBoard({
                     {(node.kind === 'comment' || node.kind === 'reply') && <MessageCircle />}
                     {node.kind === 'external-comment' && <ShoppingBasket />}
                     {(node.kind === 'external-synthesis' || node.kind === 'synthesis') && <GitMerge />}
-                    {node.kind === 'comment'
+                    {node.synthesis?.is_development_brief
+                      ? '创作者开发方向'
+                      : node.kind === 'comment'
                       ? '普通评论'
                       : node.kind === 'reply'
                         ? '回复'
                         : node.kind === 'external-comment'
-                          ? '跨 App 收藏夹评论'
+                          ? '跨应用收藏夹评论'
                           : node.kind === 'external-synthesis'
-                            ? '跨 App 第一次综合'
+                            ? '跨应用第一次综合'
                             : `第 ${node.synthesis?.layer} 次综合评论`}
                   </span>
                   <small>
@@ -2605,6 +2699,15 @@ function IdeaFlowBoard({
                 {likedBurstKeys.includes(node.key) && <CommentFeedbackBurst kind="like" />}
                 {departingKeySet.has(node.key) && <CommentFeedbackBurst kind="synthesis" />}
                 {sourceSelected && <span className="async-source-selected-badge"><Heart fill="currentColor" /> 已放入综合篮</span>}
+                {wildcardSelectionActive && eligibleForWildcard(node) && (
+                  <span className="async-source-selected-badge is-wildcard"><Sparkles /> 可用万能卡指定</span>
+                )}
+                {selectedByWildcard && (
+                  <div className="async-wildcard-card-note">
+                    <Sparkles />
+                    <span>创作者很喜欢这个想法，使用了万能卡将它纳入开发。</span>
+                  </div>
+                )}
                 {node.appTitle !== app.title && <div className="async-flow-app-chip">{node.appTitle}</div>}
                 {node.title && node.kind !== 'reply' && <h3>{node.title}</h3>}
                 <p>{node.content}</p>
@@ -2643,17 +2746,12 @@ function IdeaFlowBoard({
                   <div>
                     {node.synthesis && synthesisIdeaCount > 0 && (
                       <span className="async-flow-used">
-                        <Lightbulb /> 综合了 {synthesisIdeaCount} 个 idea
+                        <Lightbulb /> 综合了 {synthesisIdeaCount} 个想法
                       </span>
                     )}
                     {!node.synthesis && node.used && outgoingSynthesisCount > 0 && (
                       <span className="async-flow-used">
                         <GitBranch /> 被综合 {outgoingSynthesisCount} 次
-                      </span>
-                    )}
-                    {selectedForIteration > 0 && (
-                      <span className="async-flow-selected">
-                        <Check /> 第 {selectedForIteration} 次开发入选
                       </span>
                     )}
                   </div>
@@ -2687,7 +2785,7 @@ function IdeaFlowBoard({
                             ));
                           }}
                         ><Heart fill={node.comment.viewer_liked ? 'currentColor' : 'none'} /> {node.comment.like_count}</button>
-                        {node.comment.app_id === app.id && (
+                        {node.comment.app_id === app.id && !isOwner && (
                           <button
                             disabled={!canParticipate}
                             onClick={(event) => {
@@ -2701,6 +2799,7 @@ function IdeaFlowBoard({
                     {node.synthesis && (
                       <>
                         {!node.synthesis.deleted_at
+                          && !node.synthesis.is_development_brief
                           && node.synthesis.author_code === state.viewer?.code
                           && canParticipate && (
                           <>
@@ -2719,10 +2818,10 @@ function IdeaFlowBoard({
                           </>
                         )}
                         <button onClick={(event) => { stop(event); viewSources(node.synthesis!); }}><Link2 /> 来源</button>
-                        {node.kind === 'synthesis' && !node.synthesis.deleted_at && (
+                        {node.kind === 'synthesis' && !node.synthesis.deleted_at && !node.synthesis.is_development_brief && (
                           <button onClick={(event) => { stop(event); setDiscussionSynthesis(node.synthesis!); }}><MessageCircle /> 讨论</button>
                         )}
-                        {!node.synthesis.deleted_at && (
+                        {!node.synthesis.deleted_at && !node.synthesis.is_development_brief && (
                           <button
                             className={node.synthesis.viewer_voted ? 'is-liked' : ''}
                             disabled={!canLikeSynthesis || Boolean(busy)}
@@ -2750,23 +2849,6 @@ function IdeaFlowBoard({
                         }}
                       ><ShoppingBasket /> {node.inBasket ? '已收藏' : '收藏'}</button>
                     )}
-                    {isCurrentWinner && canStartDevelopment && (
-                      <button
-                        className="is-build"
-                        onClick={(event) => {
-                          stop(event);
-                          generate({
-                            sourceType: node.sourceType,
-                            sourceId: node.sourceId,
-                            title: stageSelection?.source_title
-                              || node.title
-                              || `普通评论 · ${node.author}`,
-                            content: stageSelection?.source_content || node.content,
-                            author: stageSelection?.source_author_code || node.author,
-                          });
-                        }}
-                      ><Sparkles /> 按入选提示词开发</button>
-                    )}
                   </div>
                 </footer>
               </article>
@@ -2775,113 +2857,75 @@ function IdeaFlowBoard({
 
           {sourceNodes.length === 0 && !showCommentEntry && (
             <div className="async-flow-empty-source" style={{ left: FLOW_START_X, top: FLOW_START_Y }}>
-              <MessageCircle /><strong>还没有普通评论</strong><span>发布第一个想法后，节点会出现在这里。</span>
+              <MessageCircle />
+              <strong>{state.study.status === 'setup' ? '等待主持人开始' : '还没有普通评论'}</strong>
+              <span>{state.study.status === 'setup'
+                ? '主持人点击开始后，大家才能在应用中发表评论。'
+                : '发布第一个想法后，节点会出现在这里。'}</span>
             </div>
           )}
         </div>
       </div>
 
-      {selectionLayer && (
+      {activeSelectionIteration && (
         <section ref={synthesisBasketRef} className="async-synthesis-basket-workbench">
           <header>
             <div>
-              <span>第 {selectionLayer} 次综合 · 本次综合篮</span>
-              <strong>{sourcesConfirmed ? '理解这些想法，并重新写成你的综合提示词' : '点击画布中的评论，把想法放进篮子'}</strong>
+              <span>{isDevelopmentSelection
+                ? `第 ${activeSelectionIteration} 次开发 · 直接添加评论`
+                : `第 ${activeSelectionIteration} 次综合 · 直接添加评论`}</span>
+              <strong>{isDevelopmentSelection
+                ? '点击一条评论，立即追加到下方开发提示词'
+                : '点击一条评论，立即追加到下方融合的评论'}</strong>
               <small>
-                {sourcesConfirmed
-                  ? '已确认来源；如需增删评论，请先返回修改选择'
-                  : '可以只选择一条，也可以选择任意多条；点击篮中卡片即可放回'}
+                {isDevelopmentSelection
+                  ? '可添加当前版本的评论或本轮综合评论，包括你自己的内容；可继续点击更多评论，按点击顺序追加。'
+                  : '每次点击一条评论，其内容会立即追加到下方；可继续点击更多评论，按点击顺序追加。'}
               </small>
             </div>
-            <button className="async-secondary" onClick={cancelSelection}><X /> 取消综合</button>
+            <button className="async-secondary" onClick={cancelSelection}><X /> {isDevelopmentSelection ? '取消开发选择' : '取消综合'}</button>
           </header>
 
-          <div className="async-synthesis-basket-body">
-            <div className="async-synthesis-basket-mark" aria-hidden="true">
-              <ShoppingBasket />
-              <span>{selectedNodes.length}<small>条</small></span>
-            </div>
-            <div className="async-synthesis-basket-slots">
-              {selectedNodes.length === 0 ? (
-                <div className="async-synthesis-basket-empty">
-                  <Heart />
-                  <span>点击画布中的评论开始选择</span>
-                </div>
-              ) : selectedNodes.map((node) => (
-                  <button
-                    className={[
-                      'async-synthesis-basket-card',
-                      departingKeySet.has(node.key) ? 'is-just-added' : '',
-                      sourcesConfirmed ? 'is-locked' : '',
-                    ].filter(Boolean).join(' ')}
-                    key={node.key}
-                    title={sourcesConfirmed ? '返回修改选择后可以移除' : '点击放回画布并取消选择'}
-                    onClick={() => returnSource(node.key)}
-                  >
-                    <span className="async-synthesis-basket-card-idea">
-                      <Lightbulb strokeWidth={2.5} />
-                    </span>
-                    <small>{node.author} · {node.appTitle}</small>
-                    <strong>{node.title || (node.kind === 'reply' ? '回复' : '普通评论')}</strong>
-                    <p>{node.content}</p>
-                    <em>{sourcesConfirmed ? <><Lock /> 来源已确认</> : <><ArrowLeft /> 点击放回</>}</em>
-                  </button>
-              ))}
-            </div>
-          </div>
-
-          {!sourcesConfirmed ? (
-            <div className="async-synthesis-basket-confirm">
-              <span>{selectedNodes.length
-                ? `已选择 ${selectedNodes.length} 条评论，不设数量上限`
-                : '至少选择一条评论后继续'}</span>
+          <div className="async-synthesis-basket-prompt is-direct-entry">
+            <label>
+              <span>{isDevelopmentSelection ? '开发提示词' : '融合的评论'}</span>
+              <strong>{selectedNodes.length
+                ? `已加入 ${selectedNodes.length} 条评论。你仍可继续点击画布中的评论；每条内容会直接追加到此处。`
+                : '请先点击画布中的一条评论，它的内容会立即出现在这里。'}</strong>
+              <textarea
+                value={synthesisPrompt}
+                onChange={(event) => setSynthesisPrompt(event.target.value)}
+                rows={5}
+                placeholder={isDevelopmentSelection
+                  ? '点击画布中的评论后，在这里补充可以直接交给 AI 实现的开发提示词…'
+                  : '点击画布中的评论后，在这里继续编辑融合后的评论…'}
+              />
+            </label>
+            <div>
+              <small>每条评论只会加入一次，系统会保留完整贡献来源。</small>
               <button
                 className="async-primary"
-                disabled={!canConfirmSources}
-                onClick={confirmSelectedSources}
-              ><Check /> 确认选择</button>
+                disabled={!selectedNodes.length || !synthesisPrompt.trim() || Boolean(busy)}
+                onClick={isDevelopmentSelection ? generateSelectedDevelopment : publishSynthesis}
+              >{isDevelopmentSelection
+                ? <><Code2 /> {busy.startsWith('generate-community') ? 'AI 正在开发…' : `开始开发社区版本 ${activeSelectionIteration}`}</>
+                : <><GitMerge /> 发布综合评论</>}</button>
             </div>
-          ) : (
-            <div className="async-synthesis-basket-prompt">
-              <label>
-                <span>你的综合提示词</span>
-                <strong>
-                  您的提示词将展示在卡片上，后面所有人会通过点赞选择要开发的综合评论。
-                </strong>
-                <textarea
-                  value={synthesisPrompt}
-                  onChange={(event) => setSynthesisPrompt(event.target.value)}
-                  rows={5}
-                  placeholder="理解所选评论后，写出可以直接交给 vibe-coding AI 实现的完整提示词…"
-                />
-              </label>
-              <div>
-                <button
-                  className="async-secondary"
-                  onClick={() => setSourcesConfirmed(false)}
-                ><ArrowLeft /> 返回修改选择</button>
-                <button
-                  className="async-primary"
-                  disabled={!synthesisPrompt.trim() || Boolean(busy)}
-                  onClick={publishSynthesis}
-                ><GitMerge /> 发布综合评论</button>
-              </div>
-            </div>
-          )}
+          </div>
         </section>
       )}
 
       <footer className="async-flow-legend">
         <span><i className="is-comment" /> 普通评论与回复</span>
-        <span><i className="is-external" /> 跨 App 收藏夹素材</span>
+        <span><i className="is-external" /> 跨应用收藏夹素材</span>
         <span><i className="is-synthesis" /> 综合评论</span>
-        <span><i className="is-selected" /> Host 锁定开发</span>
+        <span><i className="is-selected" /> 创作者选择的开发方向</span>
       </footer>
 
       {replyingTo && (
         <div className="async-overlay" role="dialog" aria-modal="true" aria-label="回复评论">
           <section className="async-flow-reply-dialog">
-            <header><div><span className="async-eyebrow">REPLY TO IDEA</span><h2>回复 {replyingTo.author_code}</h2></div><button onClick={() => setReplyingTo(null)}><X /></button></header>
+            <header><div><span className="async-eyebrow">回复想法</span><h2>回复 {replyingTo.author_code}</h2></div><button onClick={() => setReplyingTo(null)}><X /></button></header>
             <blockquote>{replyingTo.content}</blockquote>
             <textarea value={replyContent} onChange={(event) => setReplyContent(event.target.value)} rows={4} placeholder="继续补充、追问或发展这个想法…" />
             <button className="async-primary" disabled={!replyContent.trim() || Boolean(busy)} onClick={submitReply}><Send /> 发布回复</button>
@@ -2893,7 +2937,7 @@ function IdeaFlowBoard({
         <div className="async-overlay" role="dialog" aria-modal="true" aria-label="编辑评论">
           <section className="async-flow-reply-dialog async-flow-edit-dialog">
             <header>
-              <div><span className="async-eyebrow">EDIT YOUR COMMENT</span><h2>编辑自己的评论</h2></div>
+              <div><span className="async-eyebrow">编辑评论</span><h2>编辑自己的评论</h2></div>
               <button onClick={() => setEditingFlowComment(null)}><X /></button>
             </header>
             <textarea
@@ -2926,7 +2970,7 @@ function IdeaFlowBoard({
         <div className="async-overlay" role="dialog" aria-modal="true" aria-label="编辑综合评论">
           <section className="async-flow-reply-dialog async-flow-edit-dialog">
             <header>
-              <div><span className="async-eyebrow">EDIT YOUR SYNTHESIS</span><h2>编辑自己的综合评论</h2></div>
+              <div><span className="async-eyebrow">编辑综合评论</span><h2>编辑自己的综合评论</h2></div>
               <button onClick={() => setEditingSynthesis(null)}><X /></button>
             </header>
             <p className="async-dialog-guidance">
@@ -2962,7 +3006,7 @@ function IdeaFlowBoard({
         <div className="async-overlay" role="dialog" aria-modal="true" aria-label="综合评论讨论">
           <aside className="async-side-drawer async-flow-discussion-drawer">
             <header>
-              <div><span className="async-eyebrow">DISCUSS THIS DIRECTION</span><h2>{discussionSynthesis.title}</h2></div>
+              <div><span className="async-eyebrow">讨论这个方向</span><h2>{discussionSynthesis.title}</h2></div>
               <button onClick={() => setDiscussionSynthesis(null)}><X /></button>
             </header>
             <p className="async-drawer-intro">{discussionSynthesis.content}</p>
@@ -3003,25 +3047,25 @@ function SynthesisCard({
   generate: () => void;
 }) {
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
-  const canGenerate = isOwner && !app.community_version_id && state.study.status !== 'closed';
+  const canGenerate = isOwner && !app.community_version_id && state.study.status === 'active';
   return (
     <article className="async-synthesis-card">
       <header><span><GitMerge /></span><div><strong>{synthesis.title}</strong><small>{synthesis.author_code} · {formatDate(synthesis.created_at)}</small></div></header>
       <p>{synthesis.content}</p>
       <div className="async-synthesis-meta">
         <span>{synthesis.source_count} 条素材</span>
-        <span>{synthesis.source_app_count} 个 App</span>
+        <span>{synthesis.source_app_count} 个应用</span>
         <span>{synthesis.contributor_count} 位贡献者</span>
       </div>
       <footer>
         <button onClick={viewSources}><Link2 /> 查看来源</button>
-        {canUseCreativeTools(state) && state.viewer?.role !== 'host' && state.study.status !== 'closed' && (
+        {canUseCreativeTools(state) && state.viewer?.role !== 'host' && state.study.status === 'active' && (
           <button
             className={synthesis.viewer_in_basket ? 'is-in-basket' : ''}
             onClick={() => action(`basket-synthesis-${synthesis.id}`, () => communityGalleryApi.toggleBasket(clientId, 'synthesis', synthesis.id))}
           ><ShoppingBasket /> {synthesis.viewer_in_basket ? '已收藏' : '收藏'}</button>
         )}
-        {canGenerate && <button className="is-generate" onClick={generate}><Sparkles /> 生成 Community Version</button>}
+        {canGenerate && <button className="is-generate" onClick={generate}><Sparkles /> 生成社区版本</button>}
       </footer>
       <details>
         <summary>继续讨论这条综合评论</summary>
@@ -3057,10 +3101,10 @@ function CreativeBasketDrawer({
     <div className="async-overlay" role="dialog" aria-modal="true" aria-label="收藏夹">
       <aside className="async-side-drawer async-basket-drawer">
         <header>
-          <div><span className="async-eyebrow">FAVORITES</span><h2>收藏夹 <em>{state.basket.length}</em></h2></div>
+          <div><span className="async-eyebrow">个人素材库</span><h2>收藏夹 <em>{state.basket.length}</em></h2></div>
           <button onClick={close}><X /></button>
         </header>
-        <p className="async-drawer-intro">这里是你的个人素材库。仅收藏的跨 App 内容平时不会占据画布；进入综合选材时才临时出现，被综合采用后才会作为正式来源节点保留。</p>
+        <p className="async-drawer-intro">这里是你的个人素材库。仅收藏的跨应用内容平时不会占据画布；进入综合选材时才临时出现，被综合采用后才会作为正式来源节点保留。</p>
         <div className="async-basket-items">
           {state.basket.map((item) => {
             const key = keyFor(item.source_type, item.source_id);
@@ -3116,30 +3160,15 @@ function CommunityDraftPanel({
   const baseVersionId = iterationNumber === 2
     ? Number(firstCommunityVersion?.id || 0)
     : Number(initialVersion?.id || app.initial_version_id);
-  const expectedStage = `development_${iterationNumber}`;
-  const stageIsOpen = state.study.workflow_stage === expectedStage;
-  const stageSelection = state.stageSelections.find(
-    (selection) => selection.app_id === app.id
-      && Number(selection.iteration_number) === iterationNumber,
-  );
-  const selectedSynthesis = stageSelection?.source_type === 'synthesis'
-    ? state.syntheses.find(
-        (synthesis) => Number(synthesis.id) === Number(stageSelection.source_id),
-      )
-    : undefined;
-  const selectedComment = stageSelection?.source_type === 'comment'
-    ? state.comments.find(
-        (comment) => Number(comment.id) === Number(stageSelection.source_id),
-      )
-    : undefined;
-  const selectedDirectionLabel = stageSelection?.source_title
-    || stageSelection?.source_content
-    || selectedSynthesis?.title
-    || selectedComment?.content
-    || '社区入选方向';
   const hasCommunityDraft = app.draft_kind === 'community'
     && Number(app.draft_iteration_number || 0) > Number(app.community_version_count || 0)
     && Boolean(app.draft_code);
+  const communityMessages = state.developmentMessages.filter((message) => (
+    message.app_id === app.id
+    && message.phase === 'community'
+    && (!message.iteration_number || Number(message.iteration_number) === iterationNumber)
+  ));
+  const communityPromptRounds = communityMessages.filter((message) => message.role === 'creator').length;
   const upload = async (file?: File) => {
     if (!file) return;
     const code = await file.text();
@@ -3152,33 +3181,31 @@ function CommunityDraftPanel({
   };
 
   if (app.community_version_count >= 2) return null;
-  if (!stageIsOpen && !hasCommunityDraft && latestJob?.status !== 'running') return null;
+  if (app.condition_name === 'experimental' && !hasCommunityDraft && latestJob?.status !== 'running') return null;
 
   return (
     <section className="async-community-studio">
       <header>
-        <div><span className="async-eyebrow">PROTOTYPE · HUMAN CURATION</span><h2>Community Version {iterationNumber} 工作台</h2></div>
-        <span className="async-step-chip">3 / 4 Prototype</span>
+        <div><span className="async-eyebrow">原型开发 · 人工确认</span><h2>社区版本 {iterationNumber} 工作台</h2></div>
+        <span className="async-step-chip">第 3 / 4 步 · 原型开发</span>
       </header>
       {state.viewer?.condition === 'control' && !hasCommunityDraft && (
         <div className="async-control-upload">
           <p>
-            {stageIsOpen
-              ? `Host 已进入第 ${iterationNumber} 次开发。请在原有外部 vibe-coding 工具中完成原型，再上传回平台。`
-              : '此轮开发已经关闭；当前草稿仍可查看和发布。'}
+            {`由你决定是否开始第 ${iterationNumber} 次开发。请在原有外部应用开发工具中完成原型，再上传回平台。`}
           </p>
           <div className="async-fixed-base-note"><GitBranch />
-            {iterationNumber === 1 ? '本轮固定基于 Initial Version。' : '本轮固定基于 Community Version 1。'}
+            {iterationNumber === 1 ? '本轮固定基于初始版本。' : '本轮固定基于社区版本 1。'}
           </div>
           <label>开发说明<textarea value={uploadPrompt} onChange={(event) => setUploadPrompt(event.target.value)} rows={3} placeholder="简要记录你如何使用社区评论" /></label>
           <label>版本摘要<input value={uploadSummary} onChange={(event) => setUploadSummary(event.target.value)} placeholder="这个版本主要改变了什么" /></label>
-          <label className={`async-upload-button ${stageIsOpen ? '' : 'is-disabled'}`}><Upload /> 上传外部 Community Version {iterationNumber}<input disabled={!stageIsOpen} type="file" accept=".html,text/html" onChange={(event) => void upload(event.target.files?.[0])} /></label>
+          <label className="async-upload-button"><Upload /> 上传外部社区版本 {iterationNumber}<input type="file" accept=".html,text/html" onChange={(event) => void upload(event.target.files?.[0])} /></label>
         </div>
       )}
       {latestJob?.status === 'running' && (
         <div className="async-generation-progress">
           <LoaderCircle className="spin" />
-          <div><strong>AI 正在把入选评论实现并自动发布为新版本</strong><span>页面会自动刷新开发步骤</span></div>
+          <div><strong>AI 正在把抽中的评论实现为新版本</strong><span>页面会自动刷新开发步骤</span></div>
           <ol>
             {events.map((event) => <li key={event.id} className={`is-${event.status}`}><Check /> {event.title}</li>)}
           </ol>
@@ -3187,38 +3214,55 @@ function CommunityDraftPanel({
       {hasCommunityDraft && (
         <div className="async-community-draft-layout">
           <div className="async-community-draft-preview">
-            <AppPreview clientId={clientId} app={app} version="draft" title={`${app.title} Community Draft`} cacheKey={state.serverNow} />
+            <AppPreview clientId={clientId} app={app} version="draft" title={`${app.title} 社区版本草稿`} cacheKey={state.serverNow} />
           </div>
           <div>
-            <p>{state.viewer?.condition === 'experimental'
-              ? `系统正在把 Host 锁定的“${selectedDirectionLabel}”自动发布为社区新版本。`
-              : '试玩从外部工具上传的社区版本草稿，确认无误后再发布。'}</p>
+            <p>这是仅你可见的社区版本草稿。你可以继续修改；只有点击发布后，社区才会看到新版本。</p>
             {state.viewer?.condition === 'experimental' ? (
-              <>
-                <label>继续修改<textarea value={revision} onChange={(event) => setRevision(event.target.value)} rows={4} placeholder="补充约束、修复问题或调整实现细节" /></label>
-                <button
-                  className="async-secondary"
-                  disabled={!revision.trim() || Boolean(busy)}
-                  onClick={() => action('refine-community', async () => {
-                    const next = await communityGalleryApi.refine(clientId, revision);
-                    setRevision('');
-                    return next;
-                  })}
-                ><Bot /> AI 修改草稿</button>
-              </>
+              <section className="async-creator-chat">
+                <header>
+                  <div><Bot /><span><strong>与 AI 继续开发</strong><small>{communityPromptRounds
+                    ? `已完成 ${communityPromptRounds} 轮提示词对话，可继续修改`
+                    : '可以继续通过提示词修改草稿'}</small></span></div>
+                  <em>发布前草稿</em>
+                </header>
+                <div className="async-creator-chat-history" role="log" aria-label="社区版本开发对话">
+                  {communityMessages.length ? communityMessages.map((message) => (
+                    <article key={message.id} className={`is-${message.role}`}>
+                      <span>{message.role === 'creator' ? state.viewer?.code : 'AI'}</span>
+                      <div>
+                        <strong>{message.role === 'creator' ? '你' : '开发助手'}</strong>
+                        <p>{message.content}</p>
+                      </div>
+                    </article>
+                  )) : (
+                    <div className="async-chat-empty"><MessageCircle /><span>草稿已经就绪，请提出第一条修改要求。</span></div>
+                  )}
+                </div>
+                <div className="async-chat-composer">
+                  <textarea value={revision} onChange={(event) => setRevision(event.target.value)} rows={4} placeholder="补充约束、修复问题或调整实现细节" />
+                  <button
+                    className="async-secondary"
+                    disabled={!revision.trim() || Boolean(busy)}
+                    onClick={() => action('refine-community', async () => {
+                      const next = await communityGalleryApi.refine(clientId, revision);
+                      setRevision('');
+                      return next;
+                    })}
+                  ><Send /> {busy === 'refine-community' ? '正在修改…' : '发送并修改草稿'}</button>
+                </div>
+              </section>
             ) : (
               <>
-                <p>如需修改，请返回原有外部 vibe-coding 工具，完成后重新上传 HTML。</p>
+                <p>如需修改，请返回原有外部应用开发工具，完成后重新上传 HTML。</p>
                 <label className="async-upload-button"><Upload /> 重新上传外部版本<input type="file" accept=".html,text/html" onChange={(event) => void upload(event.target.files?.[0])} /></label>
               </>
             )}
-            {state.viewer?.condition === 'control' && (
-              <button
-                className="async-primary"
-                disabled={Boolean(busy)}
-                onClick={() => action('publish-community', () => communityGalleryApi.publishCommunity(clientId, app.id))}
-              ><Check /> 发布 Community Version {Number(app.draft_iteration_number || iterationNumber)}</button>
-            )}
+            <button
+              className="async-primary"
+              disabled={Boolean(busy)}
+              onClick={() => action('publish-community', () => communityGalleryApi.publishCommunity(clientId, app.id))}
+            ><Check /> 发布社区版本 {Number(app.draft_iteration_number || iterationNumber)}</button>
           </div>
         </div>
       )}
@@ -3229,7 +3273,6 @@ function CommunityDraftPanel({
 function GenerateCommunityDialog({
   state,
   app,
-  candidate,
   clientId,
   action,
   busy,
@@ -3237,13 +3280,13 @@ function GenerateCommunityDialog({
 }: {
   state: CommunityGalleryState;
   app: CommunityApp;
-  candidate: DevelopmentCandidate;
   clientId: string;
   action: (label: string, task: () => Promise<CommunityGalleryState>) => Promise<void>;
   busy: string;
   close: () => void;
 }) {
-  const [instruction, setInstruction] = useState(candidate.content);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [instruction, setInstruction] = useState('');
   const appVersions = state.versions
     .filter((version) => version.app_id === app.id)
     .sort((left, right) => left.version_number - right.version_number);
@@ -3256,45 +3299,90 @@ function GenerateCommunityDialog({
     ? Number(firstCommunityVersion?.id || 0)
     : Number(initialVersion?.id || app.initial_version_id);
   const selectedBase = appVersions.find((version) => Number(version.id) === Number(baseVersionId));
+  const sourceCandidates = [
+    ...state.comments
+      .filter((comment) => (
+        comment.app_id === app.id
+        && !comment.deleted_at
+        && Number(comment.version_id) === baseVersionId
+      ))
+      .map((comment) => ({
+        key: `comment:${comment.id}`,
+        type: 'comment' as const,
+        id: Number(comment.id),
+        author: comment.author_code,
+        label: comment.target_type === 'synthesis' ? '讨论回复' : '普通评论',
+        content: comment.content,
+      })),
+    ...state.syntheses
+      .filter((synthesis) => (
+        synthesis.target_app_id === app.id
+        && !synthesis.deleted_at
+        && !synthesis.is_development_brief
+        && Number(synthesis.layer) === iterationNumber
+        && Number(synthesis.target_version_id || 0) === baseVersionId
+      ))
+      .map((synthesis) => ({
+        key: `synthesis:${synthesis.id}`,
+        type: 'synthesis' as const,
+        id: Number(synthesis.id),
+        author: synthesis.author_code,
+        label: `第 ${synthesis.layer} 轮综合评论`,
+        content: synthesis.content,
+      })),
+  ];
+  const selectedSources = sourceCandidates.filter((source) => selectedKeys.includes(source.key));
   useEffect(() => {
-    setInstruction(candidate.content);
-  }, [candidate.content, candidate.sourceId, candidate.sourceType]);
+    setInstruction(selectedSources.map((source) => source.content.trim()).filter(Boolean).join('\n\n'));
+  }, [selectedKeys.join('|')]);
+  const toggleSource = (key: string) => {
+    setSelectedKeys((current) => (
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
+    ));
+  };
   return (
-    <div className="async-overlay" role="dialog" aria-modal="true" aria-label="生成 Community Version">
+    <div className="async-overlay" role="dialog" aria-modal="true" aria-label="生成社区版本">
       <section className="async-generate-dialog">
-        <header><div><span className="async-eyebrow">IN-SITU AI PROTOTYPING</span><h2>把“{candidate.title}”开发成 Community Version {iterationNumber}</h2></div><button onClick={close}><X /></button></header>
-        <blockquote>{candidate.content}</blockquote>
+        <header><div><span className="async-eyebrow">情境内 AI 原型开发</span><h2>选择评论，开发社区版本 {iterationNumber}</h2></div><button onClick={close}><X /></button></header>
         <div className="async-fixed-base-note is-dialog"><GitBranch />
           {iterationNumber === 1
-            ? 'Host 已按“点赞数 → 来源数 → 随机”锁定本 App 的评论；本轮固定从 Initial Version 开发。'
-            : 'Host 已按“点赞数 → 来源数 → 随机”锁定本 App 的评论；本轮固定在 Community Version 1 上继续开发。'}
+            ? '本轮固定从初始版本开发。'
+            : '本轮固定在社区版本 1 上继续开发。'}
         </div>
-        <p>系统已将入选的{candidate.sourceType === 'synthesis' ? '综合评论' : '普通评论'}自动设为开发提示词，并会同时读取 {selectedBase?.kind === 'community' ? 'Community Version 1' : 'Initial Version'}{candidate.sourceType === 'synthesis' ? '和完整来源链' : ''}。Creator 可以直接开发，也可以在不改变入选方向的前提下补充约束。</p>
+        <p>从当前版本的评论或综合评论中选一条或多条，包括你自己的内容。选中的内容会自动填入提示词，系统会保留完整来源链并读取 {selectedBase?.kind === 'community' ? '社区版本 1' : '初始版本'}。</p>
+        <div className="async-development-source-picker">
+          <header><strong>可选评论</strong><span>已选择 {selectedSources.length} 条</span></header>
+          {sourceCandidates.length ? sourceCandidates.map((source) => (
+            <label key={source.key} className={selectedKeys.includes(source.key) ? 'is-selected' : ''}>
+              <input type="checkbox" checked={selectedKeys.includes(source.key)} onChange={() => toggleSource(source.key)} />
+              <span><small>{source.label} · {source.author}</small><strong>{source.content}</strong></span>
+            </label>
+          )) : <p className="async-empty-state">当前版本还没有可供选择的评论。</p>}
+        </div>
         <label>
-          开发提示词（默认来自最高赞评论）
+          开发提示词（由所选评论自动填入，可继续编辑）
           <textarea
             value={instruction}
             onChange={(event) => setInstruction(event.target.value)}
             rows={6}
-            placeholder="系统会默认使用入选评论的文本…"
+            placeholder="先选择评论，系统会自动填入内容…"
           />
         </label>
         <button
           className="async-primary"
-          disabled={Boolean(busy) || !baseVersionId}
+          disabled={Boolean(busy) || !baseVersionId || !selectedSources.length || !instruction.trim()}
           onClick={() => action('generate-community', async () => {
             const next = await communityGalleryApi.generateCommunity(
               clientId,
               app.id,
-              candidate.sourceType,
-              candidate.sourceId,
+              selectedSources.map((source) => ({ type: source.type, id: source.id })),
               instruction,
               baseVersionId,
             );
             close();
             return next;
           })}
-        ><Sparkles /> {busy === 'generate-community' ? 'AI 正在开发…' : `使用该提示词生成 Community Version ${iterationNumber}`}</button>
+        ><Sparkles /> {busy === 'generate-community' ? 'AI 正在开发…' : `使用该提示词生成社区版本 ${iterationNumber}`}</button>
       </section>
     </div>
   );
@@ -3326,21 +3414,75 @@ function AppDetail({
     (version) => Number(version.id) === Number(viewVersionId),
   ) || latestVersion;
   const [sourceSynthesis, setSourceSynthesis] = useState<CommunitySynthesis | null>(null);
-  const [generateCandidate, setGenerateCandidate] = useState<DevelopmentCandidate | null>(null);
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const assignment = state.assignments.find((item) => item.app_id === app.id);
+  const trackedAppDetailRef = useRef('');
+  const lastTrackedVersionRef = useRef(0);
+  const trackedSelectionRef = useRef(new Set<string>());
+  const latestDevelopmentJob = state.generationJobs
+    .filter((job) => job.app_id === app.id)
+    .sort((left, right) => Number(right.iteration_number) - Number(left.iteration_number))[0];
 
   useEffect(() => {
+    setViewVersionId(Number(latestVersion?.id || app.initial_version_id));
+  }, [app.id, app.initial_version_id, latestVersion?.id]);
+
+  useEffect(() => {
+    if (trackedAppDetailRef.current === app.id) return;
+    trackedAppDetailRef.current = app.id;
     void communityGalleryApi.track(clientId, 'open_app_detail', 'app', app.id, {
       assigned: Boolean(assignment),
     });
   }, [app.id, assignment, clientId]);
 
+  useEffect(() => {
+    if (!viewedVersion || state.viewer?.role === 'host') return;
+    if (lastTrackedVersionRef.current === Number(viewedVersion.id)) return;
+    lastTrackedVersionRef.current = Number(viewedVersion.id);
+    void communityGalleryApi.track(clientId, 'view_app_version', 'version', String(viewedVersion.id), {
+      appId: app.id,
+      versionNumber: viewedVersion.version_number,
+      versionKind: viewedVersion.kind,
+      iterationNumber: viewedVersion.kind === 'community'
+        ? Number(viewedVersion.version_number) - 1
+        : 0,
+      isOwnApp: isOwner,
+    });
+  }, [app.id, clientId, isOwner, state.viewer?.role, viewedVersion?.id]);
+
+  useEffect(() => {
+    if (!latestDevelopmentJob || state.viewer?.role === 'host') return;
+    const selectionViewKey = `${app.id}:${latestDevelopmentJob.id}`;
+    if (trackedSelectionRef.current.has(selectionViewKey)) return;
+    trackedSelectionRef.current.add(selectionViewKey);
+    void communityGalleryApi.track(
+      clientId,
+      'view_development_selection',
+      'generation_job',
+      String(latestDevelopmentJob.id),
+      {
+        appId: app.id,
+        iterationNumber: Number(latestDevelopmentJob.iteration_number),
+        selectedSourceType: latestDevelopmentJob.selected_source_type,
+        selectedSourceId: latestDevelopmentJob.selected_source_id,
+        jobStatus: latestDevelopmentJob.status,
+        isOwnApp: isOwner,
+      },
+    );
+  }, [
+    app.id,
+    clientId,
+    isOwner,
+    latestDevelopmentJob?.id,
+    latestDevelopmentJob?.status,
+    state.viewer?.role,
+  ]);
+
   return (
     <section className="async-app-detail">
       <header className="async-detail-heading">
         <div>
-          <span className="async-eyebrow">{app.creator_code} · {assignment ? '你的指定体验 App' : '社区 App'}</span>
+          <span className="async-eyebrow">{app.creator_code} · {assignment ? '你的指定体验应用' : '社区应用'}</span>
           <h1>{app.title}</h1>
           <p>{app.brief}</p>
         </div>
@@ -3352,8 +3494,8 @@ function AppDetail({
               onClick={() => setViewVersionId(version.id)}
             >
               {version.kind === 'initial'
-                ? 'Initial Version'
-                : `Community V${version.version_number - 1}`}
+                ? '初始版本'
+                : `社区版本 ${version.version_number - 1}`}
             </button>
           ))}
         </div>
@@ -3365,7 +3507,7 @@ function AppDetail({
             app={app}
             version={viewedVersion.kind}
             versionId={viewedVersion.id}
-            title={`${app.title} ${viewedVersion.kind} ${viewedVersion.version_number}`}
+            title={`${app.title} ${viewedVersion.kind === 'initial' ? '初始版本' : '社区版本'} ${viewedVersion.version_number}`}
             cacheKey={String(viewedVersion.id)}
           />
         )}
@@ -3382,7 +3524,6 @@ function AppDetail({
           busy={busy}
           openBasket={openBasket}
           viewSources={setSourceSynthesis}
-          generate={setGenerateCandidate}
         />
       ) : (
         <div className="async-discussion-layout is-control">
@@ -3401,17 +3542,6 @@ function AppDetail({
       )}
 
       {sourceSynthesis && <SourceDrawer state={state} synthesis={sourceSynthesis} close={() => setSourceSynthesis(null)} />}
-      {generateCandidate && (
-        <GenerateCommunityDialog
-          state={state}
-          app={app}
-          candidate={generateCandidate}
-          clientId={clientId}
-          action={action}
-          busy={busy}
-          close={() => setGenerateCandidate(null)}
-        />
-      )}
     </section>
   );
 }
@@ -3427,45 +3557,32 @@ function HostPanel({
   action: (label: string, task: () => Promise<CommunityGalleryState>) => Promise<void>;
   busy: string;
 }) {
-  const creatorParticipants = state.participants.filter((participant) => participant.role === 'creator');
-  const communityParticipants = state.participants.filter((participant) => participant.role === 'community');
+  const creatorParticipants = state.participants
+    .filter((participant) => participant.role === 'creator')
+    .sort((left, right) => left.code.localeCompare(right.code));
+  const serverControlCreatorCount = creatorParticipants.filter(
+    (participant) => participant.condition_name === 'control',
+  ).length;
   const serverControlCreators = creatorParticipants
     .filter((participant) => participant.condition_name === 'control')
-    .map((participant) => participant.code)
-    .sort();
-  const serverControlCommunity = communityParticipants
-    .filter((participant) => participant.condition_name === 'control')
-    .map((participant) => participant.code)
-    .sort();
+    .map((participant) => participant.code);
+  const serverControlCreatorKey = serverControlCreators.join(',');
   const [controlCreators, setControlCreators] = useState<string[]>(serverControlCreators);
-  const [controlCommunity, setControlCommunity] = useState<string[]>(serverControlCommunity);
 
   useEffect(() => {
     setControlCreators(serverControlCreators);
-    setControlCommunity(serverControlCommunity);
-  }, [state.study.conditions_configured, state.study.id]);
+  }, [serverControlCreatorKey, state.study.id]);
 
-  const toggleConditionMember = (
-    code: string,
-    values: string[],
-    limit: number,
-    setter: React.Dispatch<React.SetStateAction<string[]>>,
-  ) => {
-    if (values.includes(code)) {
-      setter(values.filter((value) => value !== code));
-      return;
-    }
-    if (values.length < limit) setter([...values, code].sort());
+  const toggleConditionMember = (code: string) => {
+    setControlCreators((current) => (
+      current.includes(code)
+        ? current.filter((value) => value !== code)
+        : [...current, code].sort()
+    ));
   };
-  const conditionsDirty = controlCreators.join(',') !== serverControlCreators.join(',')
-    || controlCommunity.join(',') !== serverControlCommunity.join(',');
-  const conditionSelectionValid = controlCreators.length === 6 && controlCommunity.length === 12;
-  const joined = state.participants.filter((participant) => participant.joined).length;
+  const conditionsDirty = controlCreators.join(',') !== serverControlCreators.join(',');
+  const joinedCreatorCount = creatorParticipants.filter((participant) => participant.joined).length;
   const communityVersions = state.apps.filter((app) => app.community_version_id).length;
-  const experimentalApps = state.apps.filter(
-    (app) => app.condition_name === 'experimental' && app.status === 'published',
-  );
-  const stage = state.study.workflow_stage;
   const publishedApps = state.apps.filter((app) => app.status === 'published');
   const developmentStatusFor = (app: CommunityApp, iterationNumber: 1 | 2) => {
     const job = state.generationJobs.find(
@@ -3493,7 +3610,7 @@ function HostPanel({
       return {
         key: 'completed',
         label: '成功',
-        detail: `Community V${iterationNumber} 已发布`,
+        detail: `社区版本 ${iterationNumber} 已发布`,
         time: job?.completed_at || publishedVersion?.created_at,
         jobId: job?.id,
       };
@@ -3508,7 +3625,7 @@ function HostPanel({
         key: 'running',
         label: '开发中',
         detail: latestEvent?.title
-          || (app.condition_name === 'control' ? 'Creator 已上传草稿，等待发布' : 'AI 正在生成新版本'),
+          || (app.condition_name === 'control' ? '创作者已上传草稿，等待发布' : 'AI 正在生成新版本'),
         time: latestEvent?.updated_at || job?.created_at,
         jobId: job?.id,
       };
@@ -3517,101 +3634,30 @@ function HostPanel({
       key: 'pending',
       label: '未开始',
       detail: app.condition_name === 'control'
-        ? '等待 Creator 从外部工具上传'
+        ? '等待创作者从外部工具上传'
         : '等待本轮开发启动',
       time: undefined,
       jobId: undefined,
     };
   };
-  const activeDevelopmentIteration: 1 | 2 = stage === 'development_2' ? 2 : 1;
-  const activeDevelopmentStatuses = publishedApps.map(
-    (app) => developmentStatusFor(app, activeDevelopmentIteration),
-  );
+  const developmentStatuses = publishedApps.flatMap((app) => [
+    developmentStatusFor(app, 1),
+    developmentStatusFor(app, 2),
+  ]);
   const activeDevelopmentCounts = {
-    running: activeDevelopmentStatuses.filter((status) => status.key === 'running').length,
-    completed: activeDevelopmentStatuses.filter((status) => status.key === 'completed').length,
-    failed: activeDevelopmentStatuses.filter((status) => status.key === 'failed').length,
+    running: developmentStatuses.filter((status) => status.key === 'running').length,
+    completed: developmentStatuses.filter((status) => status.key === 'completed').length,
+    failed: developmentStatuses.filter((status) => status.key === 'failed').length,
   };
-  const appsWithFirstRoundCandidates = experimentalApps.filter((app) => (
-    state.comments.some((comment) => (
-      comment.app_id === app.id
-      && comment.target_type === 'app'
-      && Number(comment.version_id) === Number(app.initial_version_id)
-    ))
-    || state.syntheses.some((synthesis) => (
-      synthesis.target_app_id === app.id && Number(synthesis.layer) === 1
-    ))
-  ));
-  const appsWithSecondRoundCandidates = experimentalApps.filter((app) => {
-    const communityV1 = state.versions.find((version) => (
-      version.app_id === app.id
-      && version.kind === 'community'
-      && Number(version.version_number) === 2
-    ));
-    return state.comments.some((comment) => (
-      comment.app_id === app.id
-      && comment.target_type === 'app'
-      && Number(comment.version_id) === Number(communityV1?.id)
-    )) || state.syntheses.some((synthesis) => (
-      synthesis.target_app_id === app.id && Number(synthesis.layer) === 2
-    ));
-  });
-  const appsWithV1 = experimentalApps.filter((app) => Number(app.community_version_count || 0) >= 1);
-  const canLockFirstDevelopment = experimentalApps.length > 0
-    && appsWithFirstRoundCandidates.length === experimentalApps.length;
-  const canLockSecondDevelopment = experimentalApps.length > 0
-    && appsWithV1.length === experimentalApps.length
-    && appsWithSecondRoundCandidates.length === experimentalApps.length;
-  const missingAutomaticJobs = (iterationNumber: 1 | 2) => {
-    const selectedAppIds = new Set(
-      state.stageSelections
-        .filter((selection) => Number(selection.iteration_number) === iterationNumber)
-        .map((selection) => selection.app_id),
-    );
-    const startedAppIds = new Set(
-      state.generationJobs
-        .filter((job) => Number(job.iteration_number) === iterationNumber)
-        .map((job) => job.app_id),
-    );
-    return experimentalApps.filter(
-      (app) => selectedAppIds.has(app.id) && !startedAppIds.has(app.id),
-    );
-  };
-  const missingFirstAutomaticJobs = missingAutomaticJobs(1);
-  const missingSecondAutomaticJobs = missingAutomaticJobs(2);
-  const rollbackIteration = stage === 'development_1' ? 1 : stage === 'development_2' ? 2 : null;
-  const hasCurrentRoundWork = rollbackIteration !== null && (
-    state.generationJobs.some((job) => Number(job.iteration_number) === rollbackIteration)
-    || state.apps.some((app) => (
-      app.draft_kind === 'community'
-      && Number(app.draft_iteration_number) === rollbackIteration
-    ))
-    || state.versions.some((version) => (
-      version.kind === 'community'
-      && Number(version.version_number) === rollbackIteration + 1
-    ))
-  );
-  const stageCopy = stage === 'synthesis_1'
-    ? {
-        eyebrow: 'STAGE 1 · FIRST-LAYER SYNTHESIS',
-        title: '等待社区评论、综合与点赞',
-        detail: `已有 ${appsWithFirstRoundCandidates.length}/${experimentalApps.length} 个 App 存在第一轮可评选评论。系统先比点赞数，同赞时比较综合评论的来源数（普通评论为 0），仍同分则随机选择。`,
-      }
-    : stage === 'development_1'
-      ? {
-          eyebrow: 'STAGE 2 · COMMUNITY VERSION 1',
-          title: '系统正在生成并自动发布 Community V1',
-          detail: `自动开发任务 ${state.generationJobs.filter((job) => Number(job.iteration_number) === 1).length}/${experimentalApps.length}，已发布 ${appsWithV1.length}/${experimentalApps.length} 个 V1。`,
-        }
-      : {
-          eyebrow: 'STAGE 3 · COMMUNITY VERSION 2',
-          title: '系统正在基于 V1 自动生成并发布 Community V2',
-          detail: `自动开发任务 ${state.generationJobs.filter((job) => Number(job.iteration_number) === 2).length}/${experimentalApps.length}。生成完成后最终社区版本会立即发布。`,
-        };
+  const nextDevelopmentIteration = state.study.workflow_stage === 'synthesis_1'
+    ? 1
+    : state.study.workflow_stage === 'development_1'
+      ? 2
+      : null;
   return (
     <section className="async-host-panel">
       <header>
-        <div><span className="async-eyebrow">HOST · ASYNCHRONOUS STUDY</span><h2>研究控制与完成进度</h2><p>Host 锁定评选结果后，系统会立即后台生成并自动发布实验组 Community Version；Creator 仍可随时进入开发空间继续修改。</p></div>
+        <div><span className="async-eyebrow">主持人 · 异步研究</span><h2>研究控制与完成进度</h2><p>主持人锁定本轮点赞后，系统会按点赞数加权随机抽取每个应用的开发来源，并立即启动开发任务。</p></div>
         <div className="async-host-actions">
           <a href={`/api/community-gallery/export?clientId=${encodeURIComponent(clientId)}`}><Download /> 导出研究数据</a>
           {state.study.status === 'setup' && (
@@ -3619,9 +3665,9 @@ function HostPanel({
               disabled={Boolean(busy) || !state.study.conditions_configured || conditionsDirty}
               title={!state.study.conditions_configured || conditionsDirty
                 ? '请先选择并保存对照组成员'
-                : '记录正式研究开始'}
+                : '开始研究并开放普通评论与综合评论'}
               onClick={() => action('start-study', () => communityGalleryApi.startStudy(clientId))}
-            ><Play /> 记录正式研究开始</button>
+            ><Play /> 开始并开放评论</button>
           )}
           {state.study.status === 'active' && (
             <button disabled={Boolean(busy)} onClick={() => action('close-study', () => communityGalleryApi.closeStudy(clientId))}><Check /> 结束研究</button>
@@ -3631,47 +3677,40 @@ function HostPanel({
           )}
         </div>
       </header>
-      {state.study.status === 'setup' && (
+      {state.study.status !== 'closed' && (
         <section className="async-condition-assignment">
           <header>
             <div>
-              <span className="async-eyebrow">HOST · GROUP ASSIGNMENT</span>
-              <h3>由 Host 选择对照组</h3>
-              <p>选择 6 名 Creator 和 12 名 Community Member 进入传统评论平台；未选中的参与者自动进入完整 Vibe Gallery。保存并开始研究后分组锁定。</p>
+              <span className="async-eyebrow">主持人 · 分组设置</span>
+              <h3>{state.study.status === 'active' ? '调整创作者分组' : '由主持人选择对照组'}</h3>
+              <p>{state.study.status === 'active'
+                ? '研究进行中也可以调整创作者所在组。保存后会立即更新该创作者的平台功能与应用分组。'
+                : '所有参与者均为创作者（C01–C30）。点击编号选择对照组，未选择的创作者自动归入实验组。'}</p>
             </div>
             <div className="async-condition-save">
-              <span className={conditionSelectionValid ? 'is-ready' : ''}>
-                {controlCreators.length}/6 Creator · {controlCommunity.length}/12 Community
-              </span>
               <button
                 className="async-primary"
-                disabled={Boolean(busy) || !conditionSelectionValid || (!conditionsDirty && state.study.conditions_configured)}
+                disabled={Boolean(busy) || (!conditionsDirty && state.study.conditions_configured)}
                 onClick={() => action(
                   'save-study-conditions',
                   () => communityGalleryApi.setConditions(
                     clientId,
                     controlCreators,
-                    controlCommunity,
                   ),
                 )}
-              ><Check /> {state.study.conditions_configured && !conditionsDirty ? '分组已保存' : '保存分组'}</button>
+              ><Check /> {conditionsDirty ? '保存分组调整' : state.study.conditions_configured ? '分组已保存' : '保存分组'}</button>
             </div>
           </header>
           <div className="async-condition-groups">
             <section>
-              <header><div><strong>Creator 对照组</strong><small>请选择 6 人</small></div><em>{controlCreators.length}/6</em></header>
+              <header><div><strong>创作者对照组</strong><small>点击编号切换分组；未选择的创作者自动归入实验组</small></div></header>
               <div>
                 {creatorParticipants.map((participant) => (
                   <button
                     key={participant.code}
                     className={controlCreators.includes(participant.code) ? 'is-control' : ''}
                     disabled={Boolean(busy)}
-                    onClick={() => toggleConditionMember(
-                      participant.code,
-                      controlCreators,
-                      6,
-                      setControlCreators,
-                    )}
+                    onClick={() => toggleConditionMember(participant.code)}
                   >
                     <strong>{participant.code}</strong>
                     <span>{controlCreators.includes(participant.code) ? '对照组' : '实验组'}</span>
@@ -3680,119 +3719,51 @@ function HostPanel({
                 ))}
               </div>
             </section>
-            <section>
-              <header><div><strong>Community Member 对照组</strong><small>请选择 12 人</small></div><em>{controlCommunity.length}/12</em></header>
-              <div>
-                {communityParticipants.map((participant) => (
-                  <button
-                    key={participant.code}
-                    className={controlCommunity.includes(participant.code) ? 'is-control' : ''}
-                    disabled={Boolean(busy)}
-                    onClick={() => toggleConditionMember(
-                      participant.code,
-                      controlCommunity,
-                      12,
-                      setControlCommunity,
-                    )}
-                  >
-                    <strong>{participant.code}</strong>
-                    <span>{controlCommunity.includes(participant.code) ? '对照组' : '实验组'}</span>
-                    {participant.joined ? <i>已进入</i> : null}
-                  </button>
-                ))}
-              </div>
-            </section>
           </div>
           <footer>
-            <span><i className="is-control" /> 已选择：传统普通评论区</span>
-            <span><i className="is-experimental" /> 未选择：综合评论与 AI 开发功能</span>
+            <span><i className="is-control" /> 对照组：传统普通评论区</span>
+            <span><i className="is-experimental" /> 实验组：综合评论与 AI 开发功能</span>
           </footer>
         </section>
       )}
       {state.study.status === 'active' && (
         <section className="async-host-stage">
           <div>
-            <span className="async-eyebrow">{stageCopy.eyebrow}</span>
-            <strong>{stageCopy.title}</strong>
-            <p>{stageCopy.detail}</p>
+            <span className="async-eyebrow">主持人锁票 · 加权随机抽取</span>
+            <strong>{nextDevelopmentIteration
+              ? `锁定第 ${nextDevelopmentIteration} 轮点赞并抽取开发方向`
+              : '两轮开发均已锁定'}</strong>
+            <p>{nextDevelopmentIteration
+              ? '每条候选的权重为点赞数 + 1；万能卡指定的评论会先从随机池移除，再与另一个加权随机结果一起进入开发。'
+              : '等待当前开发任务完成或发布版本。'}</p>
           </div>
-          <aside className="async-host-stage-actions">
-            {rollbackIteration !== null && (
-              <button
-                className="async-secondary"
-                disabled={Boolean(busy) || hasCurrentRoundWork}
-                title={hasCurrentRoundWork
-                  ? `第 ${rollbackIteration} 次开发已经开始，不能返回上一阶段`
-                  : '撤销本轮锁定并返回上一阶段'}
-                onClick={() => action(
-                  'return-to-previous-stage',
-                  () => communityGalleryApi.returnToPreviousStage(clientId),
-                )}
-              ><ArrowLeft /> 返回上一阶段</button>
-            )}
-            {stage === 'synthesis_1' && (
+          {nextDevelopmentIteration && (
+            <aside className="async-host-stage-actions">
               <button
                 className="async-primary"
-                disabled={Boolean(busy) || !canLockFirstDevelopment}
-                onClick={() => action('enter-development-1', () => communityGalleryApi.enterDevelopment(clientId, 1))}
-              ><Lock /> 锁定评选结果并自动发布 V1</button>
-            )}
-            {stage === 'development_1' && (
-              <>
-                {missingFirstAutomaticJobs.length > 0 && (
-                  <button
-                    className="async-primary"
-                    disabled={Boolean(busy)}
-                    onClick={() => action(
-                      'resume-development-1',
-                      () => communityGalleryApi.enterDevelopment(clientId, 1),
-                    )}
-                  ><Sparkles /> 启动缺失的第一次自动开发（{missingFirstAutomaticJobs.length}）</button>
+                disabled={Boolean(busy)}
+                onClick={() => action(
+                  `enter-development-${nextDevelopmentIteration}`,
+                  () => communityGalleryApi.enterDevelopment(clientId, nextDevelopmentIteration),
                 )}
-                <button
-                  className="async-primary"
-                  disabled={Boolean(busy) || !canLockSecondDevelopment}
-                  title={!canLockSecondDevelopment
-                    ? `需要每个实验组 App 都发布 V1，并至少有一条针对 V1 的第二轮普通评论或第二轮综合评论（当前 ${appsWithSecondRoundCandidates.length}/${experimentalApps.length}）`
-                    : '只从针对 Community V1 的第二轮普通评论和第二轮综合评论中评选'}
-                  onClick={() => action('enter-development-2', () => communityGalleryApi.enterDevelopment(clientId, 2))}
-                ><Lock /> 锁定评选结果并自动发布 V2</button>
-              </>
-            )}
-            {stage === 'development_2' && (
-              missingSecondAutomaticJobs.length > 0
-                ? (
-                    <button
-                      className="async-primary"
-                      disabled={Boolean(busy)}
-                      onClick={() => action(
-                        'resume-development-2',
-                        () => communityGalleryApi.enterDevelopment(clientId, 2),
-                      )}
-                    ><Sparkles /> 启动缺失的第二次自动开发（{missingSecondAutomaticJobs.length}）</button>
-                  )
-                : activeDevelopmentCounts.failed > 0
-                  ? <span className="async-stage-failed"><X /> 第二次开发失败 {activeDevelopmentCounts.failed} 个</span>
-                  : activeDevelopmentCounts.running > 0
-                    ? <span className="async-stage-running"><LoaderCircle className="spin" /> 第二次开发中 {activeDevelopmentCounts.running} 个</span>
-                    : <span className="async-stage-complete"><Check /> 第二次开发已完成</span>
-            )}
-          </aside>
+              ><Lock /> 锁定点赞并加权抽取开发</button>
+            </aside>
+          )}
         </section>
       )}
       <div className="async-host-stats">
-        <article><span>Control Initial Apps</span><strong>{state.counts.controlApps} / 6</strong></article>
-        <article><span>Vibe Gallery Initial Apps</span><strong>{state.counts.experimentalApps} / 6</strong></article>
-        <article><span>已进入参与者</span><strong>{joined} / 37</strong></article>
-        <article><span>Community Versions</span><strong>{communityVersions} / 12</strong></article>
+        <article><span>对照组初始应用</span><strong>{state.counts.controlApps} / {serverControlCreatorCount}</strong></article>
+        <article><span>实验组初始应用</span><strong>{state.counts.experimentalApps} / {state.counts.creators - serverControlCreatorCount}</strong></article>
+        <article><span>已进入创作者</span><strong>{joinedCreatorCount} / {state.counts.creators}</strong></article>
+        <article><span>社区版本</span><strong>{communityVersions} / {state.counts.creators}</strong></article>
       </div>
       {publishedApps.length > 0 && (
         <section className="async-host-development-board">
           <header>
             <div>
-              <span className="async-eyebrow">APP DEVELOPMENT STATUS</span>
-              <h3>每个 App 的开发状态</h3>
-              <p>状态来自后台开发任务和已发布版本；失败时会保留具体原因，便于 Host 立即定位问题。</p>
+              <span className="async-eyebrow">应用开发状态</span>
+              <h3>每个应用的开发状态</h3>
+              <p>状态来自后台开发任务和已发布版本；失败时会保留具体原因，便于主持人立即定位问题。</p>
             </div>
             <div className="async-development-summary">
               <span className="is-running"><LoaderCircle /> 开发中 {activeDevelopmentCounts.running}</span>
@@ -3800,11 +3771,11 @@ function HostPanel({
               <span className="is-failed"><X /> 失败 {activeDevelopmentCounts.failed}</span>
             </div>
           </header>
-          <div className="async-development-table" role="table" aria-label="App 开发状态">
+          <div className="async-development-table" role="table" aria-label="应用开发状态">
             <div className="async-development-table-heading" role="row">
-              <span role="columnheader">App</span>
-              <span role="columnheader">第一次开发 · V1</span>
-              <span role="columnheader">第二次开发 · V2</span>
+              <span role="columnheader">应用</span>
+              <span role="columnheader">第一次开发 · 版本 1</span>
+              <span role="columnheader">第二次开发 · 版本 2</span>
             </div>
             {publishedApps.map((app) => {
               const firstStatus = developmentStatusFor(app, 1);
@@ -3865,10 +3836,10 @@ function NotificationDrawer({
     <div className="async-overlay" role="dialog" aria-modal="true" aria-label="消息中心">
       <aside className="async-side-drawer async-notification-drawer">
         <header>
-          <div><span className="async-eyebrow">YOUR CREATIVE IMPACT</span><h2>消息中心</h2></div>
+          <div><span className="async-eyebrow">你的创意影响</span><h2>消息中心</h2></div>
           <button onClick={close} aria-label="关闭消息中心"><X /></button>
         </header>
-        <p className="async-drawer-intro">当你的普通评论或综合评论被 Creator 采用并进入开发流程时，消息会保留在这里。</p>
+        <p className="async-drawer-intro">当你的普通评论或综合评论被纳入开发流程时，消息会保留在这里。</p>
         <div className="async-notification-list">
           {notifications.map((notification) => (
             <article key={notification.id} className={notification.read_at ? '' : 'is-unread'}>
@@ -3936,7 +3907,7 @@ function FireworksCelebration({
       </div>
       <section onClick={(event) => event.stopPropagation()}>
         <span><Sparkles /></span>
-        <small>YOUR IDEA IS BECOMING REAL</small>
+        <small>你的想法正在成为现实</small>
         <h2>你的创意进入开发流程了！</h2>
         <p>{notification.content}</p>
         {extraCount > 0 && <em>同时还有 {extraCount} 条新的采用消息</em>}
@@ -3966,7 +3937,7 @@ export default function AsyncGalleryApp() {
       setState(await communityGalleryApi.state(clientId));
       setError('');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '无法加载 Vibe Gallery。');
+      setError(cause instanceof Error ? cause.message : '无法加载创意共创社区。');
     }
   }, [clientId]);
 
@@ -3988,10 +3959,10 @@ export default function AsyncGalleryApp() {
 
   useEffect(() => {
     if (!state?.viewer || state.study.status === 'closed') return;
-    const creatorApp = state.viewer.role === 'creator'
+    const creatorApp = state.viewer.role !== 'host'
       ? state.apps.find((app) => app.creator_code === state.viewer?.code)
       : undefined;
-    const creatorIsEditingDraft = state.viewer.role === 'creator' && (
+    const creatorIsEditingDraft = state.viewer.role !== 'host' && (
       (state.study.status === 'setup' && !creatorApp?.initial_version_id)
       || Boolean(creatorApp?.draft_code)
     );
@@ -4063,14 +4034,14 @@ export default function AsyncGalleryApp() {
   }, [selectedAppId]);
 
   if (!state) {
-    return <main className="async-loading"><LoaderCircle className="spin" /><strong>正在加载 Vibe Gallery…</strong>{error && <p>{error}</p>}</main>;
+    return <main className="async-loading"><LoaderCircle className="spin" /><strong>正在加载创意共创社区…</strong>{error && <p>{error}</p>}</main>;
   }
 
   const statusCopy = state.study.status === 'setup'
-    ? { label: 'Creation & Open Discussion', detail: 'Creator 可持续发布 Initial App；每个 App 发布后立即开放体验和评论。' }
+    ? { label: '准备阶段', detail: '创作者可以发布初始应用；主持人点击开始后，社区评论与综合评论才会开放。' }
     : state.study.status === 'active'
-      ? { label: 'Async Community Active', detail: '自由浏览、讨论、收集创意，并把综合方向实现为 Community Version。' }
-      : { label: 'Study Closed', detail: '研究已经结束，作品和创意来源保持只读。' };
+      ? { label: '异步社区进行中', detail: '自由浏览、讨论、收集创意，并把综合方向实现为社区版本。' }
+      : { label: '研究已结束', detail: '研究已经结束，作品和创意来源保持只读。' };
   const ownApp = state.apps.find((app) => app.creator_code === state.viewer?.code);
   const assignedIds = new Set(state.assignments.map((item) => item.app_id));
   const unreadNotificationCount = state.notifications.filter((notification) => !notification.read_at).length;
@@ -4086,7 +4057,7 @@ export default function AsyncGalleryApp() {
             </button>
           )}
           <button className="async-brand" onClick={() => navigateToApp('')}>
-            <span><Sparkles /></span><div><strong>Vibe Gallery</strong><small>Social Vibe-Coding Community</small></div>
+            <span><Sparkles /></span><div><strong>创意共创社区</strong><small>社交式应用共创平台</small></div>
           </button>
         </div>
         <div className="async-header-actions">
@@ -4118,8 +4089,8 @@ export default function AsyncGalleryApp() {
             </button>
           )}
           <div className="async-viewer">
-            <span>{state.viewer ? state.viewer.role : 'Browsing as'}</span>
-            <strong>{state.viewer?.code || 'Guest'}</strong>
+            <span>{state.viewer ? (state.viewer.role === 'host' ? '主持人' : '创作者') : '当前身份'}</span>
+            <strong>{state.viewer?.code || '访客'}</strong>
           </div>
           <button className="async-refresh" onClick={() => void refresh()} title="刷新"><RefreshCw className={busy ? 'spin' : ''} /></button>
         </div>
@@ -4135,9 +4106,9 @@ export default function AsyncGalleryApp() {
         </section>
 
         {error && <div className="async-error"><span>{error}</span><button onClick={() => setError('')}><X /></button></div>}
-        {!state.viewer && <IdentityGate busy={busy} join={(code) => void action('join', () => communityGalleryApi.join(clientId, code))} />}
+        {!state.viewer && <IdentityGate busy={busy} participants={state.participants} join={(code) => void action('join', () => communityGalleryApi.join(clientId, code))} />}
 
-        {state.viewer?.role === 'creator' && state.study.status !== 'closed' && (
+        {state.viewer?.role !== 'host' && state.study.status !== 'closed' && (
           <InitialCreatorStudio state={state} clientId={clientId} action={action} busy={busy} />
         )}
 
@@ -4158,13 +4129,13 @@ export default function AsyncGalleryApp() {
           <section className="async-gallery-home">
             <header className="async-home-heading">
               <div>
-                <span className="async-eyebrow">{state.study.status === 'setup' ? 'CREATION & OPEN DISCUSSION' : 'COMMUNITY CREATION IN PROGRESS'}</span>
+                <span className="async-eyebrow">{state.study.status === 'setup' ? '创作准备阶段' : '社区共创进行中'}</span>
                 <h1>{state.viewer.role === 'host' ? '两个社区的作品进度' : '发现作品，加入正在发生的创作'}</h1>
                 <p>{state.study.status === 'setup'
-                  ? '每个 Initial App 发布后立即开放体验和评论，不需要等待其他 App。'
-                  : '先体验指定 App，也可以自由探索其他作品。普通讨论保持自然，综合创意由用户主动创建。'}</p>
+                  ? '初始应用可以陆续发布；主持人点击开始后，大家才能发表评论和进行综合。'
+                  : '先体验指定应用，也可以自由探索其他作品。普通讨论保持自然，综合创意由用户主动创建。'}</p>
               </div>
-              {state.viewer.role === 'creator' && ownApp?.initial_version_id && <span className="async-own-app-note"><CheckCircle2 /> 你的 Initial App 已发布</span>}
+              {state.viewer.role !== 'host' && ownApp?.initial_version_id && <span className="async-own-app-note"><CheckCircle2 /> 你的初始应用已发布</span>}
             </header>
             <div className={`async-gallery-grid columns-${galleryColumnCount}`}>
               {publishedApps.map((app, index) => (
@@ -4185,7 +4156,7 @@ export default function AsyncGalleryApp() {
               ))}
             </div>
             {publishedApps.length === 0 && (
-              <div className="async-empty-gallery"><Code2 /><h2>等待 Initial App 发布</h2><p>Creator 发布后，作品会以瀑布流卡片出现在这里。</p></div>
+              <div className="async-empty-gallery"><Code2 /><h2>等待初始应用发布</h2><p>创作者发布后，作品会以瀑布流卡片出现在这里。</p></div>
             )}
           </section>
         )}
