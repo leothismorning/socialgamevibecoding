@@ -1,3 +1,4 @@
+import './env.js';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -59,10 +60,45 @@ export type StudyState = {
 
 const now = () => new Date().toISOString();
 
-const dbPath = process.env.STUDY_DB_PATH
-  ? path.resolve(process.env.STUDY_DB_PATH)
-  : path.join(process.cwd(), 'data', 'vibecoding-study.db');
+function pathIsInside(parentPath: string, targetPath: string) {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(targetPath));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+const configuredDbPath = process.env.STUDY_DB_PATH?.trim()
+  ? path.resolve(process.env.STUDY_DB_PATH.trim())
+  : '';
+const railwayVolumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH?.trim()
+  ? path.resolve(process.env.RAILWAY_VOLUME_MOUNT_PATH.trim())
+  : '';
+const configuredPathUsesVolume = Boolean(
+  configuredDbPath && railwayVolumePath && pathIsInside(railwayVolumePath, configuredDbPath),
+);
+const dbPath = railwayVolumePath
+  ? configuredPathUsesVolume
+    ? configuredDbPath
+    : path.join(railwayVolumePath, 'vibecoding-study.db')
+  : configuredDbPath || path.join(process.cwd(), 'data', 'vibecoding-study.db');
+
+if (railwayVolumePath && configuredDbPath && !configuredPathUsesVolume) {
+  console.warn(
+    `[storage] STUDY_DB_PATH (${configuredDbPath}) is outside the Railway Volume; `
+      + `using ${dbPath} to protect persistent study data.`,
+  );
+}
+
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+export const studyDatabaseInfo = Object.freeze({
+  path: dbPath,
+  mode: railwayVolumePath ? 'railway-volume' : configuredDbPath ? 'configured-path' : 'local-data',
+  persistentAcrossDeployments: Boolean(railwayVolumePath),
+});
+
+console.info(
+  `[storage] SQLite database: ${studyDatabaseInfo.path} `
+    + `(${studyDatabaseInfo.mode}${studyDatabaseInfo.persistentAcrossDeployments ? ', persistent' : ''})`,
+);
 
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');

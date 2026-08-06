@@ -26,11 +26,20 @@
 前置条件：Node.js。
 
 1. 安装依赖：`npm install`
-2. 在 `.env.local` 中配置所需模型 API Key。
+2. 按照 [API 密钥配置说明](docs/API密钥配置.md) 创建 `.env.local` 并配置当前模型所需的 API Key。
 3. 启动 React、Express 和 SQLite：`npm run dev`
 4. 打开 `http://localhost:3000`
 
 默认 SQLite 数据库位于 `data/vibecoding-study.db`，该文件不会提交到 Git。
+
+## 数据持久化
+
+- 本地运行：App、版本、评论和行为日志保存在 `data/vibecoding-study.db`，更新代码不会删除该文件。
+- Railway：为服务挂载 Volume 后，程序会自动读取 Railway 提供的挂载路径，并将数据库保存在 Volume 中。
+- 推荐 Railway 将 Volume 挂载到 `/data`，并设置 `STUDY_DB_PATH=/data/vibecoding-study.db`。
+- 如果 `STUDY_DB_PATH` 意外指向 Volume 之外，程序会自动改用 Volume 内的 `vibecoding-study.db`，避免重新部署时丢失实验数据。
+- Railway 启动日志会输出 `[storage] SQLite database: ... (railway-volume, persistent)`，实验前应确认出现该信息。
+- 正式实验使用单个 Replica，并在 Railway 中为 Volume 开启备份。
 
 ## 检查命令
 
