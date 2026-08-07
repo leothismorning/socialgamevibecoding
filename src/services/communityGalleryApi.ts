@@ -244,9 +244,11 @@ export const communityGalleryApi = {
     version: 'initial' | 'community' | 'draft',
     cacheKey = '',
     versionId?: number,
+    performanceMode?: 'interactive' | 'thumbnail',
   ) => `/api/community-gallery/apps/${encodeURIComponent(appId)}/preview`
     + `?clientId=${encodeURIComponent(clientId)}&version=${version}&v=${encodeURIComponent(cacheKey)}`
-    + (versionId ? `&versionId=${encodeURIComponent(versionId)}` : ''),
+    + (versionId ? `&versionId=${encodeURIComponent(versionId)}` : '')
+    + (performanceMode ? `&performance=${encodeURIComponent(performanceMode)}` : ''),
   track: (
     clientId: string,
     eventType: string,

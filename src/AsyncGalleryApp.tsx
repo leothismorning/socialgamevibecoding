@@ -212,11 +212,50 @@ function AppPreview({
   cacheKey?: string;
   versionId?: number;
 }) {
+  const compactContainerRef = useRef<HTMLDivElement>(null);
+  const [compactActive, setCompactActive] = useState(!compact);
+
+  useEffect(() => {
+    if (!compact) {
+      setCompactActive(true);
+      return undefined;
+    }
+    const container = compactContainerRef.current;
+    if (!container || typeof IntersectionObserver === 'undefined') {
+      setCompactActive(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      setCompactActive(entry.isIntersecting);
+    }, { rootMargin: '160px 0px' });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [compact]);
+
+  const previewUrl = communityGalleryApi.previewUrl(
+    clientId,
+    app.id,
+    version,
+    cacheKey,
+    versionId,
+    compact ? 'thumbnail' : 'interactive',
+  );
+
+  if (compact) {
+    return (
+      <div ref={compactContainerRef} className="async-preview is-compact">
+        {compactActive
+          ? <iframe title={title} src={previewUrl} loading="lazy" sandbox="allow-scripts allow-forms allow-modals" />
+          : <div className="async-preview-suspended"><Eye /><span>进入可视区域后加载低帧率预览</span></div>}
+      </div>
+    );
+  }
+
   return (
     <iframe
-      className={compact ? 'async-preview is-compact' : 'async-preview'}
+      className="async-preview"
       title={title}
-      src={communityGalleryApi.previewUrl(clientId, app.id, version, cacheKey, versionId)}
+      src={previewUrl}
       sandbox="allow-scripts allow-forms allow-modals"
     />
   );

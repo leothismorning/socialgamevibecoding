@@ -1,5 +1,6 @@
 import { type AIProvider, type AIResult, generateWithAI } from './ai.js';
 import { addDebugLog } from './debugLog.js';
+import { ensureStandalonePerformanceGuard } from './previewPerformance.js';
 import { lookup } from 'node:dns/promises';
 import net from 'node:net';
 
@@ -439,7 +440,7 @@ if (!window.__vibecodingAgentReady) {
 
 function buildHtml(input: DevelopmentAgentInput, summary: string, body: string, css: string, js: string) {
   const safeTitle = input.experimentTitle || 'Vibecoding Prototype';
-  return `<!doctype html>
+  return ensureStandalonePerformanceGuard(`<!doctype html>
 <!-- SUMMARY: ${summary.replace(/-->/g, '--&gt;')} -->
 <html lang="zh-CN">
 <head>
@@ -457,7 +458,7 @@ ${body}
 ${ensurePlayableFallbackScript(js)}
   </script>
 </body>
-</html>`;
+</html>`);
 }
 
 function validateAssembledHtml(
@@ -544,7 +545,15 @@ ${input.recentConversation || 'No previous development messages.'}
 ${preservationPolicy}
 
 Current HTML excerpt:
-${truncate(input.currentCode || '', 18000)}`;
+${truncate(input.currentCode || '', 18000)}
+
+Mandatory performance contract:
+- Any continuous animation must target at most 30 FPS and use one bounded requestAnimationFrame loop rather than overlapping loops.
+- Pause animation work while document.hidden is true and resume safely when visible again.
+- Keep particle, trail, object, and history collections explicitly bounded; reuse objects instead of allocating large collections every frame.
+- For Canvas/WebGL, cap rendering density to Math.min(window.devicePixelRatio || 1, 1.5) and resize only when dimensions change.
+- Avoid expensive blur, shadow, backdrop-filter, layout reads, DOM creation, and event-listener registration inside animation frames.
+- Preserve ordinary clicks, forms, keyboard controls, timers, and non-animation interactions.`;
 
   const repairNotes: string[] = [];
   progress({ step: 'plan', order: 1, status: 'running', title: 'AI 正在制定修改计划', detail: '正在理解抽中的评论，并确认哪些现有内容必须保留。' });
@@ -660,6 +669,7 @@ Preserve the existing visual system and styling of all elements not explicitly t
 Do not use Tailwind, Bootstrap, @import, external stylesheets, or remote background-image URLs.
 Preserve any visual direction explicitly supplied by the Creator, selected ideas, fusion plan, or current HTML. If none is supplied, use restrained neutral styling only for readability, layout, usability, and responsive behavior.
 Include .agent-toast and .agent-toast.show styles.
+Keep continuous decorative animation lightweight. Do not animate large blur, filter, backdrop-filter, box-shadow, or layout-affecting properties across many elements.
 Keep CSS under 320 lines.`,
     6144,
     input.signal,
@@ -718,6 +728,7 @@ If a mini-game is requested, implement the actual playable mechanics, not just p
 Define all functions needed by the controls, but avoid relying on inline onclick.
 When adding, removing, toggling, replacing, or checking a CSS class at runtime, reuse the exact state class names already defined in Existing CSS. Never invent an is-* variant when CSS defines the unprefixed name, or vice versa.
 Ensure selected, correct, wrong, active, disabled, revealed, and completed states receive visibly different styles through an exact JavaScript-to-CSS class match.
+For continuous animation, use a single requestAnimationFrame loop with an explicit 1000 / 30 frame interval, skip work while document.hidden is true, cap Canvas pixel ratio at 1.5, bound all growing collections, and never register listeners or create large DOM/object collections inside each frame.
 Keep JavaScript under 260 lines.`,
     6144,
     input.signal,
@@ -836,7 +847,7 @@ ${truncate(css, 6000)}
 JavaScript excerpt:
 ${truncate(js, 3500)}
 
-Check that the visible layout has styling, images cannot render as broken icons, and required controls have matching ids. If the supplied requirements include a game, also check that it has real event logic.
+Check that the visible layout has styling, images cannot render as broken icons, and required controls have matching ids. If the supplied requirements include a game, also check that it has real event logic. If the JavaScript contains continuous animation, also check that it uses one bounded loop, targets no more than 30 FPS, pauses work while document.hidden, and does not grow particle/history collections without a cap.
 Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwise "FAIL: concrete blocking reason".`,
     2048,
     input.signal,

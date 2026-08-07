@@ -57,6 +57,10 @@ import {
 } from './communityGalleryDb.js';
 import { buildCommunityWorkspaceArchive } from './communityGalleryArchive.js';
 import {
+  applyPreviewPerformanceGuard,
+  type PreviewPerformanceMode,
+} from './previewPerformance.js';
+import {
   withSuiXiangKey,
   type SuiXiangQueueSnapshot,
 } from './suixiangKeyPool.js';
@@ -213,8 +217,15 @@ export function registerCommunityGalleryRoutes(app: Express) {
         requestedVersionId,
       );
       if (!code) return res.status(404).type('text/plain').send('该版本尚未发布。');
+      const performanceMode = String(req.query.performance || '');
+      if (performanceMode && !['interactive', 'thumbnail'].includes(performanceMode)) {
+        throw new Error('Invalid preview performance mode.');
+      }
+      const responseCode = performanceMode
+        ? applyPreviewPerformanceGuard(code, performanceMode as PreviewPerformanceMode)
+        : code;
       res.setHeader('Cache-Control', 'no-store');
-      return res.type('html').send(code);
+      return res.type('html').send(responseCode);
     } catch (error) {
       return sendError(res, error);
     }
