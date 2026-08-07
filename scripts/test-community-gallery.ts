@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import JSZip from 'jszip';
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vibe-gallery-async-'));
 process.env.STUDY_DB_PATH = path.join(testDir, 'study.db');
 
 const gallery = await import('../server/communityGalleryDb.js');
+const { buildCommunityWorkspaceArchive } = await import('../server/communityGalleryArchive.js');
 const { db } = await import('../server/studyDb.js');
 const html = (title: string) => `<!doctype html><html><body><main><h1>${title}</h1></main></body></html>`;
 const client = (account: number) => `client-${account}`;
@@ -203,6 +205,23 @@ state = gallery.closeAsyncCommunityStudy(hostClient, true);
 assert.equal(state.workspaces.test.status, 'closed');
 assert.equal(state.workspaces.regular.status, 'active');
 
+const testArchivePayload = gallery.exportCommunityWorkspace(hostClient, true);
+assert.equal(testArchivePayload.scope, 'test');
+assert.ok(testArchivePayload.apps.some((app: any) => app.id === testApp.id));
+assert.equal(testArchivePayload.apps.some((app: any) => app.id === regularApp.id), false);
+assert.ok(testArchivePayload.versions.some((version: any) => (
+  version.app_id === testApp.id && version.kind === 'initial'
+)));
+const testArchive = await buildCommunityWorkspaceArchive(
+  testArchivePayload,
+  '2026-08-08_12-30-45',
+);
+const testZip = await JSZip.loadAsync(testArchive.buffer);
+assert.ok(testZip.file('2026-08-08_12-30-45/research-data.json'));
+assert.ok(testZip.file('2026-08-08_12-30-45/apps/C01-Test App One/V0.html'));
+assert.ok(testZip.file('2026-08-08_12-30-45/apps/C01-Test App One/V1.html'));
+assert.ok(testZip.file('2026-08-08_12-30-45/apps/C01-Test App One/V2.html'));
+
 assert.throws(
   () => gallery.clearCommunityTestData(client(2), '清除测试角色数据'),
   /主持人|身份/,
@@ -232,4 +251,18 @@ assert.equal(reloggedTestCreator.viewer?.code, 'C01');
 assert.equal(Number(reloggedTestCreator.viewer?.isTest), 1);
 assert.equal(reloggedTestCreator.apps.length, 0);
 
-console.log('community gallery auth, isolation, per-app flow control, retry, and purge tests passed');
+state = gallery.closeAsyncCommunityStudy(hostClient, false);
+assert.equal(state.workspaces.regular.status, 'closed');
+assert.equal(state.workspaces.test.status, 'setup');
+const regularArchivePayload = gallery.exportCommunityWorkspace(hostClient, false);
+assert.ok(regularArchivePayload.apps.some((app: any) => app.id === regularApp.id));
+assert.equal(regularArchivePayload.apps.some((app: any) => app.id === testApp.id), false);
+state = gallery.startNewAsyncCommunityWorkspace(hostClient, false);
+assert.equal(state.workspaces.regular.status, 'setup');
+assert.equal(state.workspaces.test.status, 'setup');
+assert.equal(state.apps.some((app: any) => app.id === regularApp.id), false);
+assert.equal(state.apps.some((app: any) => app.id === testApp.id), false);
+assert.equal(state.comments.some((comment: any) => comment.content === 'A regular comment that must remain.'), false);
+assert.equal(state.participants.filter((participant: any) => participant.role === 'creator').length, 30);
+
+console.log('community gallery auth, isolation, archive, independent reset, flow control, retry, and purge tests passed');

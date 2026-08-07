@@ -106,6 +106,42 @@ function canUseCreativeTools(state: CommunityGalleryState) {
   return state.viewer?.role === 'creator';
 }
 
+function localTimestampName(date = new Date()) {
+  const part = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}`
+    + `_${part(date.getHours())}-${part(date.getMinutes())}-${part(date.getSeconds())}`;
+}
+
+function safeDownloadName(value: string, fallback: string) {
+  const cleaned = value
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 2_000);
+}
+
+async function downloadUrl(url: string, filename: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `文件下载失败（${response.status}）。`);
+  }
+  downloadBlob(await response.blob(), filename);
+}
+
 function isAppRoundOpen(app: CommunityApp) {
   return app.flow_stage === 'round_1' || app.flow_stage === 'round_2';
 }
@@ -717,8 +753,35 @@ function InitialCreatorStudio({
           <button
             className="async-publish"
             disabled={!ownApp?.draft_code || Boolean(busy)}
-            onClick={() => action('publish-initial', () => communityGalleryApi.publishInitial(clientId))}
-          ><Check /> 满意后发布初始版本</button>
+            onClick={() => action('publish-initial', async () => {
+              const next = await communityGalleryApi.publishInitial(clientId);
+              const publishedApp = next.apps.find((candidate) => candidate.creator_code === next.viewer?.code);
+              const publishedVersion = publishedApp
+                ? next.versions.find((version) => (
+                    version.app_id === publishedApp.id && version.kind === 'initial'
+                  ))
+                : undefined;
+              if (publishedApp && publishedVersion) {
+                try {
+                  const filename = `${safeDownloadName(next.viewer?.code || 'creator', 'creator')}`
+                    + `-${safeDownloadName(publishedApp.title, 'app')}-V0.html`;
+                  await downloadUrl(
+                    communityGalleryApi.previewUrl(
+                      clientId,
+                      publishedApp.id,
+                      'initial',
+                      String(publishedVersion.id),
+                      publishedVersion.id,
+                    ),
+                    filename,
+                  );
+                } catch (error) {
+                  window.alert(`版本已经发布，但项目代码保存失败：${error instanceof Error ? error.message : String(error)}`);
+                }
+              }
+              return next;
+            })}
+          ><Check /> 发布并且保存</button>
         </div>
       </div>
     </section>
@@ -3254,8 +3317,34 @@ function CommunityDraftPanel({
             <button
               className="async-primary"
               disabled={Boolean(busy)}
-              onClick={() => action('publish-community', () => communityGalleryApi.publishCommunity(clientId, app.id))}
-            ><Check /> 发布社区版本 {Number(app.draft_iteration_number || iterationNumber)}</button>
+              onClick={() => action('publish-community', async () => {
+                const next = await communityGalleryApi.publishCommunity(clientId, app.id);
+                const publishedApp = next.apps.find((candidate) => candidate.id === app.id);
+                const publishedVersion = next.versions
+                  .filter((version) => version.app_id === app.id && version.kind === 'community')
+                  .sort((left, right) => Number(right.version_number) - Number(left.version_number))[0];
+                if (publishedApp && publishedVersion) {
+                  try {
+                    const savedVersionNumber = Math.max(1, Number(publishedVersion.version_number) - 1);
+                    const filename = `${safeDownloadName(next.viewer?.code || app.creator_code, 'creator')}`
+                      + `-${safeDownloadName(publishedApp.title, 'app')}-V${savedVersionNumber}.html`;
+                    await downloadUrl(
+                      communityGalleryApi.previewUrl(
+                        clientId,
+                        publishedApp.id,
+                        'community',
+                        String(publishedVersion.id),
+                        publishedVersion.id,
+                      ),
+                      filename,
+                    );
+                  } catch (error) {
+                    window.alert(`版本已经发布，但项目代码保存失败：${error instanceof Error ? error.message : String(error)}`);
+                  }
+                }
+                return next;
+              })}
+            ><Check /> 发布并且保存</button>
           </div>
         </div>
       )}
@@ -3691,6 +3780,15 @@ function HostPanel({
     }
     return next;
   };
+  const archiveAndResetWorkspace = async (isTest: boolean) => {
+    const archiveName = localTimestampName();
+    const workspaceLabel = isTest ? '测试账号' : '正式账号';
+    await downloadUrl(
+      communityGalleryApi.workspaceArchiveUrl(clientId, isTest, archiveName),
+      `${archiveName}-${workspaceLabel}.zip`,
+    );
+    return communityGalleryApi.newWorkspaceStudy(clientId, isTest);
+  };
   return (
     <>
     <section className="async-host-panel">
@@ -3698,9 +3796,6 @@ function HostPanel({
         <div><span className="async-eyebrow">主持人 · 异步研究</span><h2>研究控制与完成进度</h2><p>主持人锁定本轮点赞后，系统会按点赞数加权随机抽取每个应用的开发来源，并立即启动开发任务。</p></div>
         <div className="async-host-actions">
           <a href={`/api/community-gallery/export?clientId=${encodeURIComponent(clientId)}`}><Download /> 导出研究数据</a>
-          {bothWorkspacesClosed && (
-            <button disabled={Boolean(busy)} onClick={() => action('new-study', () => communityGalleryApi.newStudy(clientId))}><RefreshCw /> 新建研究</button>
-          )}
         </div>
       </header>
       <section className="async-workspace-controls">
@@ -3737,6 +3832,22 @@ function HostPanel({
                 )}
                 {item.workspace.status === 'active' && (
                   <button disabled={Boolean(busy)} onClick={() => action(`close-${item.key}-study`, () => communityGalleryApi.closeStudy(clientId, item.isTest))}><Check /> 结束此流程</button>
+                )}
+                {item.workspace.status === 'closed' && (
+                  <button
+                    className="async-primary"
+                    disabled={Boolean(busy)}
+                    onClick={() => {
+                      const workspaceLabel = item.isTest ? '测试账号' : '正式账号';
+                      if (!window.confirm(
+                        `确认新建${workspaceLabel}研究吗？系统会先把该流程的作品、版本和研究数据下载到本机，然后只清空该流程。`,
+                      )) return;
+                      void action(
+                        `new-${item.key}-study`,
+                        () => archiveAndResetWorkspace(item.isTest),
+                      );
+                    }}
+                  ><RefreshCw /> 新建研究</button>
                 )}
               </aside>
             </section>

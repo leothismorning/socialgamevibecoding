@@ -225,6 +225,19 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
+  newWorkspaceStudy: (clientId: string, isTest: boolean) =>
+    request('/api/community-gallery/study/new-workspace', {
+      method: 'POST',
+      body: body({ clientId, isTest }),
+    }),
+  workspaceArchiveUrl: (
+    clientId: string,
+    isTest: boolean,
+    archiveName: string,
+  ) => `/api/community-gallery/study/archive`
+    + `?clientId=${encodeURIComponent(clientId)}`
+    + `&isTest=${encodeURIComponent(String(isTest))}`
+    + `&archiveName=${encodeURIComponent(archiveName)}`,
   previewUrl: (
     clientId: string,
     appId: string,

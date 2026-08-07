@@ -11,6 +11,7 @@ import {
   deleteCommunityComment,
   deleteCommunitySynthesis,
   exportCommunityStudy,
+  exportCommunityWorkspace,
   enterCommunityDevelopmentStage,
   failCreatorDevelopmentOperation,
   failCommunityGeneration,
@@ -38,6 +39,7 @@ import {
   startAsyncCommunityStudy,
   startCommunityGeneration,
   startNewAsyncCommunityStudy,
+  startNewAsyncCommunityWorkspace,
   toggleCommunityAppLike,
   toggleCommunityCommentLike,
   toggleCreativeBasket,
@@ -49,6 +51,7 @@ import {
   withdrawSynthesisForVote,
   type CommunitySourceType,
 } from './communityGalleryDb.js';
+import { buildCommunityWorkspaceArchive } from './communityGalleryArchive.js';
 import { getAIProvider, setAIProvider, type StudyAIProvider } from './studyDb.js';
 
 function sendError(res: Response, error: unknown) {
@@ -314,6 +317,27 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/apps/publish-initial', (req, res) => {
     try {
       res.json(publishInitialVersion(clientIdFrom(req)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.get('/api/community-gallery/study/archive', async (req, res) => {
+    try {
+      const isTest = String(req.query.isTest || '') === 'true';
+      const payload = exportCommunityWorkspace(clientIdFrom(req), isTest);
+      const archive = await buildCommunityWorkspaceArchive(
+        payload,
+        String(req.query.archiveName || ''),
+      );
+      const suffix = isTest ? 'test' : 'regular';
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${archive.archiveName}-${suffix}.zip"`,
+      );
+      res.setHeader('Content-Length', String(archive.buffer.length));
+      res.send(archive.buffer);
     } catch (error) {
       sendError(res, error);
     }
@@ -617,6 +641,17 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/study/new', (req, res) => {
     try {
       res.json(startNewAsyncCommunityStudy(clientIdFrom(req)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/study/new-workspace', (req, res) => {
+    try {
+      res.json(startNewAsyncCommunityWorkspace(
+        clientIdFrom(req),
+        Boolean(req.body?.isTest),
+      ));
     } catch (error) {
       sendError(res, error);
     }

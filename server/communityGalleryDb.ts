@@ -2016,10 +2016,11 @@ function scoredDevelopmentCandidates(appId: string, iterationNumber: 1 | 2) {
     LEFT JOIN vg_async_synthesis_likes l
       ON l.study_id = s.study_id AND l.synthesis_id = s.id
     WHERE s.study_id = ? AND s.target_app_id = ?
-      AND s.layer = ?
+      AND s.layer = ? AND s.target_version_id = ?
+      AND COALESCE(s.is_development_brief, 0) = 0
       AND s.withdrawn_at IS NULL AND s.deleted_at IS NULL
     GROUP BY s.id
-  `).all(study().id, appId, iterationNumber) as any[];
+  `).all(study().id, appId, iterationNumber, eligibleVersionId) as any[];
   return [
     ...commentCandidates.map((candidate) => ({
       ...candidate,
@@ -3522,6 +3523,69 @@ function collectCommunityStudyData(studyId: string, includeResetSnapshots = fals
   ]));
 }
 
+function collectCommunityWorkspaceData(studyId: string, isTest: boolean) {
+  const all = collectCommunityStudyData(studyId) as Record<string, any[]>;
+  const workspaceFlag = Number(isTest);
+  const workspaceName = isTest ? 'test' : 'regular';
+  const creators = all.participants.filter((row) => (
+    row.role === 'creator' && Number(row.is_test) === workspaceFlag
+  ));
+  const creatorCodes = new Set(creators.map((row) => row.code));
+  const apps = all.apps.filter((row) => Number(row.is_test) === workspaceFlag);
+  const appIds = new Set(apps.map((row) => row.id));
+  const versions = all.versions.filter((row) => appIds.has(row.app_id));
+  const comments = all.comments.filter((row) => appIds.has(row.app_id));
+  const commentIds = new Set(comments.map((row) => Number(row.id)));
+  const syntheses = all.syntheses.filter((row) => appIds.has(row.target_app_id));
+  const synthesisIds = new Set(syntheses.map((row) => Number(row.id)));
+  const creatorOperations = all.creator_operations.filter((row) => (
+    creatorCodes.has(row.creator_code) || (row.app_id && appIds.has(row.app_id))
+  ));
+  const operationIds = new Set(creatorOperations.map((row) => row.id));
+  const generationJobs = all.generation_jobs.filter((row) => appIds.has(row.app_id));
+  const generationJobIds = new Set(generationJobs.map((row) => Number(row.id)));
+  const relevantEvent = (row: any) => {
+    if (creatorCodes.has(row.participant_code)) return true;
+    if (row.entity_type === 'app' && appIds.has(row.entity_id)) return true;
+    if (row.entity_type === 'comment' && commentIds.has(Number(row.entity_id))) return true;
+    if (row.entity_type === 'synthesis' && synthesisIds.has(Number(row.entity_id))) return true;
+    if (row.entity_type === 'generation_job' && generationJobIds.has(Number(row.entity_id))) return true;
+    if (row.entity_type === 'creator_operation' && operationIds.has(row.entity_id)) return true;
+    const dataJson = String(row.data_json || '');
+    return dataJson.includes(`"workspace":"${workspaceName}"`)
+      || [...appIds].some((appId) => dataJson.includes(String(appId)));
+  };
+  const host = all.participants.find((row) => row.role === 'host');
+  return {
+    participants: host ? [host, ...creators] : creators,
+    workspace_states: all.workspace_states.filter((row) => Number(row.is_test) === workspaceFlag),
+    sessions: all.sessions.filter((row) => creatorCodes.has(row.participant_code)),
+    apps,
+    versions,
+    drafts: all.drafts.filter((row) => appIds.has(row.app_id)),
+    development_messages: all.development_messages.filter((row) => appIds.has(row.app_id)),
+    creator_revisions: all.creator_revisions.filter((row) => appIds.has(row.app_id)),
+    creator_operations: creatorOperations,
+    creator_progress: all.creator_progress.filter((row) => operationIds.has(row.operation_id)),
+    comments,
+    comment_likes: all.comment_likes.filter((row) => commentIds.has(Number(row.comment_id))),
+    app_likes: all.app_likes.filter((row) => appIds.has(row.app_id)),
+    basket_items: all.basket_items.filter((row) => creatorCodes.has(row.participant_code)),
+    syntheses,
+    synthesis_sources: all.synthesis_sources.filter((row) => synthesisIds.has(Number(row.synthesis_id))),
+    synthesis_votes: all.synthesis_votes.filter((row) => appIds.has(row.target_app_id)),
+    synthesis_likes: all.synthesis_likes.filter((row) => synthesisIds.has(Number(row.synthesis_id))),
+    stage_selections: all.stage_selections.filter((row) => appIds.has(row.app_id)),
+    generation_jobs: generationJobs,
+    generation_events: all.generation_events.filter((row) => generationJobIds.has(Number(row.job_id))),
+    notifications: all.notifications.filter((row) => appIds.has(row.app_id)),
+    assignments: all.assignments.filter((row) => appIds.has(row.app_id)),
+    wildcards: all.wildcards.filter((row) => appIds.has(row.app_id)),
+    contributors: all.contributors.filter((row) => appIds.has(row.app_id)),
+    events: all.events.filter(relevantEvent),
+  };
+}
+
 function communityTestDataPreview(studyId: string) {
   const count = (query: string, ...params: unknown[]) => Number((
     db.prepare(query).get(...params) as { count?: number } | undefined
@@ -3825,6 +3889,98 @@ export function closeAsyncCommunityStudy(clientId: string, isTest: boolean) {
   updateWorkspaceState(currentStudy.id, isTest, { status: 'closed', closedAt: timestamp });
   recordEvent(viewer.code, 'close_async_workspace', 'study', currentStudy.id, {
     workspace: isTest ? 'test' : 'regular',
+  });
+  return getCommunityGalleryState(clientId);
+}
+
+function deleteRowsByValues(
+  table: string,
+  column: string,
+  values: Array<string | number>,
+) {
+  if (!values.length) return;
+  const placeholders = values.map(() => '?').join(',');
+  db.prepare(`DELETE FROM ${table} WHERE study_id = ? AND ${column} IN (${placeholders})`)
+    .run(study().id, ...values);
+}
+
+export function exportCommunityWorkspace(clientId: string, isTest: boolean) {
+  const viewer = requireViewer(clientId, 'host');
+  const currentStudy = study();
+  const workspace = workspaceState(currentStudy.id, isTest);
+  if (workspace.status !== 'closed') {
+    throw new Error(`请先结束${isTest ? '测试' : '正式'}流程，再新建研究。`);
+  }
+  recordEvent(viewer.code, 'export_workspace_archive', 'study', currentStudy.id, {
+    workspace: isTest ? 'test' : 'regular',
+  });
+  return {
+    exported_at: now(),
+    scope: isTest ? 'test' : 'regular',
+    study: currentStudy,
+    workspace,
+    ...collectCommunityWorkspaceData(currentStudy.id, isTest),
+  };
+}
+
+export function startNewAsyncCommunityWorkspace(clientId: string, isTest: boolean) {
+  const viewer = requireViewer(clientId, 'host');
+  const currentStudy = study();
+  const workspace = workspaceState(currentStudy.id, isTest);
+  if (workspace.status !== 'closed') {
+    throw new Error(`请先结束${isTest ? '测试' : '正式'}流程。`);
+  }
+  const data = collectCommunityWorkspaceData(currentStudy.id, isTest);
+  const runningJobs = data.generation_jobs.filter((row) => row.status === 'running');
+  const runningOperations = data.creator_operations.filter((row) => row.status === 'running');
+  if (runningJobs.length || runningOperations.length) {
+    throw new Error(`${isTest ? '测试' : '正式'}流程仍有 AI 开发任务运行，暂时不能新建研究。`);
+  }
+  const participantCodes = data.participants
+    .filter((row) => row.role === 'creator')
+    .map((row) => row.code);
+  const appIds = data.apps.map((row) => row.id);
+  const commentIds = data.comments.map((row) => Number(row.id));
+  const synthesisIds = data.syntheses.map((row) => Number(row.id));
+  const operationIds = data.creator_operations.map((row) => row.id);
+  const jobIds = data.generation_jobs.map((row) => Number(row.id));
+  const eventIds = data.events.map((row) => Number(row.id));
+  const timestamp = now();
+  const transaction = db.transaction(() => {
+    deleteRowsByValues('vg_async_events', 'id', eventIds);
+    deleteRowsByValues('vg_async_sessions', 'participant_code', participantCodes);
+    deleteRowsByValues('vg_async_creator_progress', 'operation_id', operationIds);
+    deleteRowsByValues('vg_async_generation_events', 'job_id', jobIds);
+    deleteRowsByValues('vg_async_comment_likes', 'comment_id', commentIds);
+    deleteRowsByValues('vg_async_app_likes', 'app_id', appIds);
+    deleteRowsByValues('vg_async_synthesis_likes', 'synthesis_id', synthesisIds);
+    deleteRowsByValues('vg_async_synthesis_votes', 'target_app_id', appIds);
+    deleteRowsByValues('vg_async_basket_items', 'participant_code', participantCodes);
+    deleteRowsByValues('vg_async_synthesis_sources', 'synthesis_id', synthesisIds);
+    for (const table of ['vg_async_stage_selections', 'vg_async_generation_jobs',
+      'vg_async_notifications', 'vg_async_assignments', 'vg_async_wildcards',
+      'vg_async_contributors', 'vg_async_creator_revisions',
+      'vg_async_development_messages', 'vg_async_drafts', 'vg_async_versions',
+      'vg_async_comments'] as const) {
+      deleteRowsByValues(table, 'app_id', appIds);
+    }
+    deleteRowsByValues('vg_async_creator_operations', 'id', operationIds);
+    deleteRowsByValues('vg_async_syntheses', 'target_app_id', appIds);
+    deleteRowsByValues('vg_async_apps', 'id', appIds);
+    updateWorkspaceState(currentStudy.id, isTest, {
+      status: 'setup',
+      workflowStage: 'synthesis_1',
+      startedAt: null,
+      closedAt: null,
+    });
+  });
+  transaction();
+  recordEvent(viewer.code, 'create_new_workspace_research', 'study', currentStudy.id, {
+    workspace: isTest ? 'test' : 'regular',
+    archivedAt: timestamp,
+    creatorCount: participantCodes.length,
+    appCount: appIds.length,
+    versionCount: data.versions.length,
   });
   return getCommunityGalleryState(clientId);
 }
