@@ -2,6 +2,8 @@ export type PreviewPerformanceMode = 'interactive' | 'thumbnail';
 
 export const INTERACTIVE_PREVIEW_FPS = 30;
 export const THUMBNAIL_PREVIEW_FPS = 5;
+export const PLATFORM_PREVIEW_MAX_DPR = 1;
+export const STANDALONE_APP_MAX_DPR = 1.5;
 
 const STANDALONE_MARKER = 'data-vibecoding-performance-guard="standalone"';
 
@@ -19,14 +21,34 @@ function insertAtDocumentStart(html: string, snippet: string) {
   return `${snippet}\n${html}`;
 }
 
-function animationFrameGuard(maxFps: number, marker: string) {
+function animationFrameGuard(maxFps: number, maxDpr: number, marker: string) {
   return `<script ${marker}>
 (() => {
   const requestedCap = ${maxFps};
+  const requestedDprCap = ${maxDpr};
   const previousCap = Number(window.__VIBECODING_MAX_FPS__);
   window.__VIBECODING_MAX_FPS__ = Number.isFinite(previousCap) && previousCap > 0
     ? Math.min(previousCap, requestedCap)
     : requestedCap;
+  const previousDprCap = Number(window.__VIBECODING_MAX_DPR__);
+  window.__VIBECODING_MAX_DPR__ = Number.isFinite(previousDprCap) && previousDprCap > 0
+    ? Math.min(previousDprCap, requestedDprCap)
+    : requestedDprCap;
+  if (!window.__VIBECODING_DPR_GUARD__) {
+    window.__VIBECODING_DPR_GUARD__ = true;
+    const nativeDevicePixelRatio = Math.max(1, Number(window.devicePixelRatio) || 1);
+    try {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        get: () => Math.min(
+          nativeDevicePixelRatio,
+          Math.max(0.5, Number(window.__VIBECODING_MAX_DPR__) || requestedDprCap),
+        ),
+      });
+    } catch {
+      // Some embedded browsers expose a non-configurable devicePixelRatio.
+    }
+  }
   if (window.__VIBECODING_RAF_GUARD__) return;
   window.__VIBECODING_RAF_GUARD__ = true;
 
@@ -91,7 +113,11 @@ export function ensureStandalonePerformanceGuard(html: string) {
   if (!html.trim() || html.includes(STANDALONE_MARKER)) return html;
   return insertAtDocumentStart(
     html,
-    animationFrameGuard(INTERACTIVE_PREVIEW_FPS, STANDALONE_MARKER),
+    animationFrameGuard(
+      INTERACTIVE_PREVIEW_FPS,
+      STANDALONE_APP_MAX_DPR,
+      STANDALONE_MARKER,
+    ),
   );
 }
 
@@ -104,7 +130,7 @@ export function applyPreviewPerformanceGuard(
   if (html.includes(marker)) return html;
   const maxFps = mode === 'thumbnail' ? THUMBNAIL_PREVIEW_FPS : INTERACTIVE_PREVIEW_FPS;
   const additions = [
-    animationFrameGuard(maxFps, marker),
+    animationFrameGuard(maxFps, PLATFORM_PREVIEW_MAX_DPR, marker),
     mode === 'thumbnail' ? thumbnailStyleGuard() : '',
   ].filter(Boolean).join('\n');
   return insertAtDocumentStart(html, additions);

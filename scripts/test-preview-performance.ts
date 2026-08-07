@@ -18,6 +18,7 @@ function runtimeFor(html: string) {
   const intervalDelays: number[] = [];
   const document = { hidden: false };
   const window: Record<string, any> = {
+    devicePixelRatio: 2,
     requestAnimationFrame(callback: (timestamp: number) => void) {
       const id = nextNativeId++;
       nativeCallbacks.set(id, callback);
@@ -76,10 +77,15 @@ const standalone = ensureStandalonePerformanceGuard(baseHtml);
 assert.equal(guardScripts(standalone).length, 1);
 assert.equal(ensureStandalonePerformanceGuard(standalone), standalone);
 assert.ok(standalone.indexOf('data-vibecoding-performance-guard') < standalone.indexOf('<title>'));
+const standaloneRuntime = runtimeFor(standalone);
+assert.equal(standaloneRuntime.window.devicePixelRatio, 1.5);
+assert.equal(standaloneRuntime.window.__VIBECODING_MAX_DPR__, 1.5);
 
 const interactive = applyPreviewPerformanceGuard(baseHtml, 'interactive');
 const interactiveRun = runContinuousAnimation(interactive);
 assert.ok(interactiveRun.calls >= 29 && interactiveRun.calls <= 31, `Expected about 30 FPS, got ${interactiveRun.calls}`);
+assert.equal(interactiveRun.runtime.window.devicePixelRatio, 1);
+assert.equal(interactiveRun.runtime.window.__VIBECODING_MAX_DPR__, 1);
 interactiveRun.runtime.window.setInterval(() => undefined, 0);
 assert.ok(interactiveRun.runtime.intervalDelays[0] >= 1000 / 30);
 
@@ -88,6 +94,8 @@ assert.match(thumbnail, /data-vibecoding-thumbnail-performance/);
 assert.match(thumbnail, /animation-play-state:\s*paused/);
 const thumbnailRun = runContinuousAnimation(thumbnail);
 assert.ok(thumbnailRun.calls >= 5 && thumbnailRun.calls <= 6, `Expected about 5 FPS, got ${thumbnailRun.calls}`);
+assert.equal(thumbnailRun.runtime.window.devicePixelRatio, 1);
+assert.equal(thumbnailRun.runtime.window.__VIBECODING_MAX_DPR__, 1);
 thumbnailRun.runtime.window.setInterval(() => undefined, 0);
 assert.ok(thumbnailRun.runtime.intervalDelays[0] >= 200);
 
@@ -109,4 +117,4 @@ cancelRuntime.window.cancelAnimationFrame(cancelledId);
 cancelRuntime.pump(0);
 assert.equal(cancelledCalls, 0);
 
-console.log('Preview performance guards passed: standalone 30 FPS, interactive 30 FPS, thumbnail 5 FPS, timer clamping, hidden pause, and cancellation');
+console.log('Preview performance guards passed: standalone DPR 1.5, platform DPR 1, 30/5 FPS caps, timer clamping, hidden pause, and cancellation');
