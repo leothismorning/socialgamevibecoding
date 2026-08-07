@@ -201,6 +201,11 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
+  resetTestData: (clientId: string, confirmation: string) =>
+    request('/api/community-gallery/study/reset-test-data', {
+      method: 'POST',
+      body: body({ clientId, confirmation }),
+    }),
   closeStudy: (clientId: string) =>
     request('/api/community-gallery/study/close', {
       method: 'POST',

@@ -3568,10 +3568,17 @@ function HostPanel({
     .map((participant) => participant.code);
   const serverControlCreatorKey = serverControlCreators.join(',');
   const [controlCreators, setControlCreators] = useState<string[]>(serverControlCreators);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetConfirmation, setResetConfirmation] = useState('');
 
   useEffect(() => {
     setControlCreators(serverControlCreators);
   }, [serverControlCreatorKey, state.study.id]);
+
+  useEffect(() => {
+    setResetDialogOpen(false);
+    setResetConfirmation('');
+  }, [state.study.id]);
 
   const toggleConditionMember = (code: string) => {
     setControlCreators((current) => (
@@ -3655,6 +3662,7 @@ function HostPanel({
       ? 2
       : null;
   return (
+    <>
     <section className="async-host-panel">
       <header>
         <div><span className="async-eyebrow">主持人 · 异步研究</span><h2>研究控制与完成进度</h2><p>主持人锁定本轮点赞后，系统会按点赞数加权随机抽取每个应用的开发来源，并立即启动开发任务。</p></div>
@@ -3677,6 +3685,34 @@ function HostPanel({
           )}
         </div>
       </header>
+      {state.study.status !== 'closed' && (
+        <section className="async-test-reset-panel">
+          <div className="async-test-reset-copy">
+            <span><Trash2 /></span>
+            <div>
+              <span className="async-eyebrow">主持人 · 实验准备</span>
+              <h3>清理测试数据，保留初始 App</h3>
+              <p>正式实验前可清除评论、点赞、综合评论、抽取结果和后续版本。执行前会自动保存完整快照，初始 App、初始版本、分组设置和参与者编号不会丢失。</p>
+            </div>
+          </div>
+          <div className="async-test-reset-stats" aria-label="待清理数据概览">
+            <span><strong>{state.testReset.initialAppCount}</strong> 个初始 App 保留</span>
+            <span><strong>{state.testReset.commentCount}</strong> 条评论清理</span>
+            <span><strong>{state.testReset.communityVersionCount}</strong> 个后续版本清理</span>
+            <span><strong>{state.testReset.snapshotCount}</strong> 份历史快照</span>
+          </div>
+          <button
+            className="async-test-reset-trigger"
+            disabled={Boolean(busy) || !state.testReset.hasResettableData || state.testReset.runningTaskCount > 0}
+            title={state.testReset.runningTaskCount > 0
+              ? '仍有开发任务正在运行，请等待任务结束后再清理'
+              : !state.testReset.hasResettableData
+                ? '当前没有需要清理的测试数据'
+                : '预览清理范围并进行二次确认'}
+            onClick={() => setResetDialogOpen(true)}
+          ><Trash2 /> 清理测试数据</button>
+        </section>
+      )}
       {state.study.status !== 'closed' && (
         <section className="async-condition-assignment">
           <header>
@@ -3822,6 +3858,74 @@ function HostPanel({
         </section>
       )}
     </section>
+    {resetDialogOpen && (
+      <div className="async-overlay async-test-reset-overlay" role="dialog" aria-modal="true" aria-labelledby="test-reset-title">
+        <section className="async-flow-reply-dialog async-test-reset-dialog">
+          <header>
+            <div>
+              <span className="async-eyebrow">不可撤销操作 · 执行前自动保存快照</span>
+              <h2 id="test-reset-title">确认清理测试数据</h2>
+            </div>
+            <button
+              onClick={() => {
+                setResetDialogOpen(false);
+                setResetConfirmation('');
+              }}
+              aria-label="关闭清理测试数据窗口"
+            ><X /></button>
+          </header>
+          <p className="async-test-reset-warning">
+            当前研究将回到“尚未开始”状态。初始 App 和初始版本会保留，下面的测试互动与演化数据会从当前实验视图中移除。
+          </p>
+          <div className="async-test-reset-summary">
+            <article><span>保留</span><strong>{state.testReset.initialAppCount}</strong><small>初始 App</small></article>
+            <article><span>清理</span><strong>{state.testReset.commentCount}</strong><small>评论</small></article>
+            <article><span>清理</span><strong>{state.testReset.synthesisCount}</strong><small>综合评论</small></article>
+            <article><span>清理</span><strong>{state.testReset.likeCount}</strong><small>点赞 / 投票</small></article>
+            <article><span>清理</span><strong>{state.testReset.communityVersionCount}</strong><small>后续版本</small></article>
+            <article><span>清理</span><strong>{state.testReset.developmentJobCount}</strong><small>开发任务</small></article>
+          </div>
+          <div className="async-test-reset-snapshot-note">
+            <CheckCircle2 />
+            <div>
+              <strong>执行时先保存完整清理前快照</strong>
+              <span>快照与研究数据库一起保存在持久化存储中，也会包含在主持人的研究数据导出文件里。</span>
+            </div>
+          </div>
+          <label className="async-test-reset-confirmation">
+            <span>请输入 <strong>清理测试数据</strong> 以确认</span>
+            <input
+              autoFocus
+              value={resetConfirmation}
+              onChange={(event) => setResetConfirmation(event.target.value)}
+              placeholder="清理测试数据"
+            />
+          </label>
+          <div className="async-flow-dialog-actions">
+            <button
+              className="async-secondary"
+              onClick={() => {
+                setResetDialogOpen(false);
+                setResetConfirmation('');
+              }}
+            >取消</button>
+            <button
+              className="async-test-reset-confirm"
+              disabled={Boolean(busy) || resetConfirmation.trim() !== '清理测试数据'}
+              onClick={() => {
+                void action(
+                  'reset-test-data',
+                  () => communityGalleryApi.resetTestData(clientId, resetConfirmation),
+                );
+                setResetDialogOpen(false);
+                setResetConfirmation('');
+              }}
+            ><Trash2 /> 保存快照并清理</button>
+          </div>
+        </section>
+      </div>
+    )}
+    </>
   );
 }
 

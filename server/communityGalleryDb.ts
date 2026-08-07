@@ -14,6 +14,34 @@ const CREATOR_CODES = Array.from(
   (_, index) => `C${String(index + 1).padStart(2, '0')}`,
 );
 const now = () => new Date().toISOString();
+const TEST_RESET_CONFIRMATION = '清理测试数据';
+const COMMUNITY_STUDY_DATA_TABLES = [
+  'vg_async_participants',
+  'vg_async_sessions',
+  'vg_async_apps',
+  'vg_async_versions',
+  'vg_async_drafts',
+  'vg_async_development_messages',
+  'vg_async_creator_revisions',
+  'vg_async_creator_operations',
+  'vg_async_creator_progress',
+  'vg_async_comments',
+  'vg_async_comment_likes',
+  'vg_async_app_likes',
+  'vg_async_basket_items',
+  'vg_async_syntheses',
+  'vg_async_synthesis_sources',
+  'vg_async_synthesis_votes',
+  'vg_async_synthesis_likes',
+  'vg_async_stage_selections',
+  'vg_async_generation_jobs',
+  'vg_async_generation_events',
+  'vg_async_notifications',
+  'vg_async_assignments',
+  'vg_async_wildcards',
+  'vg_async_contributors',
+  'vg_async_events',
+] as const;
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS vg_async_settings (
@@ -352,6 +380,15 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS vg_async_reset_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    study_id TEXT NOT NULL,
+    host_code TEXT NOT NULL,
+    counts_json TEXT NOT NULL DEFAULT '{}',
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_vg_async_apps_study_condition
     ON vg_async_apps (study_id, condition_name, status);
   CREATE INDEX IF NOT EXISTS idx_vg_async_comments_app
@@ -368,6 +405,8 @@ db.exec(`
     ON vg_async_wildcards (study_id, app_id, iteration_number);
   CREATE INDEX IF NOT EXISTS idx_vg_async_contributors_app
     ON vg_async_contributors (study_id, app_id, iteration_number);
+  CREATE INDEX IF NOT EXISTS idx_vg_async_reset_snapshots_study
+    ON vg_async_reset_snapshots (study_id, created_at);
 `);
 
 const versionsDefinition = db.prepare(`
@@ -3193,6 +3232,204 @@ function ensureAssignments() {
   }
 }
 
+function collectCommunityStudyData(studyId: string, includeResetSnapshots = false) {
+  const tables = includeResetSnapshots
+    ? [...COMMUNITY_STUDY_DATA_TABLES, 'vg_async_reset_snapshots']
+    : COMMUNITY_STUDY_DATA_TABLES;
+  return Object.fromEntries(tables.map((table) => [
+    table.replace('vg_async_', ''),
+    db.prepare(`SELECT * FROM ${table} WHERE study_id = ? ORDER BY rowid`).all(studyId),
+  ]));
+}
+
+function communityTestResetPreview(studyId: string) {
+  const currentStudy = db.prepare(`SELECT status FROM vg_async_studies WHERE id = ?`)
+    .get(studyId) as { status?: CommunityStatus } | undefined;
+  const count = (query: string, ...params: unknown[]) => Number((
+    db.prepare(query).get(...params) as { count?: number } | undefined
+  )?.count || 0);
+  const initialAppCount = count(`SELECT COUNT(*) AS count FROM vg_async_apps WHERE study_id = ?`, studyId);
+  const initialVersionCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_versions WHERE study_id = ? AND kind = 'initial'
+  `, studyId);
+  const communityVersionCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_versions WHERE study_id = ? AND kind <> 'initial'
+  `, studyId);
+  const commentCount = count(`SELECT COUNT(*) AS count FROM vg_async_comments WHERE study_id = ?`, studyId);
+  const synthesisCount = count(`SELECT COUNT(*) AS count FROM vg_async_syntheses WHERE study_id = ?`, studyId);
+  const likeCount = count(`
+    SELECT
+      (SELECT COUNT(*) FROM vg_async_comment_likes WHERE study_id = ?) +
+      (SELECT COUNT(*) FROM vg_async_app_likes WHERE study_id = ?) +
+      (SELECT COUNT(*) FROM vg_async_synthesis_likes WHERE study_id = ?) AS count
+  `, studyId, studyId, studyId);
+  const wildcardCount = count(`SELECT COUNT(*) AS count FROM vg_async_wildcards WHERE study_id = ?`, studyId);
+  const developmentJobCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_generation_jobs WHERE study_id = ?
+  `, studyId);
+  const behaviorEventCount = count(`SELECT COUNT(*) AS count FROM vg_async_events WHERE study_id = ?`, studyId);
+  const runningTaskCount = count(`
+    SELECT
+      (SELECT COUNT(*) FROM vg_async_generation_jobs WHERE study_id = ? AND status = 'running') +
+      (SELECT COUNT(*) FROM vg_async_creator_operations
+        WHERE study_id = ? AND status = 'running') AS count
+  `, studyId, studyId);
+  const snapshotSummary = db.prepare(`
+    SELECT COUNT(*) AS count, MAX(created_at) AS last_reset_at
+    FROM vg_async_reset_snapshots WHERE study_id = ?
+  `).get(studyId) as { count?: number; last_reset_at?: string } | undefined;
+  const resettableRecordCount = communityVersionCount
+    + commentCount
+    + synthesisCount
+    + likeCount
+    + wildcardCount
+    + developmentJobCount;
+  return {
+    initialAppCount,
+    initialVersionCount,
+    communityVersionCount,
+    commentCount,
+    synthesisCount,
+    likeCount,
+    wildcardCount,
+    developmentJobCount,
+    behaviorEventCount,
+    runningTaskCount,
+    snapshotCount: Number(snapshotSummary?.count || 0),
+    lastResetAt: snapshotSummary?.last_reset_at || undefined,
+    hasResettableData: currentStudy?.status === 'active' || resettableRecordCount > 0,
+  };
+}
+
+export function resetCommunityTestData(clientId: string, confirmation: string) {
+  const viewer = requireViewer(clientId, 'host');
+  const currentStudy = study();
+  if (currentStudy.status === 'closed') throw new Error('已结束的研究不能清理测试数据。');
+  if (confirmation.trim() !== TEST_RESET_CONFIRMATION) {
+    throw new Error(`请输入“${TEST_RESET_CONFIRMATION}”确认操作。`);
+  }
+  const preview = communityTestResetPreview(currentStudy.id);
+  if (preview.runningTaskCount > 0) {
+    throw new Error('仍有 AI 开发任务正在运行，请等待全部完成或失败后再清理。');
+  }
+  if (!preview.hasResettableData) throw new Error('当前没有需要清理的测试互动数据。');
+
+  const timestamp = now();
+  const snapshotPayload = JSON.stringify({
+    snapshot_version: 1,
+    captured_at: timestamp,
+    study: currentStudy,
+    ...collectCommunityStudyData(currentStudy.id),
+  });
+  let snapshotId = 0;
+  const transaction = db.transaction(() => {
+    const snapshot = db.prepare(`
+      INSERT INTO vg_async_reset_snapshots
+        (study_id, host_code, counts_json, snapshot_json, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      currentStudy.id,
+      viewer.code,
+      JSON.stringify(preview),
+      snapshotPayload,
+      timestamp,
+    );
+    snapshotId = Number(snapshot.lastInsertRowid);
+
+    // Keep setup/initial-creation provenance in the active study. Everything
+    // else is already recoverable from the snapshot created above.
+    db.prepare(`
+      DELETE FROM vg_async_events
+      WHERE study_id = ?
+        AND NOT (
+          event_type IN (
+            'join_study', 'configure_study_conditions', 'update_study_conditions',
+            'save_initial_draft', 'publish_initial_version', 'create_async_study',
+            'reset_test_data_preserve_initial_apps'
+          )
+          OR (
+            event_type IN (
+              'start_creator_development', 'complete_creator_development',
+              'fail_creator_development'
+            )
+            AND entity_id IN (
+              SELECT id FROM vg_async_creator_operations
+              WHERE study_id = ? AND phase = 'initial'
+            )
+          )
+          OR (
+            event_type = 'refine_draft'
+            AND COALESCE(json_extract(data_json, '$.kind'), '') = 'initial'
+          )
+        )
+    `).run(currentStudy.id, currentStudy.id);
+
+    db.prepare(`DELETE FROM vg_async_comment_likes WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_app_likes WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_synthesis_likes WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_basket_items WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_synthesis_sources WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_synthesis_votes WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_stage_selections WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_generation_events WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_generation_jobs WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_notifications WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_assignments WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_wildcards WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_contributors WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_comments WHERE study_id = ?`).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_syntheses WHERE study_id = ?`).run(currentStudy.id);
+
+    db.prepare(`
+      DELETE FROM vg_async_creator_progress
+      WHERE study_id = ? AND operation_id IN (
+        SELECT id FROM vg_async_creator_operations
+        WHERE study_id = ? AND phase <> 'initial'
+      )
+    `).run(currentStudy.id, currentStudy.id);
+    db.prepare(`
+      DELETE FROM vg_async_creator_operations WHERE study_id = ? AND phase <> 'initial'
+    `).run(currentStudy.id);
+    db.prepare(`
+      DELETE FROM vg_async_creator_revisions
+      WHERE study_id = ? AND version_id NOT IN (
+        SELECT id FROM vg_async_versions WHERE study_id = ? AND kind = 'initial'
+      )
+    `).run(currentStudy.id, currentStudy.id);
+    db.prepare(`
+      DELETE FROM vg_async_development_messages WHERE study_id = ? AND phase <> 'initial'
+    `).run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_drafts WHERE study_id = ? AND kind <> 'initial'`)
+      .run(currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_versions WHERE study_id = ? AND kind <> 'initial'`)
+      .run(currentStudy.id);
+
+    db.prepare(`
+      UPDATE vg_async_apps
+      SET status = CASE WHEN initial_version_id IS NULL THEN 'draft' ELSE 'published' END,
+        community_version_id = NULL,
+        selected_synthesis_id = NULL,
+        selected_source_type = NULL,
+        selected_source_id = NULL,
+        community_published_at = NULL,
+        updated_at = ?
+      WHERE study_id = ?
+    `).run(timestamp, currentStudy.id);
+    db.prepare(`
+      UPDATE vg_async_studies
+      SET status = 'setup', workflow_stage = 'synthesis_1', started_at = NULL,
+        closed_at = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(timestamp, currentStudy.id);
+  });
+  transaction();
+  recordEvent(viewer.code, 'reset_test_data_preserve_initial_apps', 'reset_snapshot', snapshotId, {
+    snapshotId,
+    ...preview,
+  });
+  return getCommunityGalleryState(clientId);
+}
+
 export function startAsyncCommunityStudy(clientId: string) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = study();
@@ -3276,36 +3513,7 @@ export function trackCommunityEvent(
 export function exportCommunityStudy(clientId: string) {
   requireViewer(clientId, 'host');
   const currentStudy = study();
-  const tables = [
-    'vg_async_participants',
-    'vg_async_sessions',
-    'vg_async_apps',
-    'vg_async_versions',
-    'vg_async_drafts',
-    'vg_async_development_messages',
-    'vg_async_creator_revisions',
-    'vg_async_creator_operations',
-    'vg_async_creator_progress',
-    'vg_async_comments',
-    'vg_async_comment_likes',
-    'vg_async_app_likes',
-    'vg_async_basket_items',
-    'vg_async_syntheses',
-    'vg_async_synthesis_sources',
-    'vg_async_synthesis_votes',
-    'vg_async_synthesis_likes',
-    'vg_async_stage_selections',
-    'vg_async_generation_jobs',
-    'vg_async_generation_events',
-    'vg_async_notifications',
-    'vg_async_assignments',
-    'vg_async_contributors',
-    'vg_async_events',
-  ];
-  const data = Object.fromEntries(tables.map((table) => [
-    table.replace('vg_async_', ''),
-    db.prepare(`SELECT * FROM ${table} WHERE study_id = ? ORDER BY rowid`).all(currentStudy.id),
-  ]));
+  const data = collectCommunityStudyData(currentStudy.id, true);
   recordEvent('H01', 'export_study_data', 'study', currentStudy.id);
   return {
     exported_at: now(),
@@ -3340,7 +3548,7 @@ export function getCommunityPreview(
 
 export function getCommunityGalleryState(clientId = '') {
   const currentStudy = study();
-  if (currentStudy.status !== 'closed') ensureAssignments();
+  if (currentStudy.status === 'active') ensureAssignments();
   const viewer = getCommunityViewer(clientId);
   const visibleCondition = null;
   const apps = viewer
@@ -3669,6 +3877,7 @@ export function getCommunityGalleryState(clientId = '') {
       controlApps: Number(publishedCounts.find((row) => row.condition_name === 'control')?.count || 0),
       experimentalApps: Number(publishedCounts.find((row) => row.condition_name === 'experimental')?.count || 0),
     },
+    testReset: communityTestResetPreview(currentStudy.id),
     serverNow: now(),
   };
 }

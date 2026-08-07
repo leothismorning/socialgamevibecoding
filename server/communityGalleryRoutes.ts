@@ -25,6 +25,7 @@ import {
   publishProjectDraft,
   recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
+  resetCommunityTestData,
   retryCommunityGeneration,
   saveCommunityComment,
   saveInitialDraft,
@@ -568,6 +569,17 @@ export function registerCommunityGalleryRoutes(app: Express) {
         Array.isArray(req.body?.controlCreatorCodes)
           ? req.body.controlCreatorCodes.map(String)
           : [],
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/study/reset-test-data', (req, res) => {
+    try {
+      res.json(resetCommunityTestData(
+        clientIdFrom(req),
+        String(req.body?.confirmation || ''),
       ));
     } catch (error) {
       sendError(res, error);

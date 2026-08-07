@@ -347,6 +347,70 @@ assert.equal(targetVersions.length, 2);
 assert.equal(targetVersions[1].base_version_id, targetVersions[0].id);
 assert.equal(targetVersions[1].selected_source_type, 'synthesis');
 
+// Before the real study, the Host can snapshot and remove all test interactions
+// while keeping every Creator's initial App and condition assignment.
+const preResetState = gallery.getCommunityGalleryState(hostClient);
+const resetStudyId = preResetState.study.id;
+assert.equal(preResetState.testReset.initialAppCount, 2);
+assert.equal(preResetState.testReset.initialVersionCount, 2);
+assert.equal(preResetState.testReset.communityVersionCount, 3);
+assert.ok(preResetState.testReset.commentCount >= 3);
+assert.ok(preResetState.testReset.hasResettableData);
+assert.throws(
+  () => gallery.resetCommunityTestData(creatorClient('C19'), '清理测试数据'),
+  /主持人/,
+);
+assert.throws(
+  () => gallery.resetCommunityTestData(hostClient, '确认'),
+  /清理测试数据/,
+);
+
+const resetState = gallery.resetCommunityTestData(hostClient, '清理测试数据');
+assert.equal(resetState.study.id, resetStudyId);
+assert.equal(resetState.study.status, 'setup');
+assert.equal(resetState.study.workflow_stage, 'synthesis_1');
+assert.equal(resetState.apps.length, 2);
+assert.ok(resetState.apps.every((app: any) => (
+  app.status === 'published'
+  && app.initial_version_id
+  && !app.community_version_id
+  && !app.selected_source_id
+  && !app.selected_source_type
+)));
+assert.equal(resetState.versions.length, 2);
+assert.ok(resetState.versions.every((version: any) => version.kind === 'initial'));
+assert.ok(resetState.developmentMessages.every((message: any) => message.phase === 'initial'));
+assert.equal(resetState.comments.length, 0);
+assert.equal(resetState.syntheses.length, 0);
+assert.equal(resetState.wildcards.length, 0);
+assert.equal(resetState.contributors.length, 0);
+assert.equal(resetState.assignments.length, 0);
+assert.equal(resetState.generationJobs.length, 0);
+assert.equal(resetState.generationEvents.length, 0);
+assert.equal(resetState.stageSelections.length, 0);
+assert.equal(resetState.notifications.length, 0);
+assert.equal(resetState.testReset.snapshotCount, 1);
+assert.equal(resetState.testReset.hasResettableData, false);
+
+const resetSnapshot = db.prepare(`
+  SELECT counts_json, snapshot_json FROM vg_async_reset_snapshots
+  WHERE study_id = ? ORDER BY id DESC LIMIT 1
+`).get(resetStudyId) as { counts_json: string; snapshot_json: string };
+const resetSnapshotCounts = JSON.parse(resetSnapshot.counts_json);
+const resetSnapshotPayload = JSON.parse(resetSnapshot.snapshot_json);
+assert.equal(resetSnapshotCounts.communityVersionCount, 3);
+assert.ok(resetSnapshotPayload.comments.length >= 3);
+assert.equal(resetSnapshotPayload.versions.filter((version: any) => version.kind === 'community').length, 3);
+assert.equal(resetSnapshotPayload.wildcards.length, 1);
+const resetExport = gallery.exportCommunityStudy(hostClient) as any;
+assert.equal(resetExport.reset_snapshots.length, 1);
+
+// The same preserved study can be opened for the real session afterwards.
+state = gallery.startAsyncCommunityStudy(hostClient);
+assert.equal(state.study.id, resetStudyId);
+assert.equal(state.study.status, 'active');
+assert.equal(state.assignments.length, 0, 'No stale task assignments should survive the reset.');
+
 const archivedId = gallery.getCommunityGalleryState(hostClient).study.id;
 state = gallery.closeAsyncCommunityStudy(hostClient);
 assert.equal(state.study.status, 'closed');
@@ -355,6 +419,6 @@ assert.equal(nextStudy.study.status, 'setup');
 assert.equal(nextStudy.apps.length, 0);
 assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_apps WHERE study_id = ?`).get(archivedId) as any).count), 2);
 
-console.log('Community gallery test passed: weighted draws, Wildcards, cumulative contributor snapshots, provenance, notifications, retries, control uploads, and V2 eligibility.');
+console.log('Community gallery test passed: weighted draws, Wildcards, provenance, V2 eligibility, and Host test-data reset snapshots.');
 db.close();
 fs.rmSync(testDir, { recursive: true, force: true });

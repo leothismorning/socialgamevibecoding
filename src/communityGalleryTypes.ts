@@ -279,5 +279,20 @@ export type CommunityGalleryState = {
     controlApps: number;
     experimentalApps: number;
   };
+  testReset: {
+    initialAppCount: number;
+    initialVersionCount: number;
+    communityVersionCount: number;
+    commentCount: number;
+    synthesisCount: number;
+    likeCount: number;
+    wildcardCount: number;
+    developmentJobCount: number;
+    behaviorEventCount: number;
+    runningTaskCount: number;
+    snapshotCount: number;
+    lastResetAt?: string;
+    hasResettableData: boolean;
+  };
   serverNow: string;
 };
