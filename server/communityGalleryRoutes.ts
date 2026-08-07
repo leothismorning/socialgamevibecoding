@@ -3,9 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { runDevelopmentAgent } from './developmentAgent.js';
 import {
   closeAsyncCommunityStudy,
+  controlCommunityAppFlows,
   completeCreatorDevelopmentOperation,
   completeCommunityGeneration,
   createSynthesis,
+  deleteOwnInitialApp,
   deleteCommunityComment,
   deleteCommunitySynthesis,
   exportCommunityStudy,
@@ -27,6 +29,7 @@ import {
   recordCommunityGenerationProgress,
   clearCommunityTestData,
   retryCommunityGeneration,
+  retryLatestCommunityGenerations,
   saveCommunityComment,
   saveInitialDraft,
   saveRefinedDraft,
@@ -316,6 +319,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
+  app.delete('/api/community-gallery/apps/:appId', (req, res) => {
+    try {
+      res.json(deleteOwnInitialApp(clientIdFrom(req), String(req.params.appId)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/community-gallery/apps/publish-project', (req, res) => {
     try {
       res.json(publishProjectDraft(clientIdFrom(req)));
@@ -523,9 +534,34 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
+  app.post('/api/community-gallery/apps/flow-control', (req, res) => {
+    try {
+      res.json(controlCommunityAppFlows(
+        clientIdFrom(req),
+        Array.isArray(req.body?.appIds) ? req.body.appIds.map(String) : [],
+        String(req.body?.action) as 'rollback',
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/apps/retry-development', (req, res) => {
+    try {
+      const started = retryLatestCommunityGenerations(
+        clientIdFrom(req),
+        Array.isArray(req.body?.appIds) ? req.body.appIds.map(String) : [],
+      );
+      res.json(started.state);
+      started.jobIds.forEach(runCommunityGenerationInBackground);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/community-gallery/study/start', (req, res) => {
     try {
-      res.json(startAsyncCommunityStudy(clientIdFrom(req)));
+      res.json(startAsyncCommunityStudy(clientIdFrom(req), Boolean(req.body?.isTest)));
     } catch (error) {
       sendError(res, error);
     }
@@ -536,6 +572,8 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const started = enterCommunityDevelopmentStage(
         clientIdFrom(req),
         Number(req.body?.iterationNumber) as 1 | 2,
+        Boolean(req.body?.isTest),
+        Array.isArray(req.body?.appIds) ? req.body.appIds.map(String) : undefined,
       );
       res.json(started.state);
       started.jobIds.forEach(runCommunityGenerationInBackground);
@@ -570,7 +608,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/study/close', (req, res) => {
     try {
-      res.json(closeAsyncCommunityStudy(clientIdFrom(req)));
+      res.json(closeAsyncCommunityStudy(clientIdFrom(req), Boolean(req.body?.isTest)));
     } catch (error) {
       sendError(res, error);
     }

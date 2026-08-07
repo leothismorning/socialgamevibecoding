@@ -30,7 +30,7 @@ assert.throws(
   /先选择|身份/,
 );
 
-for (const account of [1, 2, 3, 4]) {
+for (const account of [1, 2, 3, 4, 5]) {
   const creatorState = gallery.joinCommunityGallery(client(account), String(account), String(account));
   assert.equal(creatorState.viewer?.code, `C${String(account).padStart(2, '0')}`);
   assert.equal(Number(creatorState.viewer?.isTest), account <= 2 ? 1 : 0);
@@ -53,14 +53,31 @@ publishInitial(1, 'Test App One');
 publishInitial(2, 'Test App Two');
 publishInitial(3, 'Regular App Three');
 publishInitial(4, 'Regular App Four');
+publishInitial(5, 'Temporary App Five');
 
 const hostState = gallery.getCommunityGalleryState(hostClient);
 const testApp = hostState.apps.find((app: any) => app.creator_code === 'C01');
+const secondTestApp = hostState.apps.find((app: any) => app.creator_code === 'C02');
 const regularApp = hostState.apps.find((app: any) => app.creator_code === 'C03');
+const secondRegularApp = hostState.apps.find((app: any) => app.creator_code === 'C04');
+const temporaryApp = hostState.apps.find((app: any) => app.creator_code === 'C05');
 assert.ok(testApp);
+assert.ok(secondTestApp);
 assert.ok(regularApp);
+assert.ok(secondRegularApp);
+assert.ok(temporaryApp);
 assert.equal(Number(testApp.is_test), 1);
 assert.equal(Number(regularApp.is_test), 0);
+assert.equal(testApp.flow_stage, 'round_1');
+assert.equal(regularApp.flow_stage, 'round_1');
+
+assert.throws(
+  () => gallery.deleteOwnInitialApp(client(4), temporaryApp.id),
+  /只有该应用的创作者/,
+);
+state = gallery.deleteOwnInitialApp(client(5), temporaryApp.id);
+assert.equal(state.apps.some((app: any) => app.id === temporaryApp.id), false);
+assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_versions WHERE app_id = ?`).get(temporaryApp.id) as { count: number }).count), 0);
 
 const testViewerState = gallery.getCommunityGalleryState(client(2));
 assert.deepEqual(
@@ -86,18 +103,89 @@ assert.throws(
 );
 assert.match(gallery.getCommunityPreview(hostClient, testApp.id, 'initial'), /Test App One/);
 
-state = gallery.startAsyncCommunityStudy(hostClient);
-assert.equal(state.study.status, 'active');
+assert.throws(() => gallery.saveCommunityComment({
+  clientId: client(2),
+  appId: testApp.id,
+  content: 'Workspace has not started.',
+}), /开始该账号空间/);
+
+state = gallery.startAsyncCommunityStudy(hostClient, true);
+assert.equal(state.workspaces.test.status, 'active');
+assert.equal(state.workspaces.regular.status, 'setup');
 assert.throws(
   () => gallery.setCommunityTestCreators(hostClient, ['C01']),
   /开始前/,
 );
 
-gallery.saveCommunityComment({
+state = gallery.saveCommunityComment({
   clientId: client(2),
   appId: testApp.id,
   content: 'A test-only comment.',
 });
+const firstRoundComment = state.comments.find((comment: any) => comment.content === 'A test-only comment.');
+assert.ok(firstRoundComment);
+state = gallery.createSynthesis({
+  clientId: client(2),
+  targetAppId: testApp.id,
+  title: 'First round synthesis',
+  content: 'A first-round combined direction.',
+  sources: [{ type: 'comment', id: firstRoundComment.id }],
+});
+let currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(Number(currentTestApp.current_round_comment_count), 1);
+assert.equal(Number(currentTestApp.current_round_synthesis_count), 1);
+let startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 1, true, [testApp.id]);
+assert.equal(startedDevelopment.jobIds.length, 1);
+gallery.failCommunityGeneration(startedDevelopment.jobIds[0], new Error('simulated generation failure'));
+let restartedDevelopment = gallery.retryLatestCommunityGenerations(hostClient, [testApp.id]);
+assert.equal(restartedDevelopment.jobIds.length, 1);
+gallery.failCommunityGeneration(restartedDevelopment.jobIds[0], new Error('simulated retry failure'));
+state = gallery.controlCommunityAppFlows(hostClient, [testApp.id], 'rollback');
+assert.equal(state.apps.find((app: any) => app.id === testApp.id)?.flow_stage, 'round_1');
+startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 1, true, [testApp.id]);
+gallery.completeCommunityGeneration(startedDevelopment.jobIds[0], html('Test App One V1'), 'First community version');
+state = gallery.publishCommunityVersion(client(1), testApp.id);
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(currentTestApp.flow_stage, 'round_2');
+assert.equal(Number(currentTestApp.current_round_comment_count), 0);
+assert.equal(Number(currentTestApp.current_round_synthesis_count), 0);
+state = gallery.saveCommunityComment({
+  clientId: client(2),
+  appId: testApp.id,
+  content: 'A second-round comment.',
+});
+const secondRoundComment = state.comments.find((comment: any) => comment.content === 'A second-round comment.');
+assert.ok(secondRoundComment);
+state = gallery.createSynthesis({
+  clientId: client(2),
+  targetAppId: testApp.id,
+  title: 'Second round synthesis',
+  content: 'A second-round combined direction.',
+  sources: [{ type: 'comment', id: secondRoundComment.id }],
+});
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(Number(currentTestApp.current_round_comment_count), 1);
+assert.equal(Number(currentTestApp.current_round_synthesis_count), 1);
+startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 2, true, [testApp.id]);
+gallery.completeCommunityGeneration(startedDevelopment.jobIds[0], html('Test App One V2'), 'Second community version');
+state = gallery.publishCommunityVersion(client(1), testApp.id);
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(currentTestApp.flow_stage, 'completed');
+assert.equal(Number(currentTestApp.current_round_comment_count), 0);
+assert.equal(Number(currentTestApp.current_round_synthesis_count), 0);
+assert.throws(() => gallery.saveCommunityComment({
+  clientId: client(4),
+  appId: regularApp.id,
+  content: 'Formal flow has not started.',
+}), /开始该账号空间/);
+state = gallery.startAsyncCommunityStudy(hostClient, false);
+assert.equal(state.workspaces.test.status, 'active');
+assert.equal(state.workspaces.regular.status, 'active');
+assert.equal(state.apps.find((app: any) => app.id === regularApp.id)?.flow_stage, 'round_1');
+assert.throws(
+  () => gallery.deleteOwnInitialApp(client(3), regularApp.id),
+  /评论流程开始后/,
+);
 gallery.saveCommunityComment({
   clientId: client(4),
   appId: regularApp.id,
@@ -108,8 +196,12 @@ state = gallery.getCommunityGalleryState(hostClient);
 assert.equal(state.testData.testCreatorCount, 2);
 assert.equal(state.testData.testAppCount, 2);
 assert.ok(state.testData.versionCount >= 2);
-assert.equal(state.testData.commentCount, 1);
+assert.equal(state.testData.commentCount, 2);
 assert.equal(state.testData.hasTestData, true);
+
+state = gallery.closeAsyncCommunityStudy(hostClient, true);
+assert.equal(state.workspaces.test.status, 'closed');
+assert.equal(state.workspaces.regular.status, 'active');
 
 assert.throws(
   () => gallery.clearCommunityTestData(client(2), '清除测试角色数据'),
@@ -121,7 +213,8 @@ assert.throws(
 );
 
 state = gallery.clearCommunityTestData(hostClient, '清除测试角色数据');
-assert.equal(state.study.status, 'setup');
+assert.equal(state.workspaces.test.status, 'setup');
+assert.equal(state.workspaces.regular.status, 'active');
 assert.equal(state.apps.some((app: any) => app.id === testApp.id), false);
 assert.equal(state.apps.some((app: any) => app.id === regularApp.id), true);
 assert.equal(state.comments.some((comment: any) => comment.content === 'A test-only comment.'), false);
@@ -139,4 +232,4 @@ assert.equal(reloggedTestCreator.viewer?.code, 'C01');
 assert.equal(Number(reloggedTestCreator.viewer?.isTest), 1);
 assert.equal(reloggedTestCreator.apps.length, 0);
 
-console.log('community gallery auth, isolation, and test-data purge tests passed');
+console.log('community gallery auth, isolation, per-app flow control, retry, and purge tests passed');

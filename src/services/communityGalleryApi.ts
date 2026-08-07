@@ -60,6 +60,11 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
+  deleteInitialApp: (clientId: string, appId: string) =>
+    request(`/api/community-gallery/apps/${appId}`, {
+      method: 'DELETE',
+      body: body({ clientId }),
+    }),
   publishProject: (clientId: string) =>
     request('/api/community-gallery/apps/publish-project', {
       method: 'POST',
@@ -165,15 +170,33 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, notificationIds }),
     }),
-  startStudy: (clientId: string) =>
+  startStudy: (clientId: string, isTest: boolean) =>
     request('/api/community-gallery/study/start', {
       method: 'POST',
-      body: body({ clientId }),
+      body: body({ clientId, isTest }),
     }),
-  enterDevelopment: (clientId: string, iterationNumber: 1 | 2) =>
+  enterDevelopment: (
+    clientId: string,
+    iterationNumber: 1 | 2,
+    isTest: boolean,
+    appIds?: string[],
+  ) =>
     request('/api/community-gallery/study/enter-development', {
       method: 'POST',
-      body: body({ clientId, iterationNumber }),
+      body: body({ clientId, iterationNumber, isTest, appIds }),
+    }),
+  controlAppFlows: (
+    clientId: string,
+    appIds: string[],
+    action: 'rollback',
+  ) => request('/api/community-gallery/apps/flow-control', {
+    method: 'POST',
+    body: body({ clientId, appIds, action }),
+  }),
+  retryAppDevelopment: (clientId: string, appIds: string[]) =>
+    request('/api/community-gallery/apps/retry-development', {
+      method: 'POST',
+      body: body({ clientId, appIds }),
     }),
   setTestCreators: (
     clientId: string,
@@ -192,10 +215,10 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, confirmation }),
     }),
-  closeStudy: (clientId: string) =>
+  closeStudy: (clientId: string, isTest: boolean) =>
     request('/api/community-gallery/study/close', {
       method: 'POST',
-      body: body({ clientId }),
+      body: body({ clientId, isTest }),
     }),
   newStudy: (clientId: string) =>
     request('/api/community-gallery/study/new', {

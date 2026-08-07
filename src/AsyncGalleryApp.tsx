@@ -106,6 +106,23 @@ function canUseCreativeTools(state: CommunityGalleryState) {
   return state.viewer?.role === 'creator';
 }
 
+function isAppRoundOpen(app: CommunityApp) {
+  return app.flow_stage === 'round_1' || app.flow_stage === 'round_2';
+}
+
+function appFlowStatusText(app: CommunityApp) {
+  const labels: Record<CommunityApp['flow_stage'], string> = {
+    waiting_round_1: '等待发布初始版本 V0',
+    round_1: '第一轮评论与综合进行中',
+    development_1: '第一轮已锁定，系统开发进行中',
+    waiting_round_2: '等待发布社区版本 V1',
+    round_2: '第二轮评论与综合进行中',
+    development_2: '第二轮已锁定，系统开发进行中',
+    completed: '两轮流程均已完成',
+  };
+  return labels[app.flow_stage];
+}
+
 type CommentFeedbackBurstKind = 'like' | 'synthesis';
 
 function CommentFeedbackBurst({ kind }: { kind: CommentFeedbackBurstKind }) {
@@ -300,7 +317,19 @@ function PublishedCreatorStudio({
             下一轮开发只能由主持人锁定本轮点赞并完成抽取后启动；生成草稿后，你可以继续修改并决定是否发布。
           </p>
         </div>
-        <span className="async-control-continue-note">等待主持人启动下一轮开发</span>
+        {ownApp.flow_stage === 'round_1' && state.study.status === 'setup' ? (
+          <button
+            type="button"
+            className="async-delete-initial-app"
+            disabled={Boolean(busy)}
+            onClick={() => {
+              if (!window.confirm(`确认删除“${ownApp.title}”吗？删除后需要重新创建并发布。`)) return;
+              void action('delete-initial-app', () => communityGalleryApi.deleteInitialApp(clientId, ownApp.id));
+            }}
+          ><Trash2 /> 删除这个 App</button>
+        ) : (
+          <span className="async-control-continue-note">等待主持人启动下一轮开发</span>
+        )}
       </section>
 
       {workspaceOpen && (
@@ -759,7 +788,8 @@ function GalleryVersionCard({
   const contributorCodes = isCommunity
     ? contributorCodesForIteration(state, app.id, Number(app.community_version_count || 0))
     : [];
-  const canLike = state.viewer?.role !== 'host' && state.viewer?.code !== app.creator_code;
+  const canLike = state.viewer?.role !== 'host'
+    && state.viewer?.code !== app.creator_code && isAppRoundOpen(app);
   return (
     <article
       className={`async-app-card tone-${index % 3}`}
@@ -829,7 +859,7 @@ function GalleryVersionCard({
               className={app.viewer_liked ? 'async-social-button is-liked' : 'async-social-button'}
               disabled={!canLike}
               onClick={like}
-              title={canLike ? '表达喜欢，不参与版本选择' : '不能点赞自己的应用'}
+              title={canLike ? '表达喜欢，不参与版本选择' : '当前 App 未开放互动，或不能点赞自己的应用'}
             ><Heart /> {app.like_count}</button>
             <span><MessageCircle /> {app.comment_count}</span>
             <span><Lightbulb /> {app.synthesis_count}</span>
@@ -905,7 +935,10 @@ function CommentThread({
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState('');
   const [likedCommentKeys, playLikedCommentBurst] = useTimedBurst();
-  const canParticipate = Boolean(state.viewer && state.viewer.role !== 'host' && state.study.status === 'active');
+  const canParticipate = Boolean(
+    state.viewer && state.viewer.role !== 'host'
+      && state.study.status === 'active' && isAppRoundOpen(app),
+  );
   const canComment = canParticipate && app.creator_code !== state.viewer?.code;
   const showBasket = canUseCreativeTools(state) && state.study.status === 'active';
 
@@ -1267,7 +1300,10 @@ function LegacyIdeaFlowBoard({
   const [replyContent, setReplyContent] = useState('');
   const [discussionSynthesis, setDiscussionSynthesis] = useState<CommunitySynthesis | null>(null);
   const [focusedNode, setFocusedNode] = useState('');
-  const canParticipate = Boolean(state.viewer && state.viewer.role !== 'host' && state.study.status === 'active');
+  const canParticipate = Boolean(
+    state.viewer && state.viewer.role !== 'host'
+      && state.study.status === 'active' && isAppRoundOpen(app),
+  );
   const creativeToolsAvailable = canUseCreativeTools(state) && state.study.status === 'active';
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const targetSyntheses = state.syntheses
@@ -1500,6 +1536,13 @@ function LegacyIdeaFlowBoard({
           )}
         </div>
       </header>
+
+      {!isAppRoundOpen(app) && (
+        <div className="async-app-flow-notice">
+          <Workflow />
+          <div><strong>{appFlowStatusText(app)}</strong><span>当前 App 的评论和综合入口已暂停，由 Host 单独推进流程。</span></div>
+        </div>
+      )}
 
       <VersionLineage state={state} app={app} />
 
@@ -1793,9 +1836,11 @@ function IdeaFlowBoard({
     content.length > 46 || content.split(/\r?\n/).length > 2
   );
   const canParticipate = Boolean(
-    state.viewer && state.viewer.role !== 'host' && state.study.status === 'active',
+    state.viewer && state.viewer.role !== 'host'
+      && state.study.status === 'active' && isAppRoundOpen(app),
   );
-  const creativeToolsAvailable = canUseCreativeTools(state) && state.study.status === 'active';
+  const creativeToolsAvailable = canUseCreativeTools(state)
+    && state.study.status === 'active' && isAppRoundOpen(app);
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const completedIterations = Number(app.community_version_count || 0);
   const openLayer: 1 | 2 | null = completedIterations === 0
@@ -2313,9 +2358,9 @@ function IdeaFlowBoard({
     wildcard.creator_code === state.viewer?.code
   ));
   const wildcardStageIsOpen = openLayer === 1
-    ? state.study.workflow_stage === 'synthesis_1'
+    ? app.flow_stage === 'round_1'
     : openLayer === 2
-      ? state.study.workflow_stage === 'development_1'
+      ? app.flow_stage === 'round_2'
       : false;
   const canUseWildcard = isOwner
     && Boolean(openLayer)
@@ -2453,6 +2498,13 @@ function IdeaFlowBoard({
           )}
         </div>
       </header>
+
+      {!isAppRoundOpen(app) && (
+        <div className="async-app-flow-notice">
+          <Workflow />
+          <div><strong>{appFlowStatusText(app)}</strong><span>当前 App 的评论和综合入口已暂停，由 Host 单独推进流程。</span></div>
+        </div>
+      )}
 
       <VersionLineage state={state} app={app} />
 
@@ -3495,6 +3547,7 @@ function HostPanel({
   const [testCreators, setTestCreators] = useState<string[]>(serverTestCreators);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState('');
+  const [selectedAppIds, setSelectedAppIds] = useState<string[]>([]);
 
   useEffect(() => {
     setTestCreators(serverTestCreators);
@@ -3503,6 +3556,7 @@ function HostPanel({
   useEffect(() => {
     setResetDialogOpen(false);
     setResetConfirmation('');
+    setSelectedAppIds([]);
   }, [state.study.id]);
 
   const toggleTestCreator = (code: string) => {
@@ -3516,6 +3570,11 @@ function HostPanel({
   const joinedCreatorCount = creatorParticipants.filter((participant) => participant.joined).length;
   const communityVersions = state.apps.filter((app) => app.community_version_id).length;
   const publishedApps = state.apps.filter((app) => app.status === 'published');
+  const selectedApps = publishedApps.filter((app) => selectedAppIds.includes(app.id));
+  const regularWorkspace = state.workspaces.regular;
+  const testWorkspace = state.workspaces.test;
+  const bothWorkspacesSetup = regularWorkspace.status === 'setup' && testWorkspace.status === 'setup';
+  const bothWorkspacesClosed = regularWorkspace.status === 'closed' && testWorkspace.status === 'closed';
   const developmentStatusFor = (app: CommunityApp, iterationNumber: 1 | 2) => {
     const job = state.generationJobs.find(
       (candidate) => candidate.app_id === app.id
@@ -3536,15 +3595,27 @@ function HostPanel({
         detail: job.error || '开发任务失败，但没有返回具体原因。',
         time: job.completed_at,
         jobId: job.id,
+        restartable: true,
       };
     }
-    if (publishedVersion || job?.status === 'completed') {
+    if (publishedVersion) {
       return {
         key: 'completed',
-        label: '成功',
+        label: '已发布',
         detail: `社区版本 ${iterationNumber} 已发布`,
         time: job?.completed_at || publishedVersion?.created_at,
         jobId: job?.id,
+        restartable: false,
+      };
+    }
+    if (job?.status === 'completed') {
+      return {
+        key: 'completed',
+        label: '草稿就绪',
+        detail: `第 ${iterationNumber} 轮系统开发已完成，等待 Creator 确认发布`,
+        time: job.completed_at,
+        jobId: job.id,
+        restartable: true,
       };
     }
     if (job?.status === 'running' || activeDraft) {
@@ -3559,6 +3630,7 @@ function HostPanel({
         detail: latestEvent?.title || 'AI 正在生成新版本',
         time: latestEvent?.updated_at || job?.created_at,
         jobId: job?.id,
+        restartable: false,
       };
     }
     return {
@@ -3567,6 +3639,7 @@ function HostPanel({
       detail: '等待本轮开发启动',
       time: undefined,
       jobId: undefined,
+      restartable: false,
     };
   };
   const developmentStatuses = publishedApps.flatMap((app) => [
@@ -3578,11 +3651,46 @@ function HostPanel({
     completed: developmentStatuses.filter((status) => status.key === 'completed').length,
     failed: developmentStatuses.filter((status) => status.key === 'failed').length,
   };
-  const nextDevelopmentIteration = state.study.workflow_stage === 'synthesis_1'
-    ? 1
-    : state.study.workflow_stage === 'development_1'
-      ? 2
-      : null;
+  const appFlowLabels: Record<CommunityApp['flow_stage'], string> = {
+    waiting_round_1: '等待 V0',
+    round_1: '第一轮评论中',
+    development_1: '第一轮开发中',
+    waiting_round_2: '等待 V1',
+    round_2: '第二轮评论中',
+    development_2: '第二轮开发中',
+    completed: '两轮已完成',
+  };
+  const latestJobFor = (app: CommunityApp, iterationNumber?: 1 | 2) => state.generationJobs.find(
+    (job) => job.app_id === app.id
+      && (!iterationNumber || Number(job.iteration_number) === iterationNumber),
+  );
+  const selectedCan = (target: 'development_1' | 'development_2' | 'rollback' | 'retry') => (
+    selectedApps.length > 0 && selectedApps.every((app) => {
+      const workspace = app.is_test ? testWorkspace : regularWorkspace;
+      if (workspace.status !== 'active') return false;
+      if (target === 'development_1') return app.flow_stage === 'round_1';
+      if (target === 'development_2') return app.flow_stage === 'round_2';
+      if (target === 'rollback') {
+        return ['development_1', 'development_2'].includes(app.flow_stage)
+          && app.draft_kind !== 'community'
+          && latestJobFor(app)?.status !== 'running';
+      }
+      const iterationNumber = app.flow_stage === 'development_1' ? 1 : app.flow_stage === 'development_2' ? 2 : null;
+      const latestJob = iterationNumber ? latestJobFor(app, iterationNumber) : undefined;
+      return Boolean(iterationNumber && latestJob && latestJob.status !== 'running'
+        && Number(app.community_version_count) < iterationNumber);
+    })
+  );
+  const enterSelectedDevelopment = async (iterationNumber: 1 | 2) => {
+    let next = state;
+    for (const isTest of [true, false]) {
+      const appIds = selectedApps.filter((app) => Boolean(app.is_test) === isTest).map((app) => app.id);
+      if (appIds.length) {
+        next = await communityGalleryApi.enterDevelopment(clientId, iterationNumber, isTest, appIds);
+      }
+    }
+    return next;
+  };
   return (
     <>
     <section className="async-host-panel">
@@ -3590,24 +3698,52 @@ function HostPanel({
         <div><span className="async-eyebrow">主持人 · 异步研究</span><h2>研究控制与完成进度</h2><p>主持人锁定本轮点赞后，系统会按点赞数加权随机抽取每个应用的开发来源，并立即启动开发任务。</p></div>
         <div className="async-host-actions">
           <a href={`/api/community-gallery/export?clientId=${encodeURIComponent(clientId)}`}><Download /> 导出研究数据</a>
-          {state.study.status === 'setup' && (
-            <button
-              disabled={Boolean(busy) || !state.study.test_roles_configured || testRolesDirty}
-              title={!state.study.test_roles_configured || testRolesDirty
-                ? '请先选择并保存测试角色'
-                : '开始研究并开放普通评论与综合评论'}
-              onClick={() => action('start-study', () => communityGalleryApi.startStudy(clientId))}
-            ><Play /> 开始并开放评论</button>
-          )}
-          {state.study.status === 'active' && (
-            <button disabled={Boolean(busy)} onClick={() => action('close-study', () => communityGalleryApi.closeStudy(clientId))}><Check /> 结束研究</button>
-          )}
-          {state.study.status === 'closed' && (
+          {bothWorkspacesClosed && (
             <button disabled={Boolean(busy)} onClick={() => action('new-study', () => communityGalleryApi.newStudy(clientId))}><RefreshCw /> 新建研究</button>
           )}
         </div>
       </header>
-      {state.study.status !== 'closed' && (
+      <section className="async-workspace-controls">
+        {([
+          { key: 'test', isTest: true, label: '测试账号流程', workspace: testWorkspace, appCount: state.counts.testApps, creatorCount: serverTestCreatorCount },
+          { key: 'regular', isTest: false, label: '正式账号流程', workspace: regularWorkspace, appCount: state.counts.regularApps, creatorCount: state.counts.creators - serverTestCreatorCount },
+        ] as const).map((item) => {
+          return (
+            <section key={item.key} className={`async-host-stage is-${item.key}`}>
+              <div>
+                <span className="async-eyebrow">{item.label}</span>
+                <strong>{item.workspace.status === 'setup'
+                  ? '尚未开始'
+                  : item.workspace.status === 'closed'
+                    ? '流程已结束'
+                    : '总流程已开启 · 按 Creator 单独推进'}</strong>
+                <p>{item.appCount} / {item.creatorCount} 个初始作品已发布。开启后，请在下方选择 Creator 并锁定各自的开发轮次。</p>
+              </div>
+              <aside className="async-host-stage-actions">
+                {item.workspace.status === 'setup' && (
+                  <>
+                    <button
+                      className="async-primary"
+                      disabled={Boolean(busy) || !state.study.test_roles_configured || testRolesDirty || item.appCount < 1}
+                      onClick={() => action(`start-${item.key}-study`, () => communityGalleryApi.startStudy(clientId, item.isTest))}
+                    ><Play /> 开始{item.isTest ? '测试' : '正式'}流程</button>
+                    <button
+                      type="button"
+                      className="async-secondary"
+                      disabled={Boolean(busy)}
+                      onClick={() => action(`skip-${item.key}-study`, () => communityGalleryApi.closeStudy(clientId, item.isTest))}
+                    ><X /> 跳过并结束此流程</button>
+                  </>
+                )}
+                {item.workspace.status === 'active' && (
+                  <button disabled={Boolean(busy)} onClick={() => action(`close-${item.key}-study`, () => communityGalleryApi.closeStudy(clientId, item.isTest))}><Check /> 结束此流程</button>
+                )}
+              </aside>
+            </section>
+          );
+        })}
+      </section>
+      {(
         <section className="async-test-reset-panel">
           <div className="async-test-reset-copy">
             <span><Trash2 /></span>
@@ -3635,7 +3771,7 @@ function HostPanel({
           ><Trash2 /> 清除测试角色数据</button>
         </section>
       )}
-      {state.study.status !== 'closed' && (
+      {!bothWorkspacesClosed && (
         <section className="async-condition-assignment">
           <header>
             <div>
@@ -3646,7 +3782,7 @@ function HostPanel({
             <div className="async-condition-save">
               <button
                 className="async-primary"
-                disabled={Boolean(busy) || state.study.status !== 'setup' || (!testRolesDirty && state.study.test_roles_configured)}
+                disabled={Boolean(busy) || !bothWorkspacesSetup || (!testRolesDirty && state.study.test_roles_configured)}
                 onClick={() => action(
                   'save-test-creators',
                   () => communityGalleryApi.setTestCreators(
@@ -3665,7 +3801,7 @@ function HostPanel({
                   <button
                     key={participant.code}
                     className={testCreators.includes(participant.code) ? 'is-control' : ''}
-                    disabled={Boolean(busy) || state.study.status !== 'setup'}
+                    disabled={Boolean(busy) || !bothWorkspacesSetup}
                     onClick={() => toggleTestCreator(participant.code)}
                   >
                     <strong>{Number(participant.code.slice(1))}</strong>
@@ -3682,31 +3818,6 @@ function HostPanel({
           </footer>
         </section>
       )}
-      {state.study.status === 'active' && (
-        <section className="async-host-stage">
-          <div>
-            <span className="async-eyebrow">主持人锁票 · 加权随机抽取</span>
-            <strong>{nextDevelopmentIteration
-              ? `锁定第 ${nextDevelopmentIteration} 轮点赞并抽取开发方向`
-              : '两轮开发均已锁定'}</strong>
-            <p>{nextDevelopmentIteration
-              ? '每条候选的权重为点赞数 + 1；万能卡指定的评论会先从随机池移除，再与另一个加权随机结果一起进入开发。'
-              : '等待当前开发任务完成或发布版本。'}</p>
-          </div>
-          {nextDevelopmentIteration && (
-            <aside className="async-host-stage-actions">
-              <button
-                className="async-primary"
-                disabled={Boolean(busy)}
-                onClick={() => action(
-                  `enter-development-${nextDevelopmentIteration}`,
-                  () => communityGalleryApi.enterDevelopment(clientId, nextDevelopmentIteration),
-                )}
-              ><Lock /> 锁定点赞并加权抽取开发</button>
-            </aside>
-          )}
-        </section>
-      )}
       <div className="async-host-stats">
         <article><span>测试角色作品</span><strong>{state.counts.testApps} / {serverTestCreatorCount}</strong></article>
         <article><span>正式角色作品</span><strong>{state.counts.regularApps} / {state.counts.creators - serverTestCreatorCount}</strong></article>
@@ -3717,9 +3828,9 @@ function HostPanel({
         <section className="async-host-development-board">
           <header>
             <div>
-              <span className="async-eyebrow">应用开发状态</span>
-              <h3>每个应用的开发状态</h3>
-              <p>状态来自后台开发任务和已发布版本；失败时会保留具体原因，便于主持人立即定位问题。</p>
+              <span className="async-eyebrow">按 Creator 控制</span>
+              <h3>每个 App 的独立流程</h3>
+              <p>V0 发布后自动开放第一轮，V1 发布后自动开放第二轮，V2 发布后自动结束。Host 只需锁定当前轮次并启动开发。</p>
             </div>
             <div className="async-development-summary">
               <span className="is-running"><LoaderCircle /> 开发中 {activeDevelopmentCounts.running}</span>
@@ -3727,9 +3838,44 @@ function HostPanel({
               <span className="is-failed"><X /> 失败 {activeDevelopmentCounts.failed}</span>
             </div>
           </header>
+          <div className="async-app-flow-toolbar" aria-label="批量控制 Creator 流程">
+            <div className="async-app-flow-selection">
+              <button
+                type="button"
+                disabled={Boolean(busy)}
+                onClick={() => setSelectedAppIds(
+                  selectedAppIds.length === publishedApps.length ? [] : publishedApps.map((app) => app.id),
+                )}
+              >{selectedAppIds.length === publishedApps.length ? '取消全选' : '全选 Creator'}</button>
+              <strong>已选择 {selectedApps.length} 个</strong>
+            </div>
+            <div className="async-app-flow-actions">
+              <button
+                disabled={Boolean(busy) || !selectedCan('development_1')}
+                onClick={() => action('develop-selected-round-1', () => enterSelectedDevelopment(1))}
+              ><Lock /> 锁定第一轮并开发</button>
+              <button
+                disabled={Boolean(busy) || !selectedCan('development_2')}
+                onClick={() => action('develop-selected-round-2', () => enterSelectedDevelopment(2))}
+              ><Lock /> 锁定第二轮并开发</button>
+              <button
+                disabled={Boolean(busy) || !selectedCan('rollback')}
+                onClick={() => action('rollback-selected-apps', () => (
+                  communityGalleryApi.controlAppFlows(clientId, selectedAppIds, 'rollback')
+                ))}
+              ><ArrowLeft /> 回退上一流程</button>
+              <button
+                className="async-retry-development"
+                disabled={Boolean(busy) || !selectedCan('retry')}
+                onClick={() => action('retry-selected-development', () => (
+                  communityGalleryApi.retryAppDevelopment(clientId, selectedAppIds)
+                ))}
+              ><RefreshCw /> 重新开发</button>
+            </div>
+          </div>
           <div className="async-development-table" role="table" aria-label="应用开发状态">
             <div className="async-development-table-heading" role="row">
-              <span role="columnheader">应用</span>
+              <span role="columnheader">选择 / Creator / 当前流程</span>
               <span role="columnheader">第一次开发 · 版本 1</span>
               <span role="columnheader">第二次开发 · 版本 2</span>
             </div>
@@ -3737,11 +3883,27 @@ function HostPanel({
               const firstStatus = developmentStatusFor(app, 1);
               const secondStatus = developmentStatusFor(app, 2);
               return (
-                <article key={app.id} role="row">
+                <article key={app.id} role="row" className={selectedAppIds.includes(app.id) ? 'is-selected' : ''}>
                   <div className="async-development-app" role="cell">
-                    <span>{app.is_test ? '测试角色' : '正式角色'}</span>
-                    <strong>{app.title}</strong>
-                    <small>{app.creator_code}</small>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={selectedAppIds.includes(app.id)}
+                        disabled={Boolean(busy)}
+                        onChange={() => setSelectedAppIds((current) => (
+                          current.includes(app.id)
+                            ? current.filter((id) => id !== app.id)
+                            : [...current, app.id]
+                        ))}
+                      />
+                      <span>{app.is_test ? '测试角色' : '正式角色'}</span>
+                    </label>
+                    <strong>{app.creator_code} · {app.title}</strong>
+                    <small className={`is-flow-${app.flow_stage}`}>{appFlowLabels[app.flow_stage]}</small>
+                    <div className="async-current-round-counts" aria-label="本轮互动数量">
+                      <span><MessageCircle /> 普通评论 <strong>{app.current_round_comment_count}</strong></span>
+                      <span><Lightbulb /> 综合评论 <strong>{app.current_round_synthesis_count}</strong></span>
+                    </div>
                   </div>
                   {[firstStatus, secondStatus].map((status, index) => (
                     <div
@@ -3759,7 +3921,7 @@ function HostPanel({
                       </span>
                       <p>{status.detail}</p>
                       {status.time && <small>{formatDate(status.time)}</small>}
-                      {status.key === 'failed' && status.jobId && (
+                      {status.restartable && status.jobId && (
                         <button
                           className="async-retry-development"
                           disabled={Boolean(busy)}
@@ -3767,7 +3929,7 @@ function HostPanel({
                             `retry-development-${status.jobId}`,
                             () => communityGalleryApi.retryDevelopment(clientId, status.jobId!),
                           )}
-                        ><RefreshCw /> 重新开发</button>
+                        ><RefreshCw /> {status.key === 'failed' ? '失败后重试' : '重新开发'}</button>
                       )}
                     </div>
                   ))}

@@ -2,6 +2,23 @@ export type CommunityRole = 'host' | 'creator';
 export type CommunityStatus = 'setup' | 'active' | 'closed';
 export type CommunitySourceType = 'comment' | 'synthesis';
 export type CommunityWorkflowStage = 'synthesis_1' | 'development_1' | 'development_2';
+export type CommunityAppFlowStage =
+  | 'waiting_round_1'
+  | 'round_1'
+  | 'development_1'
+  | 'waiting_round_2'
+  | 'round_2'
+  | 'development_2'
+  | 'completed';
+export type CommunityWorkspaceState = {
+  study_id: string;
+  is_test: number;
+  status: CommunityStatus;
+  workflow_stage: CommunityWorkflowStage;
+  started_at?: string;
+  closed_at?: string;
+  updated_at: string;
+};
 
 export type CommunityViewer = {
   clientId: string;
@@ -18,6 +35,7 @@ export type CommunityApp = {
   brief: string;
   creator_prompt: string;
   status: 'draft' | 'published';
+  flow_stage: CommunityAppFlowStage;
   initial_version_id?: number;
   community_version_id?: number;
   selected_synthesis_id?: number;
@@ -29,6 +47,8 @@ export type CommunityApp = {
   like_count: number;
   comment_count: number;
   synthesis_count: number;
+  current_round_comment_count: number;
+  current_round_synthesis_count: number;
   viewer_liked: number;
   draft_kind?: 'initial' | 'community' | 'project';
   draft_code?: string;
@@ -277,6 +297,10 @@ export type CommunityGalleryState = {
     creators: number;
     regularApps: number;
     testApps: number;
+  };
+  workspaces: {
+    regular: CommunityWorkspaceState;
+    test: CommunityWorkspaceState;
   };
   testData: {
     testCreatorCount: number;
