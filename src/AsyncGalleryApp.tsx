@@ -103,7 +103,7 @@ function contributorListLabel(codes: string[], limit = 6) {
 }
 
 function canUseCreativeTools(state: CommunityGalleryState) {
-  return state.viewer?.role === 'creator' && state.viewer.condition === 'experimental';
+  return state.viewer?.role === 'creator';
 }
 
 type CommentFeedbackBurstKind = 'like' | 'synthesis';
@@ -172,43 +172,28 @@ function AppPreview({
 function IdentityGate({
   join,
   busy,
-  participants,
 }: {
-  join: (code: string) => void;
+  join: (account: string, password: string) => void;
   busy: string;
-  participants: CommunityGalleryState['participants'];
 }) {
-  const [entry, setEntry] = useState<'creator' | 'host' | null>(null);
-  const codes = entry === 'host'
-    ? ['H01']
-    : entry === 'creator'
-      ? participants.filter((participant) => participant.role === 'creator').map((participant) => participant.code)
-      : [];
+  const [account, setAccount] = useState('');
+  const [password, setPassword] = useState('');
   return (
     <section className="async-identity-gate">
       <div className="async-identity-copy">
         <span className="async-eyebrow">加入创意共创社区</span>
         <h1>把社区讨论变成可以运行的作品</h1>
-        <p>选择你的创作者编号，发布自己的应用，也可以浏览、评论和综合其他作品中的想法。</p>
+        <p>使用实验编号登录。创作者账号为 1–30，密码与账号相同；主持人账号和密码均为 0。</p>
       </div>
       <div className="async-identity-picker">
-        <div className="async-role-options">
-          <button className={entry === 'creator' ? 'is-selected' : ''} onClick={() => setEntry('creator')}>
-            <UserRound /><strong>创作者</strong><span>发布自己的应用，也参与讨论与共创</span>
-          </button>
-          <button className={entry === 'host' ? 'is-selected' : ''} onClick={() => setEntry('host')}>
-            <Lock /><strong>主持人</strong><span>开放研究、查看进度与结束研究</span>
-          </button>
-        </div>
-        {entry && (
-          <div className={`async-code-grid is-${entry}`}>
-            {codes.map((code) => (
-              <button key={code} disabled={Boolean(busy)} onClick={() => join(code)}>
-                <strong>{code}</strong><span>进入</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <form className="async-login-form" onSubmit={(event) => {
+          event.preventDefault();
+          join(account, password);
+        }}>
+          <label><span>账号（实验编号）</span><input inputMode="numeric" autoComplete="username" value={account} onChange={(event) => setAccount(event.target.value)} placeholder="0–30" /></label>
+          <label><span>密码</span><input type="password" inputMode="numeric" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入密码" /></label>
+          <button className="async-primary" type="submit" disabled={Boolean(busy) || !account || !password}><Lock /> 登录</button>
+        </form>
       </div>
     </section>
   );
@@ -318,7 +303,7 @@ function PublishedCreatorStudio({
         <span className="async-control-continue-note">等待主持人启动下一轮开发</span>
       </section>
 
-      {workspaceOpen && state.viewer?.condition === 'experimental' && (
+      {workspaceOpen && (
         <section className="async-studio async-continuation-studio">
           <header>
             <div>
@@ -798,7 +783,7 @@ function GalleryVersionCard({
         <div>
           {assigned && <span className="async-assigned-badge"><CheckCircle2 /> 指定体验</span>}
           {isCommunity && <span className="async-community-badge"><GitMerge /> 社区共创</span>}
-          {state.viewer?.role === 'host' && <span>{app.condition_name === 'control' ? '对照组' : '实验组'}</span>}
+          {state.viewer?.role === 'host' && Boolean(app.is_test) && <span>测试角色作品</span>}
         </div>
       </header>
       <section className="async-version-preview">
@@ -847,7 +832,7 @@ function GalleryVersionCard({
               title={canLike ? '表达喜欢，不参与版本选择' : '不能点赞自己的应用'}
             ><Heart /> {app.like_count}</button>
             <span><MessageCircle /> {app.comment_count}</span>
-            {app.condition_name === 'experimental' && <span><Lightbulb /> {app.synthesis_count}</span>}
+            <span><Lightbulb /> {app.synthesis_count}</span>
           </div>
           <button className="async-open-app" onClick={open}>进入体验与讨论 <Eye /></button>
         </footer>
@@ -2333,7 +2318,6 @@ function IdeaFlowBoard({
       ? state.study.workflow_stage === 'development_1'
       : false;
   const canUseWildcard = isOwner
-    && app.condition_name === 'experimental'
     && Boolean(openLayer)
     && !ownWildcard
     && wildcardStageIsOpen
@@ -3143,23 +3127,11 @@ function CommunityDraftPanel({
   busy: string;
 }) {
   const [revision, setRevision] = useState('');
-  const [uploadSummary, setUploadSummary] = useState('');
-  const [uploadPrompt, setUploadPrompt] = useState('');
   const latestJob = state.generationJobs.find((job) => job.app_id === app.id);
   const events = latestJob
     ? state.generationEvents.filter((event) => Number(event.job_id) === Number(latestJob.id))
     : [];
   const iterationNumber = Number(app.community_version_count || 0) + 1;
-  const appVersions = state.versions
-    .filter((version) => version.app_id === app.id)
-    .sort((left, right) => left.version_number - right.version_number);
-  const initialVersion = appVersions.find((version) => version.kind === 'initial');
-  const firstCommunityVersion = appVersions.find(
-    (version) => version.kind === 'community' && version.version_number === 2,
-  );
-  const baseVersionId = iterationNumber === 2
-    ? Number(firstCommunityVersion?.id || 0)
-    : Number(initialVersion?.id || app.initial_version_id);
   const hasCommunityDraft = app.draft_kind === 'community'
     && Number(app.draft_iteration_number || 0) > Number(app.community_version_count || 0)
     && Boolean(app.draft_code);
@@ -3169,19 +3141,8 @@ function CommunityDraftPanel({
     && (!message.iteration_number || Number(message.iteration_number) === iterationNumber)
   ));
   const communityPromptRounds = communityMessages.filter((message) => message.role === 'creator').length;
-  const upload = async (file?: File) => {
-    if (!file) return;
-    const code = await file.text();
-    await action('upload-community', () => communityGalleryApi.uploadCommunity(clientId, app.id, {
-      code,
-      summary: uploadSummary,
-      prompt: uploadPrompt,
-      baseVersionId,
-    }));
-  };
-
   if (app.community_version_count >= 2) return null;
-  if (app.condition_name === 'experimental' && !hasCommunityDraft && latestJob?.status !== 'running') return null;
+  if (!hasCommunityDraft && latestJob?.status !== 'running') return null;
 
   return (
     <section className="async-community-studio">
@@ -3189,19 +3150,6 @@ function CommunityDraftPanel({
         <div><span className="async-eyebrow">原型开发 · 人工确认</span><h2>社区版本 {iterationNumber} 工作台</h2></div>
         <span className="async-step-chip">第 3 / 4 步 · 原型开发</span>
       </header>
-      {state.viewer?.condition === 'control' && !hasCommunityDraft && (
-        <div className="async-control-upload">
-          <p>
-            {`由你决定是否开始第 ${iterationNumber} 次开发。请在原有外部应用开发工具中完成原型，再上传回平台。`}
-          </p>
-          <div className="async-fixed-base-note"><GitBranch />
-            {iterationNumber === 1 ? '本轮固定基于初始版本。' : '本轮固定基于社区版本 1。'}
-          </div>
-          <label>开发说明<textarea value={uploadPrompt} onChange={(event) => setUploadPrompt(event.target.value)} rows={3} placeholder="简要记录你如何使用社区评论" /></label>
-          <label>版本摘要<input value={uploadSummary} onChange={(event) => setUploadSummary(event.target.value)} placeholder="这个版本主要改变了什么" /></label>
-          <label className="async-upload-button"><Upload /> 上传外部社区版本 {iterationNumber}<input type="file" accept=".html,text/html" onChange={(event) => void upload(event.target.files?.[0])} /></label>
-        </div>
-      )}
       {latestJob?.status === 'running' && (
         <div className="async-generation-progress">
           <LoaderCircle className="spin" />
@@ -3218,8 +3166,7 @@ function CommunityDraftPanel({
           </div>
           <div>
             <p>这是仅你可见的社区版本草稿。你可以继续修改；只有点击发布后，社区才会看到新版本。</p>
-            {state.viewer?.condition === 'experimental' ? (
-              <section className="async-creator-chat">
+            <section className="async-creator-chat">
                 <header>
                   <div><Bot /><span><strong>与 AI 继续开发</strong><small>{communityPromptRounds
                     ? `已完成 ${communityPromptRounds} 轮提示词对话，可继续修改`
@@ -3252,12 +3199,6 @@ function CommunityDraftPanel({
                   ><Send /> {busy === 'refine-community' ? '正在修改…' : '发送并修改草稿'}</button>
                 </div>
               </section>
-            ) : (
-              <>
-                <p>如需修改，请返回原有外部应用开发工具，完成后重新上传 HTML。</p>
-                <label className="async-upload-button"><Upload /> 重新上传外部版本<input type="file" accept=".html,text/html" onChange={(event) => void upload(event.target.files?.[0])} /></label>
-              </>
-            )}
             <button
               className="async-primary"
               disabled={Boolean(busy)}
@@ -3515,31 +3456,15 @@ function AppDetail({
 
       {isOwner && <CommunityDraftPanel state={state} app={app} clientId={clientId} action={action} busy={busy} />}
 
-      {app.condition_name === 'experimental' ? (
-        <IdeaFlowBoard
-          state={state}
-          app={app}
-          clientId={clientId}
-          action={action}
-          busy={busy}
-          openBasket={openBasket}
-          viewSources={setSourceSynthesis}
-        />
-      ) : (
-        <div className="async-discussion-layout is-control">
-          <section className="async-discussion-panel">
-            <header><div><MessageCircle /><span><strong>普通评论区</strong><small>像社交平台一样自由讨论和回复</small></span></div><em>{app.comment_count}</em></header>
-            <CommentThread
-              state={state}
-              app={app}
-              clientId={clientId}
-              action={action}
-              busy={busy}
-              openSynthesis={setSourceSynthesis}
-            />
-          </section>
-        </div>
-      )}
+      <IdeaFlowBoard
+        state={state}
+        app={app}
+        clientId={clientId}
+        action={action}
+        busy={busy}
+        openBasket={openBasket}
+        viewSources={setSourceSynthesis}
+      />
 
       {sourceSynthesis && <SourceDrawer state={state} synthesis={sourceSynthesis} close={() => setSourceSynthesis(null)} />}
     </section>
@@ -3560,34 +3485,34 @@ function HostPanel({
   const creatorParticipants = state.participants
     .filter((participant) => participant.role === 'creator')
     .sort((left, right) => left.code.localeCompare(right.code));
-  const serverControlCreatorCount = creatorParticipants.filter(
-    (participant) => participant.condition_name === 'control',
+  const serverTestCreatorCount = creatorParticipants.filter(
+    (participant) => Boolean(participant.is_test),
   ).length;
-  const serverControlCreators = creatorParticipants
-    .filter((participant) => participant.condition_name === 'control')
+  const serverTestCreators = creatorParticipants
+    .filter((participant) => Boolean(participant.is_test))
     .map((participant) => participant.code);
-  const serverControlCreatorKey = serverControlCreators.join(',');
-  const [controlCreators, setControlCreators] = useState<string[]>(serverControlCreators);
+  const serverTestCreatorKey = serverTestCreators.join(',');
+  const [testCreators, setTestCreators] = useState<string[]>(serverTestCreators);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState('');
 
   useEffect(() => {
-    setControlCreators(serverControlCreators);
-  }, [serverControlCreatorKey, state.study.id]);
+    setTestCreators(serverTestCreators);
+  }, [serverTestCreatorKey, state.study.id]);
 
   useEffect(() => {
     setResetDialogOpen(false);
     setResetConfirmation('');
   }, [state.study.id]);
 
-  const toggleConditionMember = (code: string) => {
-    setControlCreators((current) => (
+  const toggleTestCreator = (code: string) => {
+    setTestCreators((current) => (
       current.includes(code)
         ? current.filter((value) => value !== code)
         : [...current, code].sort()
     ));
   };
-  const conditionsDirty = controlCreators.join(',') !== serverControlCreators.join(',');
+  const testRolesDirty = testCreators.join(',') !== serverTestCreators.join(',');
   const joinedCreatorCount = creatorParticipants.filter((participant) => participant.joined).length;
   const communityVersions = state.apps.filter((app) => app.community_version_id).length;
   const publishedApps = state.apps.filter((app) => app.status === 'published');
@@ -3631,8 +3556,7 @@ function HostPanel({
       return {
         key: 'running',
         label: '开发中',
-        detail: latestEvent?.title
-          || (app.condition_name === 'control' ? '创作者已上传草稿，等待发布' : 'AI 正在生成新版本'),
+        detail: latestEvent?.title || 'AI 正在生成新版本',
         time: latestEvent?.updated_at || job?.created_at,
         jobId: job?.id,
       };
@@ -3640,9 +3564,7 @@ function HostPanel({
     return {
       key: 'pending',
       label: '未开始',
-      detail: app.condition_name === 'control'
-        ? '等待创作者从外部工具上传'
-        : '等待本轮开发启动',
+      detail: '等待本轮开发启动',
       time: undefined,
       jobId: undefined,
     };
@@ -3670,9 +3592,9 @@ function HostPanel({
           <a href={`/api/community-gallery/export?clientId=${encodeURIComponent(clientId)}`}><Download /> 导出研究数据</a>
           {state.study.status === 'setup' && (
             <button
-              disabled={Boolean(busy) || !state.study.conditions_configured || conditionsDirty}
-              title={!state.study.conditions_configured || conditionsDirty
-                ? '请先选择并保存对照组成员'
+              disabled={Boolean(busy) || !state.study.test_roles_configured || testRolesDirty}
+              title={!state.study.test_roles_configured || testRolesDirty
+                ? '请先选择并保存测试角色'
                 : '开始研究并开放普通评论与综合评论'}
               onClick={() => action('start-study', () => communityGalleryApi.startStudy(clientId))}
             ><Play /> 开始并开放评论</button>
@@ -3691,65 +3613,63 @@ function HostPanel({
             <span><Trash2 /></span>
             <div>
               <span className="async-eyebrow">主持人 · 实验准备</span>
-              <h3>清理测试数据，保留初始 App</h3>
-              <p>正式实验前可清除评论、点赞、综合评论、抽取结果和后续版本。执行前会自动保存完整快照，初始 App、初始版本、分组设置和参与者编号不会丢失。</p>
+              <h3>清除测试角色的全部数据</h3>
+              <p>删除测试角色的登录会话、作品、版本、评论、点赞、综合评论和开发记录。账号及测试角色设置会保留，非测试角色的数据不会受到影响。</p>
             </div>
           </div>
           <div className="async-test-reset-stats" aria-label="待清理数据概览">
-            <span><strong>{state.testReset.initialAppCount}</strong> 个初始 App 保留</span>
-            <span><strong>{state.testReset.commentCount}</strong> 条评论清理</span>
-            <span><strong>{state.testReset.communityVersionCount}</strong> 个后续版本清理</span>
-            <span><strong>{state.testReset.snapshotCount}</strong> 份历史快照</span>
+            <span><strong>{state.testData.testCreatorCount}</strong> 个测试角色</span>
+            <span><strong>{state.testData.testAppCount}</strong> 个作品删除</span>
+            <span><strong>{state.testData.commentCount}</strong> 条评论删除</span>
+            <span><strong>{state.testData.versionCount}</strong> 个版本删除</span>
           </div>
           <button
             className="async-test-reset-trigger"
-            disabled={Boolean(busy) || !state.testReset.hasResettableData || state.testReset.runningTaskCount > 0}
-            title={state.testReset.runningTaskCount > 0
-              ? '仍有开发任务正在运行，请等待任务结束后再清理'
-              : !state.testReset.hasResettableData
-                ? '当前没有需要清理的测试数据'
-                : '预览清理范围并进行二次确认'}
+            disabled={Boolean(busy) || !state.testData.hasTestData || state.testData.runningTaskCount > 0}
+            title={state.testData.runningTaskCount > 0
+              ? '测试角色仍有开发任务正在运行'
+              : !state.testData.hasTestData
+                ? '当前没有需要清除的测试角色数据'
+                : '预览删除范围并进行二次确认'}
             onClick={() => setResetDialogOpen(true)}
-          ><Trash2 /> 清理测试数据</button>
+          ><Trash2 /> 清除测试角色数据</button>
         </section>
       )}
       {state.study.status !== 'closed' && (
         <section className="async-condition-assignment">
           <header>
             <div>
-              <span className="async-eyebrow">主持人 · 分组设置</span>
-              <h3>{state.study.status === 'active' ? '调整创作者分组' : '由主持人选择对照组'}</h3>
-              <p>{state.study.status === 'active'
-                ? '研究进行中也可以调整创作者所在组。保存后会立即更新该创作者的平台功能与应用分组。'
-                : '所有参与者均为创作者（C01–C30）。点击编号选择对照组，未选择的创作者自动归入实验组。'}</p>
+              <span className="async-eyebrow">主持人 · 测试角色设置</span>
+              <h3>选择测试角色</h3>
+              <p>测试角色创建的作品只对 Host 和其他测试角色可见；普通创作者与测试角色的数据完全隔离。开始研究后不可修改。</p>
             </div>
             <div className="async-condition-save">
               <button
                 className="async-primary"
-                disabled={Boolean(busy) || (!conditionsDirty && state.study.conditions_configured)}
+                disabled={Boolean(busy) || state.study.status !== 'setup' || (!testRolesDirty && state.study.test_roles_configured)}
                 onClick={() => action(
-                  'save-study-conditions',
-                  () => communityGalleryApi.setConditions(
+                  'save-test-creators',
+                  () => communityGalleryApi.setTestCreators(
                     clientId,
-                    controlCreators,
+                    testCreators,
                   ),
                 )}
-              ><Check /> {conditionsDirty ? '保存分组调整' : state.study.conditions_configured ? '分组已保存' : '保存分组'}</button>
+              ><Check /> {testRolesDirty ? '保存测试角色' : state.study.test_roles_configured ? '测试角色已保存' : '保存测试角色'}</button>
             </div>
           </header>
           <div className="async-condition-groups">
             <section>
-              <header><div><strong>创作者对照组</strong><small>点击编号切换分组；未选择的创作者自动归入实验组</small></div></header>
+              <header><div><strong>创作者账号 1–30</strong><small>点击编号切换测试角色；未选择的账号为正式实验角色</small></div></header>
               <div>
                 {creatorParticipants.map((participant) => (
                   <button
                     key={participant.code}
-                    className={controlCreators.includes(participant.code) ? 'is-control' : ''}
-                    disabled={Boolean(busy)}
-                    onClick={() => toggleConditionMember(participant.code)}
+                    className={testCreators.includes(participant.code) ? 'is-control' : ''}
+                    disabled={Boolean(busy) || state.study.status !== 'setup'}
+                    onClick={() => toggleTestCreator(participant.code)}
                   >
-                    <strong>{participant.code}</strong>
-                    <span>{controlCreators.includes(participant.code) ? '对照组' : '实验组'}</span>
+                    <strong>{Number(participant.code.slice(1))}</strong>
+                    <span>{testCreators.includes(participant.code) ? '测试角色' : '正式角色'}</span>
                     {participant.joined ? <i>已进入</i> : null}
                   </button>
                 ))}
@@ -3757,8 +3677,8 @@ function HostPanel({
             </section>
           </div>
           <footer>
-            <span><i className="is-control" /> 对照组：传统普通评论区</span>
-            <span><i className="is-experimental" /> 实验组：综合评论与 AI 开发功能</span>
+            <span><i className="is-control" /> 测试角色：仅与测试角色和 Host 互相可见</span>
+            <span><i className="is-experimental" /> 正式角色：仅与正式角色和 Host 互相可见</span>
           </footer>
         </section>
       )}
@@ -3788,8 +3708,8 @@ function HostPanel({
         </section>
       )}
       <div className="async-host-stats">
-        <article><span>对照组初始应用</span><strong>{state.counts.controlApps} / {serverControlCreatorCount}</strong></article>
-        <article><span>实验组初始应用</span><strong>{state.counts.experimentalApps} / {state.counts.creators - serverControlCreatorCount}</strong></article>
+        <article><span>测试角色作品</span><strong>{state.counts.testApps} / {serverTestCreatorCount}</strong></article>
+        <article><span>正式角色作品</span><strong>{state.counts.regularApps} / {state.counts.creators - serverTestCreatorCount}</strong></article>
         <article><span>已进入创作者</span><strong>{joinedCreatorCount} / {state.counts.creators}</strong></article>
         <article><span>社区版本</span><strong>{communityVersions} / {state.counts.creators}</strong></article>
       </div>
@@ -3819,7 +3739,7 @@ function HostPanel({
               return (
                 <article key={app.id} role="row">
                   <div className="async-development-app" role="cell">
-                    <span>{app.condition_name === 'control' ? '对照组' : '实验组'}</span>
+                    <span>{app.is_test ? '测试角色' : '正式角色'}</span>
                     <strong>{app.title}</strong>
                     <small>{app.creator_code}</small>
                   </div>
@@ -3839,7 +3759,7 @@ function HostPanel({
                       </span>
                       <p>{status.detail}</p>
                       {status.time && <small>{formatDate(status.time)}</small>}
-                      {status.key === 'failed' && status.jobId && app.condition_name === 'experimental' && (
+                      {status.key === 'failed' && status.jobId && (
                         <button
                           className="async-retry-development"
                           disabled={Boolean(busy)}
@@ -3863,42 +3783,35 @@ function HostPanel({
         <section className="async-flow-reply-dialog async-test-reset-dialog">
           <header>
             <div>
-              <span className="async-eyebrow">不可撤销操作 · 执行前自动保存快照</span>
-              <h2 id="test-reset-title">确认清理测试数据</h2>
+              <span className="async-eyebrow">不可撤销操作</span>
+              <h2 id="test-reset-title">确认清除测试角色数据</h2>
             </div>
             <button
               onClick={() => {
                 setResetDialogOpen(false);
                 setResetConfirmation('');
               }}
-              aria-label="关闭清理测试数据窗口"
+              aria-label="关闭清除测试角色数据窗口"
             ><X /></button>
           </header>
           <p className="async-test-reset-warning">
-            当前研究将回到“尚未开始”状态。初始 App 和初始版本会保留，下面的测试互动与演化数据会从当前实验视图中移除。
+            测试角色创建的作品（包括初始作品）及其全部互动和开发记录将永久删除。测试角色账号仍保留，可重新登录并创建作品。
           </p>
           <div className="async-test-reset-summary">
-            <article><span>保留</span><strong>{state.testReset.initialAppCount}</strong><small>初始 App</small></article>
-            <article><span>清理</span><strong>{state.testReset.commentCount}</strong><small>评论</small></article>
-            <article><span>清理</span><strong>{state.testReset.synthesisCount}</strong><small>综合评论</small></article>
-            <article><span>清理</span><strong>{state.testReset.likeCount}</strong><small>点赞 / 投票</small></article>
-            <article><span>清理</span><strong>{state.testReset.communityVersionCount}</strong><small>后续版本</small></article>
-            <article><span>清理</span><strong>{state.testReset.developmentJobCount}</strong><small>开发任务</small></article>
-          </div>
-          <div className="async-test-reset-snapshot-note">
-            <CheckCircle2 />
-            <div>
-              <strong>执行时先保存完整清理前快照</strong>
-              <span>快照与研究数据库一起保存在持久化存储中，也会包含在主持人的研究数据导出文件里。</span>
-            </div>
+            <article><span>删除</span><strong>{state.testData.testAppCount}</strong><small>作品</small></article>
+            <article><span>删除</span><strong>{state.testData.versionCount}</strong><small>版本</small></article>
+            <article><span>删除</span><strong>{state.testData.commentCount}</strong><small>评论</small></article>
+            <article><span>删除</span><strong>{state.testData.synthesisCount}</strong><small>综合评论</small></article>
+            <article><span>删除</span><strong>{state.testData.likeCount}</strong><small>点赞 / 投票</small></article>
+            <article><span>删除</span><strong>{state.testData.generationJobCount}</strong><small>开发任务</small></article>
           </div>
           <label className="async-test-reset-confirmation">
-            <span>请输入 <strong>清理测试数据</strong> 以确认</span>
+            <span>请输入 <strong>清除测试角色数据</strong> 以确认</span>
             <input
               autoFocus
               value={resetConfirmation}
               onChange={(event) => setResetConfirmation(event.target.value)}
-              placeholder="清理测试数据"
+              placeholder="清除测试角色数据"
             />
           </label>
           <div className="async-flow-dialog-actions">
@@ -3911,16 +3824,16 @@ function HostPanel({
             >取消</button>
             <button
               className="async-test-reset-confirm"
-              disabled={Boolean(busy) || resetConfirmation.trim() !== '清理测试数据'}
+              disabled={Boolean(busy) || resetConfirmation.trim() !== '清除测试角色数据'}
               onClick={() => {
                 void action(
-                  'reset-test-data',
-                  () => communityGalleryApi.resetTestData(clientId, resetConfirmation),
+                  'clear-test-data',
+                  () => communityGalleryApi.clearTestData(clientId, resetConfirmation),
                 );
                 setResetDialogOpen(false);
                 setResetConfirmation('');
               }}
-            ><Trash2 /> 保存快照并清理</button>
+            ><Trash2 /> 永久删除测试数据</button>
           </div>
         </section>
       </div>
@@ -4194,7 +4107,9 @@ export default function AsyncGalleryApp() {
           )}
           <div className="async-viewer">
             <span>{state.viewer ? (state.viewer.role === 'host' ? '主持人' : '创作者') : '当前身份'}</span>
-            <strong>{state.viewer?.code || '访客'}</strong>
+            <strong>{state.viewer
+              ? state.viewer.role === 'host' ? '账号 0' : `账号 ${Number(state.viewer.code.slice(1))}`
+              : '访客'}</strong>
           </div>
           <button className="async-refresh" onClick={() => void refresh()} title="刷新"><RefreshCw className={busy ? 'spin' : ''} /></button>
         </div>
@@ -4210,9 +4125,9 @@ export default function AsyncGalleryApp() {
         </section>
 
         {error && <div className="async-error"><span>{error}</span><button onClick={() => setError('')}><X /></button></div>}
-        {!state.viewer && <IdentityGate busy={busy} participants={state.participants} join={(code) => void action('join', () => communityGalleryApi.join(clientId, code))} />}
+        {!state.viewer && <IdentityGate busy={busy} join={(account, password) => void action('join', () => communityGalleryApi.join(clientId, account, password))} />}
 
-        {state.viewer?.role !== 'host' && state.study.status !== 'closed' && (
+        {state.viewer?.role === 'creator' && state.study.status !== 'closed' && (
           <InitialCreatorStudio state={state} clientId={clientId} action={action} busy={busy} />
         )}
 

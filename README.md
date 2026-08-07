@@ -4,20 +4,12 @@
 
 ## 当前研究流程
 
-1. 12 位 Creator 分别自由创作并发布一个 Initial App。
-2. 任一 Initial App 发布后，24 位 Community Member 都可立即体验和评论，不需要等待其他 App，也不需要 Host 解锁。
-3. Host 在研究开始前手动选择 6 位 Creator 和 12 位 Community Member 进入对照组；其余参与者进入 Vibe Gallery 条件。系统不再随机分组，所有参与者仍可看到全部作品。
-4. 每名 Community Member 从全部 12 个 App 中被平衡分配 3 个需要认真体验的作品，同时可以自由浏览其他作品。
-5. 普通评论区支持自由评论、连续回复和点赞，不要求填写结构化“亮点”。
-6. Vibe Gallery 条件中，用户可以把评论、回复或已有综合评论加入私有的“创意篮子”。
-7. 用户在目标 App 下从创意篮子选择至少两条素材，发布一条新的综合评论；至少一条素材必须来自目标 App。
-8. Vibe Gallery App 使用固定横向创意画布展示“普通评论 → 多级综合 → Creator 选择”，自动排序被采用的素材并绘制来源连线。
-9. 系统保留每条综合评论的原作者、来源 App、版本和讨论位置，并允许已有综合评论继续成为新综合的来源。
-10. 目标 App 的 Creator 可以让平台 AI 读取 Initial Version、综合评论和直接来源，生成 Community Version 草稿。
-11. Creator 试玩、修改并发布 Community Version；Initial Version 始终保留。
-12. 首页在同一 App 卡片中并列展示 Initial Version 和 Community Version。
-
-对照条件保留 App 瀑布流、普通评论、回复和点赞，不提供创意篮子、综合评论或平台内 AI 原型化。Creator 使用外部工具完成 Community Version 后上传平台。
+1. 30 位 Creator 使用实验编号 `1–30` 登录（密码与编号相同）；Host 使用 `0 / 0` 登录。
+2. Host 在研究开始前选择若干 Creator 作为测试角色。测试角色与正式角色进入彼此隔离的社区；Host 可查看两边的内容。
+3. Creator 分别自由创作并发布 Initial App，研究开始后可浏览同一角色空间中的作品并进行评论、回复、点赞、收藏和综合。
+4. Host 锁定每轮点赞后，系统按点赞权重抽取开发方向，并在平台内生成 Community Version 草稿。
+5. Creator 试玩、修改并发布 Community Version；Initial Version 始终保留。
+6. 正式实验前，Host 可以永久清除测试角色的全部数据，包括测试作品、版本、互动和开发记录；正式角色数据不受影响。
 
 完整功能说明见 [docs/当前功能与实验流程.md](docs/当前功能与实验流程.md)。
 

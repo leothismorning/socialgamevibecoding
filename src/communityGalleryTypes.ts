@@ -1,5 +1,4 @@
 export type CommunityRole = 'host' | 'creator';
-export type CommunityCondition = 'control' | 'experimental';
 export type CommunityStatus = 'setup' | 'active' | 'closed';
 export type CommunitySourceType = 'comment' | 'synthesis';
 export type CommunityWorkflowStage = 'synthesis_1' | 'development_1' | 'development_2';
@@ -8,13 +7,13 @@ export type CommunityViewer = {
   clientId: string;
   code: string;
   role: CommunityRole;
-  condition?: CommunityCondition;
+  isTest: number;
 };
 
 export type CommunityApp = {
   id: string;
   creator_code: string;
-  condition_name: CommunityCondition;
+  is_test: number;
   title: string;
   brief: string;
   creator_prompt: string;
@@ -220,7 +219,7 @@ export type CommunityGalleryState = {
     id: string;
     status: CommunityStatus;
     workflow_stage: CommunityWorkflowStage;
-    conditions_configured: boolean;
+    test_roles_configured: boolean;
     created_at: string;
     started_at?: string;
     closed_at?: string;
@@ -270,29 +269,28 @@ export type CommunityGalleryState = {
   participants: Array<{
     code: string;
     role: CommunityRole;
-    condition_name?: CommunityCondition;
+    is_test: number;
     joined: number;
   }>;
   aiProvider: 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';
   counts: {
     creators: number;
-    controlApps: number;
-    experimentalApps: number;
+    regularApps: number;
+    testApps: number;
   };
-  testReset: {
-    initialAppCount: number;
-    initialVersionCount: number;
-    communityVersionCount: number;
+  testData: {
+    testCreatorCount: number;
+    testSessionCount: number;
+    testAppCount: number;
+    versionCount: number;
     commentCount: number;
     synthesisCount: number;
     likeCount: number;
-    wildcardCount: number;
-    developmentJobCount: number;
+    basketItemCount: number;
+    generationJobCount: number;
     behaviorEventCount: number;
     runningTaskCount: number;
-    snapshotCount: number;
-    lastResetAt?: string;
-    hasResettableData: boolean;
+    hasTestData: boolean;
   };
   serverNow: string;
 };

@@ -25,12 +25,12 @@ import {
   publishProjectDraft,
   recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
-  resetCommunityTestData,
+  clearCommunityTestData,
   retryCommunityGeneration,
   saveCommunityComment,
   saveInitialDraft,
   saveRefinedDraft,
-  setCommunityStudyConditions,
+  setCommunityTestCreators,
   startCreatorDevelopmentOperation,
   startAsyncCommunityStudy,
   startCommunityGeneration,
@@ -41,7 +41,6 @@ import {
   trackCommunityEvent,
   updateCommunityComment,
   updateCommunitySynthesis,
-  uploadControlCommunityDraft,
   useCommunityWildcard,
   voteForSynthesis,
   withdrawSynthesisForVote,
@@ -149,7 +148,11 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/join', (req, res) => {
     try {
-      res.json(joinCommunityGallery(clientIdFrom(req), String(req.body?.code || '')));
+      res.json(joinCommunityGallery(
+        clientIdFrom(req),
+        String(req.body?.account || ''),
+        String(req.body?.password || ''),
+      ));
     } catch (error) {
       sendError(res, error);
     }
@@ -262,9 +265,6 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const message = String(req.body?.message || '').trim();
       if (!message) throw new Error('请说明希望怎样修改当前草稿。');
       const context = getCreatorDraftContext(clientId);
-      if (context.draft.kind !== 'initial' && context.viewer.condition === 'control') {
-        throw new Error('对照组需要在原有外部应用开发工具中继续修改已发布项目。');
-      }
       operationId = String(req.body?.operationId || randomUUID()).trim();
       const operationPhase = context.messagePhase as 'initial' | 'community' | 'project';
       startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
@@ -483,24 +483,6 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
-  app.post('/api/community-gallery/apps/:appId/upload-community', (req, res) => {
-    try {
-      const code = String(req.body?.code || '');
-      if (!/<html|<!doctype/i.test(code)) throw new Error('请上传完整的 HTML 社区版本。');
-      res.json(uploadControlCommunityDraft(
-        clientIdFrom(req),
-        String(req.params.appId),
-        code,
-        String(req.body?.summary || '创作者使用外部工具开发的社区版本。'),
-        String(req.body?.prompt || ''),
-        req.body?.baseVersionId == null ? undefined : Number(req.body.baseVersionId),
-        String(req.body?.selectionReason || ''),
-      ));
-    } catch (error) {
-      sendError(res, error);
-    }
-  });
-
   app.post('/api/community-gallery/apps/:appId/publish-community', (req, res) => {
     try {
       res.json(publishCommunityVersion(clientIdFrom(req), String(req.params.appId)));
@@ -562,12 +544,12 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
-  app.post('/api/community-gallery/study/conditions', (req, res) => {
+  app.post('/api/community-gallery/study/test-creators', (req, res) => {
     try {
-      res.json(setCommunityStudyConditions(
+      res.json(setCommunityTestCreators(
         clientIdFrom(req),
-        Array.isArray(req.body?.controlCreatorCodes)
-          ? req.body.controlCreatorCodes.map(String)
+        Array.isArray(req.body?.testCreatorCodes)
+          ? req.body.testCreatorCodes.map(String)
           : [],
       ));
     } catch (error) {
@@ -575,9 +557,9 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
-  app.post('/api/community-gallery/study/reset-test-data', (req, res) => {
+  app.post('/api/community-gallery/study/clear-test-data', (req, res) => {
     try {
-      res.json(resetCommunityTestData(
+      res.json(clearCommunityTestData(
         clientIdFrom(req),
         String(req.body?.confirmation || ''),
       ));

@@ -3,18 +3,18 @@ import { db, getAIProvider } from './studyDb.js';
 import type { DevelopmentAgentProgress } from './developmentAgent.js';
 
 export type CommunityRole = 'host' | 'creator';
-export type CommunityCondition = 'control' | 'experimental';
 export type CommunityStatus = 'setup' | 'active' | 'closed';
 export type CommunitySourceType = 'comment' | 'synthesis';
 
 const ACTIVE_STUDY_KEY = 'active_study_id';
+const NUMERIC_LOGIN_MIGRATION_KEY = 'numeric_account_password_login_v1';
 const CREATOR_COUNT = 30;
 const CREATOR_CODES = Array.from(
   { length: CREATOR_COUNT },
   (_, index) => `C${String(index + 1).padStart(2, '0')}`,
 );
 const now = () => new Date().toISOString();
-const TEST_RESET_CONFIRMATION = '清理测试数据';
+const TEST_RESET_CONFIRMATION = '清除测试角色数据';
 const COMMUNITY_STUDY_DATA_TABLES = [
   'vg_async_participants',
   'vg_async_sessions',
@@ -65,6 +65,7 @@ db.exec(`
     code TEXT NOT NULL,
     role TEXT NOT NULL,
     condition_name TEXT,
+    is_test INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     PRIMARY KEY (study_id, code)
   );
@@ -83,6 +84,7 @@ db.exec(`
     study_id TEXT NOT NULL,
     creator_code TEXT NOT NULL,
     condition_name TEXT NOT NULL,
+    is_test INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL,
     brief TEXT NOT NULL DEFAULT '',
     creator_prompt TEXT NOT NULL DEFAULT '',
@@ -478,6 +480,24 @@ ensureColumn('vg_async_stage_selections', 'source_content', `TEXT NOT NULL DEFAU
 ensureColumn('vg_async_stage_selections', 'source_author_code', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('vg_async_notifications', 'source_type', `TEXT NOT NULL DEFAULT 'synthesis'`);
 ensureColumn('vg_async_notifications', 'source_id', 'INTEGER');
+ensureColumn('vg_async_participants', 'is_test', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('vg_async_apps', 'is_test', 'INTEGER NOT NULL DEFAULT 0');
+
+const numericLoginMigrated = db.prepare(`
+  SELECT value FROM vg_async_settings WHERE key = ?
+`).get(NUMERIC_LOGIN_MIGRATION_KEY) as { value?: string } | undefined;
+if (numericLoginMigrated?.value !== '1') {
+  const timestamp = now();
+  const migrateSessions = db.transaction(() => {
+    db.prepare(`DELETE FROM vg_async_sessions`).run();
+    db.prepare(`
+      INSERT INTO vg_async_settings (key, value, updated_at)
+      VALUES (?, '1', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(NUMERIC_LOGIN_MIGRATION_KEY, timestamp);
+  });
+  migrateSessions();
+}
 // Older studies used Community Member as a separate role.  Keep their existing
 // codes and contributions, but give every non-Host participant Creator access.
 db.exec(`
@@ -671,37 +691,37 @@ function seedParticipants(studyId: string) {
   if (Number(existingParticipants.count) > 0) return;
   const insert = db.prepare(`
     INSERT OR IGNORE INTO vg_async_participants
-      (study_id, code, role, condition_name, created_at)
-    VALUES (?, ?, ?, ?, ?)
+      (study_id, code, role, condition_name, is_test, created_at)
+    VALUES (?, ?, ?, ?, 0, ?)
   `);
   const timestamp = now();
   insert.run(studyId, 'H01', 'host', null, timestamp);
   CREATOR_CODES.forEach((code) => insert.run(studyId, code, 'creator', 'experimental', timestamp));
 }
 
-function conditionAssignmentKey(studyId: string) {
-  return `host_condition_assignment_v1:${studyId}`;
+function testRoleAssignmentKey(studyId: string) {
+  return `host_test_role_assignment_v1:${studyId}`;
 }
 
-function conditionsConfigured(studyId: string) {
+function testRolesConfigured(studyId: string) {
   const configured = db.prepare(`
     SELECT value FROM vg_async_settings WHERE key = ?
-  `).get(conditionAssignmentKey(studyId)) as { value?: string } | undefined;
+  `).get(testRoleAssignmentKey(studyId)) as { value?: string } | undefined;
   return configured?.value === '1';
 }
 
-export function setCommunityStudyConditions(
+export function setCommunityTestCreators(
   clientId: string,
-  controlCreatorCodes: string[],
+  testCreatorCodes: string[],
 ) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = study();
-  if (currentStudy.status === 'closed') throw new Error('研究结束后不能修改实验分组。');
+  if (currentStudy.status !== 'setup') throw new Error('只能在研究开始前修改测试角色。');
   const creators = [...new Set(
-    controlCreatorCodes.map((value) => String(value).trim().toUpperCase()).filter(Boolean),
+    testCreatorCodes.map((value) => String(value).trim().toUpperCase()).filter(Boolean),
   )].sort();
   if (creators.some((code) => !CREATOR_CODES.includes(code))) {
-    throw new Error(`对照组只能选择 C01–C${String(CREATOR_COUNT).padStart(2, '0')}。`);
+    throw new Error(`测试角色只能选择 C01–C${String(CREATOR_COUNT).padStart(2, '0')}。`);
   }
   const participantRows = db.prepare(`
     SELECT code, role FROM vg_async_participants WHERE study_id = ?
@@ -717,23 +737,23 @@ export function setCommunityStudyConditions(
   const transaction = db.transaction(() => {
     db.prepare(`
       UPDATE vg_async_participants
-      SET condition_name = 'experimental'
+      SET is_test = 0
       WHERE study_id = ? AND role = 'creator'
     `).run(currentStudy.id);
-    const setControl = db.prepare(`
+    const setTest = db.prepare(`
       UPDATE vg_async_participants
-      SET condition_name = 'control'
+      SET is_test = 1
       WHERE study_id = ? AND code = ?
     `);
-    creators.forEach((code) => setControl.run(currentStudy.id, code));
+    creators.forEach((code) => setTest.run(currentStudy.id, code));
     db.prepare(`
       UPDATE vg_async_apps
-      SET condition_name = (
-        SELECT p.condition_name
+      SET is_test = COALESCE((
+        SELECT p.is_test
         FROM vg_async_participants p
         WHERE p.study_id = vg_async_apps.study_id
           AND p.code = vg_async_apps.creator_code
-      ),
+      ), 0),
       updated_at = ?
       WHERE study_id = ?
     `).run(timestamp, currentStudy.id);
@@ -741,15 +761,12 @@ export function setCommunityStudyConditions(
       INSERT INTO vg_async_settings (key, value, updated_at)
       VALUES (?, '1', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(conditionAssignmentKey(currentStudy.id), timestamp);
+    `).run(testRoleAssignmentKey(currentStudy.id), timestamp);
   });
   transaction();
-  recordEvent(viewer.code, currentStudy.status === 'setup'
-    ? 'configure_study_conditions'
-    : 'update_study_conditions', 'study', currentStudy.id, {
-    controlCreatorCount: creators.length,
-    experimentalCreatorCount: CREATOR_COUNT - creators.length,
-    controlCreatorCodes: creators,
+  recordEvent(viewer.code, 'configure_test_creators', 'study', currentStudy.id, {
+    testCreatorCount: creators.length,
+    testCreatorCodes: creators,
   });
   return getCommunityGalleryState(clientId);
 }
@@ -800,7 +817,7 @@ export function getCommunityViewer(clientId = '') {
   if (!clientId) return null;
   const currentStudy = study();
   return db.prepare(`
-    SELECT s.client_id AS clientId, p.code, p.role, p.condition_name AS condition
+    SELECT s.client_id AS clientId, p.code, p.role, p.is_test AS isTest
     FROM vg_async_sessions s
     JOIN vg_async_participants p
       ON p.study_id = s.study_id AND p.code = s.participant_code
@@ -862,13 +879,16 @@ function recordEvent(
   );
 }
 
-export function joinCommunityGallery(clientId: string, requestedCode: string) {
+export function joinCommunityGallery(clientId: string, account: string, password: string) {
   const cleanClientId = clientId.trim();
-  const cleanCode = requestedCode.trim().toUpperCase();
+  const cleanAccount = account.trim();
+  const cleanPassword = password.trim();
   if (!cleanClientId || cleanClientId.length > 160) throw new Error('缺少有效的浏览器会话。');
-  if (cleanCode !== 'H01' && !CREATOR_CODES.includes(cleanCode)) {
-    throw new Error(`请选择 C01–C${String(CREATOR_COUNT).padStart(2, '0')} 中的创作者编号。`);
+  if (!/^(0|[1-9]|[12][0-9]|30)$/.test(cleanAccount) || cleanPassword !== cleanAccount) {
+    throw new Error('账号或密码错误。');
   }
+  const accountNumber = Number(cleanAccount);
+  const cleanCode = accountNumber === 0 ? 'H01' : `C${String(accountNumber).padStart(2, '0')}`;
   const currentStudy = study();
   const selectedParticipant = participant(currentStudy.id, cleanCode);
   if (!selectedParticipant) throw new Error('请选择有效的参与者编号。');
@@ -915,6 +935,9 @@ function accessibleApp(clientId: string, appId: string) {
   const viewer = requireViewer(clientId);
   const app = appById(appId);
   if (!app) throw new Error('应用不存在。');
+  if (viewer.role !== 'host' && Number(app.is_test) !== Number(viewer.isTest)) {
+    throw new Error('应用不存在或当前账号无权查看。');
+  }
   return { viewer, app };
 }
 
@@ -955,9 +978,10 @@ export function saveInitialDraft(input: {
   const transaction = db.transaction(() => {
     db.prepare(`
       INSERT INTO vg_async_apps
-        (id, study_id, creator_code, condition_name, title, brief, creator_prompt, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+        (id, study_id, creator_code, condition_name, is_test, title, brief, creator_prompt, status, created_at, updated_at)
+      VALUES (?, ?, ?, 'experimental', ?, ?, ?, ?, 'draft', ?, ?)
       ON CONFLICT(study_id, creator_code) DO UPDATE SET
+        is_test = excluded.is_test,
         title = excluded.title,
         brief = excluded.brief,
         creator_prompt = excluded.creator_prompt,
@@ -966,7 +990,7 @@ export function saveInitialDraft(input: {
       appId,
       currentStudy.id,
       viewer.code,
-      viewer.condition,
+      Number(viewer.isTest),
       input.title.trim(),
       input.brief.trim(),
       input.prompt.trim(),
@@ -1854,8 +1878,8 @@ export function useCommunityWildcard(clientId: string, appId: string, commentId:
   const { viewer, app } = ownedApp(clientId, appId);
   const currentStudy = requireOpenStudy();
   if (currentStudy.status !== 'active') throw new Error('主持人开始研究后才能使用万能卡。');
-  if (app.condition_name !== 'experimental' || app.status !== 'published') {
-    throw new Error('万能卡只能用于已发布的实验组应用。');
+  if (app.status !== 'published') {
+    throw new Error('万能卡只能用于已发布的应用。');
   }
   const iterationNumber = communityIterationCount(app.id) + 1;
   if (iterationNumber !== 1 && iterationNumber !== 2) {
@@ -1896,19 +1920,19 @@ export function enterCommunityDevelopmentStage(clientId: string, iterationNumber
   if (currentStudy.workflow_stage !== expectedStage) {
     throw new Error(iterationNumber === 1 ? '第一次综合已经结束。' : '当前不能进入第二次开发。');
   }
-  const experimentalApps = db.prepare(`
+  const publishedApps = db.prepare(`
     SELECT * FROM vg_async_apps
-    WHERE study_id = ? AND condition_name = 'experimental' AND status = 'published'
+    WHERE study_id = ? AND status = 'published'
     ORDER BY published_at, creator_code
   `).all(currentStudy.id) as any[];
-  if (!experimentalApps.length) throw new Error('当前没有已发布的实验组应用。');
+  if (!publishedApps.length) throw new Error('当前没有已发布的应用。');
 
-  const candidatesByApp = experimentalApps.map((app) => ({
+  const candidatesByApp = publishedApps.map((app) => ({
     app,
     candidates: scoredDevelopmentCandidates(app.id, iterationNumber),
   }));
   if (iterationNumber === 2) {
-    const missingFirstVersion = experimentalApps.filter((app) => communityIterationCount(app.id) < 1);
+    const missingFirstVersion = publishedApps.filter((app) => communityIterationCount(app.id) < 1);
     if (missingFirstVersion.length) {
       throw new Error(`仍有 ${missingFirstVersion.length} 个应用未发布社区版本 1。`);
     }
@@ -2135,7 +2159,7 @@ export function returnToPreviousCommunityStage(clientId: string) {
         UPDATE vg_async_apps
         SET selected_synthesis_id = NULL, selected_source_type = NULL,
           selected_source_id = NULL, updated_at = ?
-        WHERE study_id = ? AND condition_name = 'experimental'
+        WHERE study_id = ?
       `).run(timestamp, currentStudy.id);
     } else {
       db.prepare(`
@@ -2160,7 +2184,7 @@ export function returnToPreviousCommunityStage(clientId: string) {
             AND selection.app_id = vg_async_apps.id
             AND selection.iteration_number = 1
         ), updated_at = ?
-        WHERE study_id = ? AND condition_name = 'experimental'
+        WHERE study_id = ?
       `).run(timestamp, currentStudy.id);
     }
 
@@ -2357,9 +2381,6 @@ export function toggleCreativeBasket(
 ) {
   const viewer = requireParticipant(clientId);
   requireOpenStudy();
-  if (viewer.condition !== 'experimental') {
-    throw new Error('创意篮子只对实验组创作者开放。');
-  }
   const source = sourceRecord(sourceType, sourceId);
   if (!source) throw new Error('创意素材不存在。');
   accessibleApp(clientId, source.app_id);
@@ -2399,14 +2420,10 @@ export function createSynthesis(input: {
 }) {
   const viewer = requireParticipant(input.clientId);
   requireOpenStudy();
-  if (viewer.condition !== 'experimental') {
-    throw new Error('综合评论只对实验组创作者开放。');
-  }
   const { app } = accessibleApp(input.clientId, input.targetAppId);
   if (app.creator_code === viewer.code) {
     throw new Error('不能在自己的应用中创建综合评论。');
   }
-  if (app.condition_name !== 'experimental') throw new Error('综合评论只能发布到实验组应用。');
   const currentStudy = study();
   if (currentStudy.status !== 'active') throw new Error('主持人开始研究后才能创建综合评论。');
   const layer = openSynthesisLayerForApp(app);
@@ -2569,9 +2586,6 @@ export function withdrawSynthesisForVote(clientId: string, synthesisId: number) 
 export function voteForSynthesis(clientId: string, synthesisId: number) {
   const viewer = requireParticipant(clientId);
   const currentStudy = requireOpenStudy();
-  if (viewer.condition !== 'experimental') {
-    throw new Error('综合评论点赞只对实验组创作者开放。');
-  }
   const synthesis = synthesisById(synthesisId);
   if (!synthesis) throw new Error('要点赞的综合评论不存在。');
   if (synthesis.is_development_brief) {
@@ -2714,7 +2728,6 @@ function createCommunityGenerationJob(input: {
     throw new Error('请在主持人开始研究后进入社区开发流程。');
   }
   const { app } = input;
-  if (app.condition_name !== 'experimental') throw new Error('对照组不提供平台内 AI 原型化。');
   const completedIterations = communityIterationCount(app.id);
   const iterationNumber = completedIterations + 1;
   if (iterationNumber > 2) throw new Error('该应用已经完成两次社区开发。');
@@ -2821,15 +2834,15 @@ export function retryCommunityGeneration(clientId: string, failedJobId: number) 
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = requireOpenStudy();
   const failedJob = db.prepare(`
-    SELECT j.*, a.status AS app_status, a.condition_name
+    SELECT j.*, a.status AS app_status
     FROM vg_async_generation_jobs j
     JOIN vg_async_apps a ON a.id = j.app_id
     WHERE j.study_id = ? AND j.id = ?
   `).get(currentStudy.id, failedJobId) as any;
   if (!failedJob) throw new Error('要重新开发的任务不存在。');
   if (failedJob.status !== 'failed') throw new Error('只有失败的开发任务可以重新开发。');
-  if (failedJob.condition_name !== 'experimental' || failedJob.app_status !== 'published') {
-    throw new Error('只有已发布的实验组应用可以重新开发。');
+  if (failedJob.app_status !== 'published') {
+    throw new Error('只有已发布的应用可以重新开发。');
   }
   const iterationNumber = Number(failedJob.iteration_number);
   if (iterationNumber !== 1 && iterationNumber !== 2) throw new Error('失败任务的开发阶段无效。');
@@ -2998,67 +3011,6 @@ export function failCommunityGeneration(jobId: number, error: unknown) {
   recordEvent(input.job.creator_code, 'fail_community_generation', 'generation_job', jobId);
 }
 
-export function uploadControlCommunityDraft(
-  clientId: string,
-  appId: string,
-  code: string,
-  summary: string,
-  prompt: string,
-  requestedBaseVersionId?: number,
-  selectionReason = '',
-) {
-  const { viewer, app } = ownedApp(clientId, appId);
-  requireOpenStudy();
-  if (viewer.condition !== 'control') throw new Error('该入口仅用于对照组上传外部原型。');
-  const completedIterations = communityIterationCount(app.id);
-  const iterationNumber = completedIterations + 1;
-  if (iterationNumber > 2) throw new Error('该应用已经完成两次社区开发。');
-  const firstCommunityVersion = versionsForApp(app.id)
-    .find((version) => version.kind === 'community' && Number(version.version_number) === 2);
-  const baseVersionId = Number(
-    iterationNumber === 1 ? app.initial_version_id : firstCommunityVersion?.id,
-  );
-  const baseVersion = versionById(baseVersionId);
-  if (!baseVersion || baseVersion.app_id !== app.id) {
-    throw new Error('当前开发阶段的基础版本不存在。');
-  }
-  if (requestedBaseVersionId && Number(requestedBaseVersionId) !== baseVersionId) {
-    throw new Error('当前开发阶段的基础版本由实验流程固定。');
-  }
-  db.prepare(`
-    INSERT INTO vg_async_drafts
-      (study_id, app_id, kind, code, summary, prompt, synthesis_id,
-       iteration_number, base_version_id, selection_reason, updated_at)
-    VALUES (?, ?, 'community', ?, ?, ?, NULL, ?, ?, ?, ?)
-    ON CONFLICT(study_id, app_id) DO UPDATE SET
-      kind = 'community',
-      code = excluded.code,
-      summary = excluded.summary,
-      prompt = excluded.prompt,
-      synthesis_id = NULL,
-      iteration_number = excluded.iteration_number,
-      base_version_id = excluded.base_version_id,
-      selection_reason = excluded.selection_reason,
-      updated_at = excluded.updated_at
-  `).run(
-    study().id,
-    app.id,
-    code,
-    summary,
-    prompt,
-    iterationNumber,
-    baseVersionId,
-    selectionReason.trim(),
-    now(),
-  );
-  recordEvent(viewer.code, 'upload_external_community_draft', 'app', app.id, {
-    iterationNumber,
-    baseVersionId,
-    selectionReason: selectionReason.trim(),
-  });
-  return getCommunityGalleryState(clientId);
-}
-
 function publishCommunityVersionForApp(actorCode: string, app: any, automated = false) {
   requireOpenStudy();
   const completedIterations = communityIterationCount(app.id);
@@ -3067,7 +3019,7 @@ function publishCommunityVersionForApp(actorCode: string, app: any, automated = 
     SELECT * FROM vg_async_drafts
     WHERE study_id = ? AND app_id = ? AND kind = 'community'
   `).get(study().id, app.id) as any;
-  if (!draft?.code) throw new Error('请先生成或上传社区版本草稿。');
+  if (!draft?.code) throw new Error('请先生成社区版本草稿。');
   const iterationNumber = completedIterations + 1;
   if (Number(draft.iteration_number || iterationNumber) !== iterationNumber) {
     throw new Error('当前草稿不属于下一次社区开发，请重新选择方向。');
@@ -3209,24 +3161,24 @@ function ensureAssignments() {
     });
   };
 
-  for (const condition of ['control', 'experimental'] as CommunityCondition[]) {
+  for (const isTest of [0, 1]) {
     const existing = db.prepare(`
       SELECT COUNT(*) AS count FROM vg_async_assignments a
       JOIN vg_async_participants p
         ON p.study_id = a.study_id AND p.code = a.participant_code
-      WHERE a.study_id = ? AND p.role = 'creator' AND p.condition_name = ?
-    `).get(currentStudy.id, condition) as { count: number };
+      WHERE a.study_id = ? AND p.role = 'creator' AND p.is_test = ?
+    `).get(currentStudy.id, isTest) as { count: number };
     if (Number(existing.count) > 0) continue;
     const participants = db.prepare(`
       SELECT * FROM vg_async_participants
-      WHERE study_id = ? AND role = 'creator' AND condition_name = ?
+      WHERE study_id = ? AND role = 'creator' AND is_test = ?
       ORDER BY code
-    `).all(currentStudy.id, condition) as any[];
+    `).all(currentStudy.id, isTest) as any[];
     const apps = db.prepare(`
       SELECT * FROM vg_async_apps
-      WHERE study_id = ? AND condition_name = ? AND status = 'published'
+      WHERE study_id = ? AND is_test = ? AND status = 'published'
       ORDER BY creator_code
-    `).all(currentStudy.id, condition) as any[];
+    `).all(currentStudy.id, isTest) as any[];
     if (!participants.length || apps.length !== participants.length) continue;
     assignBalanced(participants, apps);
   }
@@ -3242,179 +3194,166 @@ function collectCommunityStudyData(studyId: string, includeResetSnapshots = fals
   ]));
 }
 
-function communityTestResetPreview(studyId: string) {
-  const currentStudy = db.prepare(`SELECT status FROM vg_async_studies WHERE id = ?`)
-    .get(studyId) as { status?: CommunityStatus } | undefined;
+function communityTestDataPreview(studyId: string) {
   const count = (query: string, ...params: unknown[]) => Number((
     db.prepare(query).get(...params) as { count?: number } | undefined
   )?.count || 0);
-  const initialAppCount = count(`SELECT COUNT(*) AS count FROM vg_async_apps WHERE study_id = ?`, studyId);
-  const initialVersionCount = count(`
-    SELECT COUNT(*) AS count FROM vg_async_versions WHERE study_id = ? AND kind = 'initial'
+  const testCreatorCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_participants
+    WHERE study_id = ? AND role = 'creator' AND is_test = 1
   `, studyId);
-  const communityVersionCount = count(`
-    SELECT COUNT(*) AS count FROM vg_async_versions WHERE study_id = ? AND kind <> 'initial'
+  const testSessionCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_sessions s
+    JOIN vg_async_participants p ON p.study_id = s.study_id AND p.code = s.participant_code
+    WHERE s.study_id = ? AND p.is_test = 1
   `, studyId);
-  const commentCount = count(`SELECT COUNT(*) AS count FROM vg_async_comments WHERE study_id = ?`, studyId);
-  const synthesisCount = count(`SELECT COUNT(*) AS count FROM vg_async_syntheses WHERE study_id = ?`, studyId);
+  const testAppCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_apps WHERE study_id = ? AND is_test = 1
+  `, studyId);
+  const versionCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_versions v
+    JOIN vg_async_apps a ON a.id = v.app_id
+    WHERE v.study_id = ? AND a.is_test = 1
+  `, studyId);
+  const commentCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_comments c
+    JOIN vg_async_apps a ON a.id = c.app_id
+    WHERE c.study_id = ? AND a.is_test = 1
+  `, studyId);
+  const synthesisCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_syntheses s
+    JOIN vg_async_apps a ON a.id = s.target_app_id
+    WHERE s.study_id = ? AND a.is_test = 1
+  `, studyId);
   const likeCount = count(`
     SELECT
-      (SELECT COUNT(*) FROM vg_async_comment_likes WHERE study_id = ?) +
-      (SELECT COUNT(*) FROM vg_async_app_likes WHERE study_id = ?) +
-      (SELECT COUNT(*) FROM vg_async_synthesis_likes WHERE study_id = ?) AS count
+      (SELECT COUNT(*) FROM vg_async_comment_likes l
+        JOIN vg_async_comments c ON c.id = l.comment_id JOIN vg_async_apps a ON a.id = c.app_id
+        WHERE l.study_id = ? AND a.is_test = 1) +
+      (SELECT COUNT(*) FROM vg_async_app_likes l JOIN vg_async_apps a ON a.id = l.app_id
+        WHERE l.study_id = ? AND a.is_test = 1) +
+      (SELECT COUNT(*) FROM vg_async_synthesis_likes l
+        JOIN vg_async_syntheses s ON s.id = l.synthesis_id JOIN vg_async_apps a ON a.id = s.target_app_id
+        WHERE l.study_id = ? AND a.is_test = 1) AS count
   `, studyId, studyId, studyId);
-  const wildcardCount = count(`SELECT COUNT(*) AS count FROM vg_async_wildcards WHERE study_id = ?`, studyId);
-  const developmentJobCount = count(`
-    SELECT COUNT(*) AS count FROM vg_async_generation_jobs WHERE study_id = ?
+  const basketItemCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_basket_items b
+    JOIN vg_async_participants p ON p.study_id = b.study_id AND p.code = b.participant_code
+    WHERE b.study_id = ? AND p.is_test = 1
   `, studyId);
-  const behaviorEventCount = count(`SELECT COUNT(*) AS count FROM vg_async_events WHERE study_id = ?`, studyId);
+  const generationJobCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_generation_jobs j
+    JOIN vg_async_apps a ON a.id = j.app_id
+    WHERE j.study_id = ? AND a.is_test = 1
+  `, studyId);
+  const behaviorEventCount = count(`
+    SELECT COUNT(*) AS count FROM vg_async_events e
+    JOIN vg_async_participants p ON p.study_id = e.study_id AND p.code = e.participant_code
+    WHERE e.study_id = ? AND p.is_test = 1
+  `, studyId);
   const runningTaskCount = count(`
     SELECT
-      (SELECT COUNT(*) FROM vg_async_generation_jobs WHERE study_id = ? AND status = 'running') +
-      (SELECT COUNT(*) FROM vg_async_creator_operations
-        WHERE study_id = ? AND status = 'running') AS count
+      (SELECT COUNT(*) FROM vg_async_generation_jobs j JOIN vg_async_apps a ON a.id = j.app_id
+        WHERE j.study_id = ? AND j.status = 'running' AND a.is_test = 1) +
+      (SELECT COUNT(*) FROM vg_async_creator_operations o
+        JOIN vg_async_participants p ON p.study_id = o.study_id AND p.code = o.creator_code
+        WHERE o.study_id = ? AND o.status = 'running' AND p.is_test = 1) AS count
   `, studyId, studyId);
-  const snapshotSummary = db.prepare(`
-    SELECT COUNT(*) AS count, MAX(created_at) AS last_reset_at
-    FROM vg_async_reset_snapshots WHERE study_id = ?
-  `).get(studyId) as { count?: number; last_reset_at?: string } | undefined;
-  const resettableRecordCount = communityVersionCount
-    + commentCount
-    + synthesisCount
-    + likeCount
-    + wildcardCount
-    + developmentJobCount;
   return {
-    initialAppCount,
-    initialVersionCount,
-    communityVersionCount,
+    testCreatorCount,
+    testSessionCount,
+    testAppCount,
+    versionCount,
     commentCount,
     synthesisCount,
     likeCount,
-    wildcardCount,
-    developmentJobCount,
+    basketItemCount,
+    generationJobCount,
     behaviorEventCount,
     runningTaskCount,
-    snapshotCount: Number(snapshotSummary?.count || 0),
-    lastResetAt: snapshotSummary?.last_reset_at || undefined,
-    hasResettableData: currentStudy?.status === 'active' || resettableRecordCount > 0,
+    hasTestData: testSessionCount + testAppCount + behaviorEventCount > 0,
   };
 }
 
-export function resetCommunityTestData(clientId: string, confirmation: string) {
+export function clearCommunityTestData(clientId: string, confirmation: string) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = study();
-  if (currentStudy.status === 'closed') throw new Error('已结束的研究不能清理测试数据。');
+  if (currentStudy.status === 'closed') throw new Error('已结束的研究不能清除测试角色数据。');
   if (confirmation.trim() !== TEST_RESET_CONFIRMATION) {
     throw new Error(`请输入“${TEST_RESET_CONFIRMATION}”确认操作。`);
   }
-  const preview = communityTestResetPreview(currentStudy.id);
+  const preview = communityTestDataPreview(currentStudy.id);
   if (preview.runningTaskCount > 0) {
-    throw new Error('仍有 AI 开发任务正在运行，请等待全部完成或失败后再清理。');
+    throw new Error('测试角色仍有 AI 开发任务正在运行，请等待任务完成或失败后再清除。');
   }
-  if (!preview.hasResettableData) throw new Error('当前没有需要清理的测试互动数据。');
+  if (!preview.hasTestData) throw new Error('当前没有需要清除的测试角色数据。');
 
   const timestamp = now();
-  const snapshotPayload = JSON.stringify({
-    snapshot_version: 1,
-    captured_at: timestamp,
-    study: currentStudy,
-    ...collectCommunityStudyData(currentStudy.id),
-  });
-  let snapshotId = 0;
   const transaction = db.transaction(() => {
-    const snapshot = db.prepare(`
-      INSERT INTO vg_async_reset_snapshots
-        (study_id, host_code, counts_json, snapshot_json, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(
-      currentStudy.id,
-      viewer.code,
-      JSON.stringify(preview),
-      snapshotPayload,
-      timestamp,
-    );
-    snapshotId = Number(snapshot.lastInsertRowid);
-
-    // Keep setup/initial-creation provenance in the active study. Everything
-    // else is already recoverable from the snapshot created above.
     db.prepare(`
       DELETE FROM vg_async_events
       WHERE study_id = ?
-        AND NOT (
-          event_type IN (
-            'join_study', 'configure_study_conditions', 'update_study_conditions',
-            'save_initial_draft', 'publish_initial_version', 'create_async_study',
-            'reset_test_data_preserve_initial_apps'
-          )
-          OR (
-            event_type IN (
-              'start_creator_development', 'complete_creator_development',
-              'fail_creator_development'
-            )
-            AND entity_id IN (
-              SELECT id FROM vg_async_creator_operations
-              WHERE study_id = ? AND phase = 'initial'
-            )
-          )
-          OR (
-            event_type = 'refine_draft'
-            AND COALESCE(json_extract(data_json, '$.kind'), '') = 'initial'
-          )
+        AND (
+          participant_code IN (SELECT code FROM vg_async_participants WHERE study_id = ? AND is_test = 1)
+          OR (entity_type = 'app' AND entity_id IN (SELECT id FROM vg_async_apps WHERE study_id = ? AND is_test = 1))
+          OR (entity_type = 'comment' AND entity_id IN (
+            SELECT CAST(c.id AS TEXT) FROM vg_async_comments c JOIN vg_async_apps a ON a.id = c.app_id
+            WHERE c.study_id = ? AND a.is_test = 1
+          ))
+          OR (entity_type = 'synthesis' AND entity_id IN (
+            SELECT CAST(s.id AS TEXT) FROM vg_async_syntheses s JOIN vg_async_apps a ON a.id = s.target_app_id
+            WHERE s.study_id = ? AND a.is_test = 1
+          ))
+          OR (entity_type = 'generation_job' AND entity_id IN (
+            SELECT CAST(j.id AS TEXT) FROM vg_async_generation_jobs j JOIN vg_async_apps a ON a.id = j.app_id
+            WHERE j.study_id = ? AND a.is_test = 1
+          ))
         )
-    `).run(currentStudy.id, currentStudy.id);
+    `).run(currentStudy.id, currentStudy.id, currentStudy.id, currentStudy.id, currentStudy.id, currentStudy.id);
 
-    db.prepare(`DELETE FROM vg_async_comment_likes WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_app_likes WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_synthesis_likes WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_basket_items WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_synthesis_sources WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_synthesis_votes WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_stage_selections WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_generation_events WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_generation_jobs WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_notifications WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_assignments WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_wildcards WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_contributors WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_comments WHERE study_id = ?`).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_syntheses WHERE study_id = ?`).run(currentStudy.id);
-
+    db.prepare(`DELETE FROM vg_async_sessions WHERE study_id = ? AND participant_code IN
+      (SELECT code FROM vg_async_participants WHERE study_id = ? AND is_test = 1)`)
+      .run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_creator_progress WHERE study_id = ? AND operation_id IN
+      (SELECT o.id FROM vg_async_creator_operations o JOIN vg_async_participants p
+       ON p.study_id = o.study_id AND p.code = o.creator_code WHERE o.study_id = ? AND p.is_test = 1)`)
+      .run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_generation_events WHERE study_id = ? AND job_id IN
+      (SELECT j.id FROM vg_async_generation_jobs j JOIN vg_async_apps a ON a.id = j.app_id
+       WHERE j.study_id = ? AND a.is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_comment_likes WHERE study_id = ? AND comment_id IN
+      (SELECT c.id FROM vg_async_comments c JOIN vg_async_apps a ON a.id = c.app_id
+       WHERE c.study_id = ? AND a.is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_app_likes WHERE study_id = ? AND app_id IN
+      (SELECT id FROM vg_async_apps WHERE study_id = ? AND is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_synthesis_likes WHERE study_id = ? AND synthesis_id IN
+      (SELECT s.id FROM vg_async_syntheses s JOIN vg_async_apps a ON a.id = s.target_app_id
+       WHERE s.study_id = ? AND a.is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_synthesis_votes WHERE study_id = ? AND target_app_id IN
+      (SELECT id FROM vg_async_apps WHERE study_id = ? AND is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_basket_items WHERE study_id = ? AND participant_code IN
+      (SELECT code FROM vg_async_participants WHERE study_id = ? AND is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_synthesis_sources WHERE study_id = ? AND synthesis_id IN
+      (SELECT s.id FROM vg_async_syntheses s JOIN vg_async_apps a ON a.id = s.target_app_id
+       WHERE s.study_id = ? AND a.is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    for (const table of ['vg_async_stage_selections', 'vg_async_generation_jobs', 'vg_async_notifications',
+      'vg_async_assignments', 'vg_async_wildcards', 'vg_async_contributors'] as const) {
+      db.prepare(`DELETE FROM ${table} WHERE study_id = ? AND app_id IN
+        (SELECT id FROM vg_async_apps WHERE study_id = ? AND is_test = 1)`)
+        .run(currentStudy.id, currentStudy.id);
+    }
     db.prepare(`
-      DELETE FROM vg_async_creator_progress
-      WHERE study_id = ? AND operation_id IN (
-        SELECT id FROM vg_async_creator_operations
-        WHERE study_id = ? AND phase <> 'initial'
-      )
+      DELETE FROM vg_async_creator_operations WHERE study_id = ? AND creator_code IN
+        (SELECT code FROM vg_async_participants WHERE study_id = ? AND is_test = 1)
     `).run(currentStudy.id, currentStudy.id);
-    db.prepare(`
-      DELETE FROM vg_async_creator_operations WHERE study_id = ? AND phase <> 'initial'
-    `).run(currentStudy.id);
-    db.prepare(`
-      DELETE FROM vg_async_creator_revisions
-      WHERE study_id = ? AND version_id NOT IN (
-        SELECT id FROM vg_async_versions WHERE study_id = ? AND kind = 'initial'
-      )
-    `).run(currentStudy.id, currentStudy.id);
-    db.prepare(`
-      DELETE FROM vg_async_development_messages WHERE study_id = ? AND phase <> 'initial'
-    `).run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_drafts WHERE study_id = ? AND kind <> 'initial'`)
-      .run(currentStudy.id);
-    db.prepare(`DELETE FROM vg_async_versions WHERE study_id = ? AND kind <> 'initial'`)
-      .run(currentStudy.id);
-
-    db.prepare(`
-      UPDATE vg_async_apps
-      SET status = CASE WHEN initial_version_id IS NULL THEN 'draft' ELSE 'published' END,
-        community_version_id = NULL,
-        selected_synthesis_id = NULL,
-        selected_source_type = NULL,
-        selected_source_id = NULL,
-        community_published_at = NULL,
-        updated_at = ?
-      WHERE study_id = ?
-    `).run(timestamp, currentStudy.id);
+    for (const table of ['vg_async_creator_revisions', 'vg_async_development_messages',
+      'vg_async_drafts', 'vg_async_versions', 'vg_async_comments', 'vg_async_syntheses'] as const) {
+      const appColumn = table === 'vg_async_syntheses' ? 'target_app_id' : 'app_id';
+      db.prepare(`DELETE FROM ${table} WHERE study_id = ? AND ${appColumn} IN
+        (SELECT id FROM vg_async_apps WHERE study_id = ? AND is_test = 1)`)
+        .run(currentStudy.id, currentStudy.id);
+    }
+    db.prepare(`DELETE FROM vg_async_apps WHERE study_id = ? AND is_test = 1`).run(currentStudy.id);
     db.prepare(`
       UPDATE vg_async_studies
       SET status = 'setup', workflow_stage = 'synthesis_1', started_at = NULL,
@@ -3423,10 +3362,7 @@ export function resetCommunityTestData(clientId: string, confirmation: string) {
     `).run(timestamp, currentStudy.id);
   });
   transaction();
-  recordEvent(viewer.code, 'reset_test_data_preserve_initial_apps', 'reset_snapshot', snapshotId, {
-    snapshotId,
-    ...preview,
-  });
+  recordEvent(viewer.code, 'clear_test_creator_data', 'study', currentStudy.id, preview);
   return getCommunityGalleryState(clientId);
 }
 
@@ -3434,23 +3370,15 @@ export function startAsyncCommunityStudy(clientId: string) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = study();
   if (currentStudy.status !== 'setup') throw new Error('正式研究已经开始或结束。');
-  if (!conditionsConfigured(currentStudy.id)) {
-    throw new Error('请先由主持人选择并保存对照组成员。');
+  if (!testRolesConfigured(currentStudy.id)) {
+    throw new Error('请先由主持人选择并保存测试角色。');
   }
-  const conditionCounts = db.prepare(`
-    SELECT condition_name, COUNT(*) AS count
-    FROM vg_async_participants
+  const creatorCount = db.prepare(`
+    SELECT COUNT(*) AS count FROM vg_async_participants
     WHERE study_id = ? AND role = 'creator'
-    GROUP BY condition_name
-  `).all(currentStudy.id) as Array<{
-    condition_name: CommunityCondition;
-    count: number;
-  }>;
-  const countFor = (condition: CommunityCondition) => Number(
-    conditionCounts.find((row) => row.condition_name === condition)?.count || 0,
-  );
-  if (countFor('control') + countFor('experimental') !== CREATOR_COUNT) {
-    throw new Error('实验分组人数不完整，请重新保存对照组设置。');
+  `).get(currentStudy.id) as { count: number };
+  if (Number(creatorCount.count) !== CREATOR_COUNT) {
+    throw new Error('创作者账号数量不完整，请新建研究后重试。');
   }
   const published = db.prepare(`
     SELECT COUNT(*) AS count
@@ -3550,7 +3478,6 @@ export function getCommunityGalleryState(clientId = '') {
   const currentStudy = study();
   if (currentStudy.status === 'active') ensureAssignments();
   const viewer = getCommunityViewer(clientId);
-  const visibleCondition = null;
   const apps = viewer
     ? db.prepare(`
         SELECT a.*,
@@ -3574,14 +3501,14 @@ export function getCommunityGalleryState(clientId = '') {
         FROM vg_async_apps a
         LEFT JOIN vg_async_drafts d ON d.study_id = a.study_id AND d.app_id = a.id
         WHERE a.study_id = ?
-          AND (? IS NULL OR a.condition_name = ?)
+          AND (? = 'host' OR a.is_test = ?)
           AND (a.status = 'published' OR a.creator_code = ? OR ? = 'host')
-        ORDER BY a.condition_name, a.published_at, a.creator_code
+        ORDER BY a.is_test, a.published_at, a.creator_code
       `).all(
         viewer.code,
         currentStudy.id,
-        visibleCondition,
-        visibleCondition,
+        viewer.role,
+        Number(viewer.isTest),
         viewer.code,
         viewer.role,
       ) as any[]
@@ -3693,12 +3620,12 @@ export function getCommunityGalleryState(clientId = '') {
   const stageSelections: any[] = [];
   // Wildcard choices are part of the public creative provenance: everyone who
   // can view the study should see which idea the app creator guaranteed.
-  const wildcards = viewer
+  const wildcards = viewer && appIds.length
     ? db.prepare(`
         SELECT * FROM vg_async_wildcards
-        WHERE study_id = ?
+        WHERE study_id = ? AND app_id IN (${placeholders})
         ORDER BY created_at
-      `).all(currentStudy.id) as any[]
+      `).all(currentStudy.id, ...appIds) as any[]
     : [];
   const contributors = appIds.length
     ? db.prepare(`
@@ -3773,7 +3700,7 @@ export function getCommunityGalleryState(clientId = '') {
         ORDER BY added_at
       `).all(currentStudy.id, viewer.code) as any[])
         .map((item) => ({ ...item, ...sourceRecord(item.source_type, Number(item.source_id)) }))
-        .filter((item) => item.content)
+        .filter((item) => item.content && appIds.includes(item.app_id))
     : [];
 
   const assignments = viewer
@@ -3782,8 +3709,9 @@ export function getCommunityGalleryState(clientId = '') {
         FROM vg_async_assignments a
         JOIN vg_async_apps app ON app.id = a.app_id
         WHERE a.study_id = ? AND (? = 'host' OR a.participant_code = ?)
+          AND (? = 'host' OR app.is_test = ?)
         ORDER BY a.participant_code, a.position
-      `).all(currentStudy.id, viewer.role, viewer.code) as any[]
+      `).all(currentStudy.id, viewer.role, viewer.code, viewer.role, Number(viewer.isTest)) as any[]
     : [];
 
   const generationJobs = appIds.length
@@ -3820,8 +3748,9 @@ export function getCommunityGalleryState(clientId = '') {
         FROM vg_async_notifications n
         JOIN vg_async_apps a ON a.id = n.app_id
         WHERE n.study_id = ? AND n.participant_code = ?
+          AND a.is_test = ?
         ORDER BY n.created_at DESC, n.id DESC
-      `).all(currentStudy.id, viewer.code) as any[]
+      `).all(currentStudy.id, viewer.code, Number(viewer.isTest)) as any[]
     : [];
 
   const participantRows = viewer?.role === 'host'
@@ -3835,7 +3764,7 @@ export function getCommunityGalleryState(clientId = '') {
       `).all(currentStudy.id)
     : !viewer
       ? db.prepare(`
-          SELECT code, role, condition_name, 0 AS joined
+          SELECT code, role, is_test, 0 AS joined
           FROM vg_async_participants
           WHERE study_id = ?
           ORDER BY code
@@ -3843,17 +3772,17 @@ export function getCommunityGalleryState(clientId = '') {
     : [];
 
   const publishedCounts = db.prepare(`
-    SELECT condition_name, COUNT(*) AS count
+    SELECT is_test, COUNT(*) AS count
     FROM vg_async_apps
     WHERE study_id = ? AND status = 'published'
-    GROUP BY condition_name
+    GROUP BY is_test
   `).all(currentStudy.id) as any[];
 
   return {
     study: {
       ...currentStudy,
-      conditions_configured: currentStudy.status !== 'setup'
-        || conditionsConfigured(currentStudy.id),
+      test_roles_configured: currentStudy.status !== 'setup'
+        || testRolesConfigured(currentStudy.id),
     },
     viewer,
     apps,
@@ -3874,10 +3803,10 @@ export function getCommunityGalleryState(clientId = '') {
     aiProvider: getAIProvider(),
     counts: {
       creators: CREATOR_COUNT,
-      controlApps: Number(publishedCounts.find((row) => row.condition_name === 'control')?.count || 0),
-      experimentalApps: Number(publishedCounts.find((row) => row.condition_name === 'experimental')?.count || 0),
+      regularApps: Number(publishedCounts.find((row) => Number(row.is_test) === 0)?.count || 0),
+      testApps: Number(publishedCounts.find((row) => Number(row.is_test) === 1)?.count || 0),
     },
-    testReset: communityTestResetPreview(currentStudy.id),
+    testData: communityTestDataPreview(currentStudy.id),
     serverNow: now(),
   };
 }

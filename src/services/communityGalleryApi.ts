@@ -22,10 +22,10 @@ const body = (value: Record<string, unknown>) => JSON.stringify(value);
 export const communityGalleryApi = {
   state: (clientId: string) =>
     request(`/api/community-gallery/state?clientId=${encodeURIComponent(clientId)}`),
-  join: (clientId: string, code: string) =>
+  join: (clientId: string, account: string, password: string) =>
     request('/api/community-gallery/join', {
       method: 'POST',
-      body: body({ clientId, code }),
+      body: body({ clientId, account, password }),
     }),
   model: (clientId: string, provider: CommunityGalleryState['aiProvider']) =>
     request('/api/community-gallery/model', {
@@ -150,20 +150,6 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, commentId }),
     }),
-  uploadCommunity: (
-    clientId: string,
-    appId: string,
-    values: {
-      code: string;
-      summary: string;
-      prompt: string;
-      baseVersionId?: number;
-      selectionReason?: string;
-    },
-  ) => request(`/api/community-gallery/apps/${appId}/upload-community`, {
-    method: 'POST',
-    body: body({ clientId, ...values }),
-  }),
   publishCommunity: (clientId: string, appId: string) =>
     request(`/api/community-gallery/apps/${appId}/publish-community`, {
       method: 'POST',
@@ -189,20 +175,20 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, iterationNumber }),
     }),
-  setConditions: (
+  setTestCreators: (
     clientId: string,
-    controlCreatorCodes: string[],
-  ) => request('/api/community-gallery/study/conditions', {
+    testCreatorCodes: string[],
+  ) => request('/api/community-gallery/study/test-creators', {
     method: 'POST',
-    body: body({ clientId, controlCreatorCodes }),
+    body: body({ clientId, testCreatorCodes }),
   }),
   retryDevelopment: (clientId: string, jobId: number) =>
     request(`/api/community-gallery/jobs/${jobId}/retry`, {
       method: 'POST',
       body: body({ clientId }),
     }),
-  resetTestData: (clientId: string, confirmation: string) =>
-    request('/api/community-gallery/study/reset-test-data', {
+  clearTestData: (clientId: string, confirmation: string) =>
+    request('/api/community-gallery/study/clear-test-data', {
       method: 'POST',
       body: body({ clientId, confirmation }),
     }),
