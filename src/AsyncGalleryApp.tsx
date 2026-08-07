@@ -612,13 +612,42 @@ function InitialCreatorStudio({
     ? 100
     : Math.round((completedProgressCount / progressSteps.length) * 100);
 
+  const restoreHtmlBackup = async (file: File) => {
+    if (file.size > 8 * 1024 * 1024) {
+      throw new Error('HTML 文件不能超过 8MB。');
+    }
+    const code = await file.text();
+    if (!/<html\b|<!doctype\s+html/i.test(code)) {
+      throw new Error('请选择完整的 HTML 项目文件。');
+    }
+    const documentTitle = new DOMParser().parseFromString(code, 'text/html')
+      .querySelector('title, h1')?.textContent?.trim();
+    const filenameTitle = file.name
+      .replace(/\.html?$/i, '')
+      .replace(/^C\d{2}-/i, '')
+      .replace(/-V\d+$/i, '')
+      .trim();
+    const restoredTitle = (title.trim() || documentTitle || filenameTitle || '恢复的应用').slice(0, 100);
+    const restoredBrief = brief.trim() || '从本地 HTML 备份恢复的项目。';
+    const restoredPrompt = prompt.trim() || `从本地备份 ${file.name} 恢复。`;
+    setTitle(restoredTitle);
+    setBrief(restoredBrief);
+    setPrompt(restoredPrompt);
+    await action('upload-initial', () => communityGalleryApi.uploadInitial(clientId, {
+      title: restoredTitle,
+      brief: restoredBrief,
+      prompt: restoredPrompt,
+      code,
+    }));
+  };
+
   return (
     <section className="async-studio">
       <header>
         <div>
           <span className="async-eyebrow">创作 · 初始版本</span>
           <h2>先完成你的独立作品</h2>
-          <p>先让 AI 生成可运行草稿，再通过多轮对话继续修改。只有你确认满意并主动发布后，作品才会出现在首页。</p>
+          <p>可以让 AI 生成新草稿，也可以上传之前保存的 HTML 恢复项目。只有你确认满意并主动发布后，作品才会出现在首页。</p>
         </div>
         <span className="async-step-chip">第 1 / 4 步 · 创作</span>
       </header>
@@ -691,6 +720,25 @@ function InitialCreatorStudio({
                     ),
                   )}
                 ><Sparkles /> {busy === 'generate-initial' ? 'AI 正在开发…' : 'AI 生成应用草稿'}</button>
+                <label className={`async-upload-button${busy ? ' is-disabled' : ''}`}>
+                  <Upload /> {busy === 'upload-initial' ? '正在恢复…' : '从本地恢复项目'}
+                  <input
+                    type="file"
+                    accept=".html,.htm,text/html"
+                    disabled={Boolean(busy)}
+                    aria-label="上传之前保存的 HTML 并还原项目"
+                    onChange={(event) => {
+                      const input = event.currentTarget;
+                      const file = input.files?.[0];
+                      if (!file) return;
+                      void restoreHtmlBackup(file)
+                        .catch((error) => window.alert(
+                          error instanceof Error ? error.message : String(error),
+                        ))
+                        .finally(() => { input.value = ''; });
+                    }}
+                  />
+                </label>
               </div>
             </>
           ) : (
