@@ -593,7 +593,6 @@ function InitialCreatorStudio({
     );
   }
 
-  const isDeveloping = busy === 'generate-initial' || busy === 'refine-initial';
   const progressSteps = [
     ['plan', '理解需求'],
     ['structure', '搭建页面'],
@@ -605,8 +604,15 @@ function InitialCreatorStudio({
   ] as const;
   const currentProgressEvent = developmentProgress?.events.find((event) => event.status === 'running')
     || developmentProgress?.events[developmentProgress.events.length - 1];
+  const isWaitingForKey = developmentProgress?.status === 'running'
+    && currentProgressEvent?.step_key === 'queue'
+    && currentProgressEvent.status === 'pending';
+  const isDeveloping = busy === 'generate-initial'
+    || busy === 'refine-initial'
+    || developmentProgress?.status === 'running';
   const completedProgressCount = developmentProgress?.events.filter(
-    (event) => event.status === 'completed',
+    (event) => event.status === 'completed'
+      && progressSteps.some(([stepKey]) => stepKey === event.step_key),
   ).length || 0;
   const progressPercent = developmentProgress?.status === 'completed'
     ? 100
@@ -697,7 +703,12 @@ function InitialCreatorStudio({
             })}
           </ol>
           {isDeveloping && (
-            <footer><strong>系统正在开发中</strong><span>请不要刷新页面或关闭窗口，完成后预览会自动更新。</span></footer>
+            <footer>
+              <strong>{isWaitingForKey ? '任务正在排队中' : '系统正在开发中'}</strong>
+              <span>{isWaitingForKey
+                ? '有可用 AI 通道后会自动开始，请不要重复点击。'
+                : '请不要刷新页面或关闭窗口，完成后预览会自动更新。'}</span>
+            </footer>
           )}
         </section>
       )}
@@ -3294,6 +3305,7 @@ function CommunityDraftPanel({
   const events = latestJob
     ? state.generationEvents.filter((event) => Number(event.job_id) === Number(latestJob.id))
     : [];
+  const queuedEvent = events.find((event) => event.step_key === 'queue' && event.status === 'pending');
   const iterationNumber = Number(app.community_version_count || 0) + 1;
   const hasCommunityDraft = app.draft_kind === 'community'
     && Number(app.draft_iteration_number || 0) > Number(app.community_version_count || 0)
@@ -3316,9 +3328,19 @@ function CommunityDraftPanel({
       {latestJob?.status === 'running' && (
         <div className="async-generation-progress">
           <LoaderCircle className="spin" />
-          <div><strong>AI 正在把抽中的评论实现为新版本</strong><span>页面会自动刷新开发步骤</span></div>
+          <div>
+            <strong>{queuedEvent ? queuedEvent.title : 'AI 正在把抽中的评论实现为新版本'}</strong>
+            <span>{queuedEvent?.detail || '页面会自动刷新开发步骤'}</span>
+          </div>
           <ol>
-            {events.map((event) => <li key={event.id} className={`is-${event.status}`}><Check /> {event.title}</li>)}
+            {events.map((event) => (
+              <li key={event.id} className={`is-${event.status}`}>
+                {event.status === 'pending' || event.status === 'running'
+                  ? <LoaderCircle className="spin" />
+                  : <Check />}
+                {event.title}
+              </li>
+            ))}
           </ol>
         </div>
       )}
@@ -3761,9 +3783,10 @@ function HostPanel({
             .filter((event) => Number(event.job_id) === Number(job.id))
             .at(-1)
         : undefined;
+      const queued = latestEvent?.step_key === 'queue' && latestEvent.status === 'pending';
       return {
-        key: 'running',
-        label: '开发中',
+        key: queued ? 'queued' : 'running',
+        label: queued ? '排队中' : '开发中',
         detail: latestEvent?.title || 'AI 正在生成新版本',
         time: latestEvent?.updated_at || job?.created_at,
         jobId: job?.id,
@@ -3784,6 +3807,7 @@ function HostPanel({
     developmentStatusFor(app, 2),
   ]);
   const activeDevelopmentCounts = {
+    queued: developmentStatuses.filter((status) => status.key === 'queued').length,
     running: developmentStatuses.filter((status) => status.key === 'running').length,
     completed: developmentStatuses.filter((status) => status.key === 'completed').length,
     failed: developmentStatuses.filter((status) => status.key === 'failed').length,
@@ -3992,6 +4016,7 @@ function HostPanel({
               <p>V0 发布后自动开放第一轮，V1 发布后自动开放第二轮，V2 发布后自动结束。Host 只需锁定当前轮次并启动开发。</p>
             </div>
             <div className="async-development-summary">
+              <span className="is-queued"><LoaderCircle /> 排队中 {activeDevelopmentCounts.queued}</span>
               <span className="is-running"><LoaderCircle /> 开发中 {activeDevelopmentCounts.running}</span>
               <span className="is-completed"><CheckCircle2 /> 成功 {activeDevelopmentCounts.completed}</span>
               <span className="is-failed"><X /> 失败 {activeDevelopmentCounts.failed}</span>

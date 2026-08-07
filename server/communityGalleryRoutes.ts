@@ -1,6 +1,10 @@
 import type { Express, Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
-import { runDevelopmentAgent } from './developmentAgent.js';
+import {
+  runDevelopmentAgent,
+  type DevelopmentAgentInput,
+  type DevelopmentAgentProgress,
+} from './developmentAgent.js';
 import {
   closeAsyncCommunityStudy,
   controlCommunityAppFlows,
@@ -52,6 +56,10 @@ import {
   type CommunitySourceType,
 } from './communityGalleryDb.js';
 import { buildCommunityWorkspaceArchive } from './communityGalleryArchive.js';
+import {
+  withSuiXiangKey,
+  type SuiXiangQueueSnapshot,
+} from './suixiangKeyPool.js';
 import { getAIProvider, setAIProvider, type StudyAIProvider } from './studyDb.js';
 
 function sendError(res: Response, error: unknown) {
@@ -63,12 +71,6 @@ function sendError(res: Response, error: unknown) {
 
 function clientIdFrom(req: Request) {
   return String(req.body?.clientId || req.query.clientId || '').trim();
-}
-
-function apiKeyForCreatorCode(creatorCode: unknown) {
-  if (String(creatorCode) === 'C02') return process.env.SUIXIANG_API_KEY_APP2;
-  if (String(creatorCode) === 'C03') return process.env.SUIXIANG_API_KEY_APP3;
-  return process.env.SUIXIANG_API_KEY;
 }
 
 function publicAgentMessage(result: Awaited<ReturnType<typeof runDevelopmentAgent>>) {
@@ -86,10 +88,44 @@ function initialCreatorProgress(progress: Parameters<typeof recordCreatorDevelop
   };
 }
 
+function queuedKeyProgress(snapshot: SuiXiangQueueSnapshot): DevelopmentAgentProgress {
+  return {
+    step: 'queue',
+    order: 0,
+    status: 'pending',
+    title: `正在排队等待可用 AI 通道 · 第 ${snapshot.position} 位`,
+    detail: `当前 ${snapshot.active} 个任务正在开发，共有 ${snapshot.capacity} 个可用通道。轮到你后会自动开始，无需重复点击。`,
+  };
+}
+
+function acquiredKeyProgress(snapshot: Omit<SuiXiangQueueSnapshot, 'position'>): DevelopmentAgentProgress {
+  return {
+    step: 'queue',
+    order: 0,
+    status: 'completed',
+    title: '已获得 AI 通道，正在开始开发',
+    detail: `当前 ${snapshot.active} / ${snapshot.capacity} 个通道正在使用。`,
+  };
+}
+
+async function runQueuedDevelopmentAgent(
+  input: DevelopmentAgentInput,
+  recordQueueProgress: (progress: DevelopmentAgentProgress) => void,
+) {
+  if (input.provider !== 'gpt5') return runDevelopmentAgent(input);
+  return withSuiXiangKey(
+    (apiKey) => runDevelopmentAgent({ ...input, apiKey }),
+    {
+      onQueued: (snapshot) => recordQueueProgress(queuedKeyProgress(snapshot)),
+      onAcquired: (snapshot) => recordQueueProgress(acquiredKeyProgress(snapshot)),
+    },
+  );
+}
+
 async function runCommunityGenerationJob(jobId: number) {
   const input = getCommunityGenerationInput(jobId);
   const provider = getAIProvider();
-  const result = await runDevelopmentAgent({
+  const result = await runQueuedDevelopmentAgent({
     provider,
     experimentTitle: input.job.app_title,
     roundNumber: Number(input.job.iteration_number || 1),
@@ -109,10 +145,9 @@ async function runCommunityGenerationJob(jobId: number) {
     ].filter(Boolean).join('\n\n'),
     currentCode: input.job.base_code,
     creatorMessage: input.job.creator_instruction || input.selection.content,
-    apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(input.job.creator_code) : undefined,
     onProgress: (progress) => recordCommunityGenerationProgress(jobId, progress),
     mode: 'round-candidate',
-  });
+  }, (progress) => recordCommunityGenerationProgress(jobId, progress));
   completeCommunityGeneration(jobId, result.code, result.text);
 }
 
@@ -211,19 +246,18 @@ export function registerCommunityGalleryRoutes(app: Express) {
       operationId = String(req.body?.operationId || randomUUID()).trim();
       startCreatorDevelopmentOperation(clientId, operationId, 'generate');
       const provider = getAIProvider();
-      const result = await runDevelopmentAgent({
+      const result = await runQueuedDevelopmentAgent({
         provider,
         experimentTitle: title,
         brief,
         creatorPrompt: prompt,
         creatorMessage: prompt,
-        apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(state.viewer.code) : undefined,
         mode: 'initial-project',
         onProgress: (progress) => recordCreatorDevelopmentProgress(
           operationId,
           initialCreatorProgress(progress),
         ),
-      });
+      }, (progress) => recordCreatorDevelopmentProgress(operationId, progress));
       const nextState = saveInitialDraft({
         clientId,
         title,
@@ -275,7 +309,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const operationPhase = context.messagePhase as 'initial' | 'community' | 'project';
       startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
       const provider = getAIProvider();
-      const result = await runDevelopmentAgent({
+      const result = await runQueuedDevelopmentAgent({
         provider,
         experimentTitle: context.app.title,
         brief: context.app.brief,
@@ -292,13 +326,12 @@ export function registerCommunityGalleryRoutes(app: Express) {
         recentConversation: context.messages
           .map((item: any) => `${item.role}: ${item.content}`)
           .join('\n'),
-        apiKey: provider === 'gpt5' ? apiKeyForCreatorCode(context.viewer.code) : undefined,
         mode: context.draft.kind === 'initial' ? 'initial-project' : 'round-candidate',
         onProgress: (progress) => recordCreatorDevelopmentProgress(
           operationId,
           initialCreatorProgress(progress),
         ),
-      });
+      }, (progress) => recordCreatorDevelopmentProgress(operationId, progress));
       const nextState = saveRefinedDraft(
         clientId,
         result.code,

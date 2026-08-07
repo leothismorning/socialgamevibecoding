@@ -1413,6 +1413,7 @@
 .async-development-summary { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .async-development-summary span { display: flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid #dfe5ee; border-radius: 999px; background: #fff; font-size: 8px; font-weight: 900; white-space: nowrap; }
 .async-development-summary svg { width: 12px; height: 12px; }
+.async-development-summary .is-queued { color: #5d4a9f; border-color: #d9cff3; background: #f7f4ff; }
 .async-development-summary .is-running { color: #8b641f; border-color: #efdfb9; background: #fff9e9; }
 .async-development-summary .is-completed { color: #19714d; border-color: #c9e7d7; background: #edf9f2; }
 .async-development-summary .is-failed { color: #a23f51; border-color: #efccd3; background: #fff2f4; }
