@@ -562,9 +562,10 @@ function InitialCreatorStudio({
   const [brief, setBrief] = useState('');
   const [prompt, setPrompt] = useState('');
   const [revision, setRevision] = useState('');
-  const [developmentProgress, setDevelopmentProgress] = useState<CreatorDevelopmentProgress | null>(null);
+  const [developmentProgress, setDevelopmentProgress] = useState<CreatorDevelopmentProgress | null>(
+    state.creatorDevelopment,
+  );
   const loaded = useRef('');
-  const progressTimer = useRef<number | null>(null);
 
   useEffect(() => {
     if (ownApp && loaded.current !== ownApp.id) {
@@ -575,9 +576,42 @@ function InitialCreatorStudio({
     }
   }, [ownApp]);
 
-  useEffect(() => () => {
-    if (progressTimer.current) window.clearInterval(progressTimer.current);
-  }, []);
+  useEffect(() => {
+    if (!state.creatorDevelopment) return;
+    setDevelopmentProgress((current) => (
+      current?.id === state.creatorDevelopment?.id && current.status === 'completed'
+        ? current
+        : state.creatorDevelopment
+    ));
+  }, [state.creatorDevelopment]);
+
+  useEffect(() => {
+    if (!developmentProgress || developmentProgress.status !== 'running') return;
+    const operationId = developmentProgress.id;
+    let disposed = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const next = await communityGalleryApi.developmentProgress(clientId, operationId);
+        if (disposed) return;
+        setDevelopmentProgress(next);
+        if (next.status !== 'running') {
+          if (timer) window.clearInterval(timer);
+          if (next.status === 'completed') {
+            void action('refresh-development', () => communityGalleryApi.state(clientId));
+          }
+        }
+      } catch {
+        // The first poll can arrive before the POST route has created the operation.
+      }
+    };
+    void poll();
+    timer = window.setInterval(() => void poll(), 1000);
+    return () => {
+      disposed = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [action, clientId, developmentProgress?.id, developmentProgress?.status]);
 
   const initialMessages = useMemo(
     () => state.developmentMessages.filter(
@@ -593,7 +627,6 @@ function InitialCreatorStudio({
     const operationId = typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `creator-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    let latestProgress: CreatorDevelopmentProgress | null = null;
     setDevelopmentProgress({
       id: operationId,
       study_id: state.study.id,
@@ -605,20 +638,17 @@ function InitialCreatorStudio({
       started_at: new Date().toISOString(),
       events: [],
     });
-    const poll = async () => {
-      try {
-        latestProgress = await communityGalleryApi.developmentProgress(clientId, operationId);
-        setDevelopmentProgress(latestProgress);
-      } catch {
-        // The first poll can arrive before the POST route has created the operation.
-      }
-    };
-    progressTimer.current = window.setInterval(() => void poll(), 650);
     await action(label, () => task(operationId));
-    await poll();
-    if (progressTimer.current) window.clearInterval(progressTimer.current);
-    progressTimer.current = null;
-    if (!latestProgress) setDevelopmentProgress(null);
+    try {
+      setDevelopmentProgress(await communityGalleryApi.developmentProgress(clientId, operationId));
+    } catch {
+      setDevelopmentProgress((current) => current?.id === operationId ? {
+        ...current,
+        status: 'failed',
+        error: '开发请求连接已经中断，本轮开发失败，请重试。',
+        completed_at: new Date().toISOString(),
+      } : current);
+    }
   };
 
   if (ownApp?.initial_version_id) {
@@ -711,12 +741,12 @@ function InitialCreatorStudio({
                 {developmentProgress.status === 'completed'
                   ? '本轮开发已经完成'
                   : developmentProgress.status === 'failed'
-                    ? '本轮开发未完成'
+                    ? '开发失败，请重试'
                     : currentProgressEvent?.title || '系统正在启动 AI 开发'}
               </strong>
               <p>
                 {developmentProgress.status === 'failed'
-                  ? developmentProgress.error || '请根据页面提示调整后重试。'
+                  ? developmentProgress.error || '本轮开发失败，请重试。'
                   : currentProgressEvent?.detail || '正在准备开发环境，请稍候。'}
               </p>
             </div>
@@ -733,9 +763,17 @@ function InitialCreatorStudio({
                     ? 'is-completed'
                     : event?.status === 'running'
                       ? 'is-running'
-                      : ''}
+                      : event?.status === 'failed'
+                        ? 'is-failed'
+                        : ''}
                 >
-                  <span>{event?.status === 'completed' ? <Check /> : event?.status === 'running' ? <LoaderCircle className="spin" /> : null}</span>
+                  <span>{event?.status === 'completed'
+                    ? <Check />
+                    : event?.status === 'running'
+                      ? <LoaderCircle className="spin" />
+                      : event?.status === 'failed'
+                        ? <X />
+                        : null}</span>
                   <small>{fallbackTitle}</small>
                 </li>
               );
@@ -749,19 +787,25 @@ function InitialCreatorStudio({
                 : '请不要刷新页面或关闭窗口，完成后预览会自动更新。'}</span>
             </footer>
           )}
+          {developmentProgress.status === 'failed' && (
+            <footer>
+              <strong>本轮开发已经停止</strong>
+              <span>本次失败不会保存不完整的作品，请点击下方按钮重新生成或重新修改。</span>
+            </footer>
+          )}
         </section>
       )}
       <div className="async-studio-layout">
         <div className="async-studio-controls">
           {!ownApp?.draft_code ? (
             <>
-              <label>应用名称<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-              <label>一句话简介<input value={brief} onChange={(event) => setBrief(event.target.value)} /></label>
-              <label>创作提示<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} /></label>
+              <label>应用名称<input value={title} disabled={isDeveloping} onChange={(event) => setTitle(event.target.value)} /></label>
+              <label>一句话简介<input value={brief} disabled={isDeveloping} onChange={(event) => setBrief(event.target.value)} /></label>
+              <label>创作提示<textarea value={prompt} disabled={isDeveloping} onChange={(event) => setPrompt(event.target.value)} rows={5} /></label>
               <div className="async-button-row">
                 <button
                   className="async-primary"
-                  disabled={!title.trim() || !prompt.trim() || Boolean(busy)}
+                  disabled={!title.trim() || !prompt.trim() || Boolean(busy) || isDeveloping}
                   onClick={() => void runDevelopment(
                     'generate-initial',
                     (operationId) => communityGalleryApi.generateInitial(
@@ -769,13 +813,17 @@ function InitialCreatorStudio({
                       { title, brief, prompt, operationId },
                     ),
                   )}
-                ><Sparkles /> {busy === 'generate-initial' ? 'AI 正在开发…' : 'AI 生成应用草稿'}</button>
-                <label className={`async-upload-button${busy ? ' is-disabled' : ''}`}>
+                ><Sparkles /> {isDeveloping
+                  ? 'AI 正在开发…'
+                  : developmentProgress?.status === 'failed'
+                    ? '重新生成应用草稿'
+                    : 'AI 生成应用草稿'}</button>
+                <label className={`async-upload-button${busy || isDeveloping ? ' is-disabled' : ''}`}>
                   <Upload /> {busy === 'upload-initial' ? '正在恢复…' : '从本地恢复项目'}
                   <input
                     type="file"
                     accept=".html,.htm,text/html"
-                    disabled={Boolean(busy)}
+                    disabled={Boolean(busy) || isDeveloping}
                     aria-label="上传之前保存的 HTML 并还原项目"
                     onChange={(event) => {
                       const input = event.currentTarget;
@@ -828,7 +876,7 @@ function InitialCreatorStudio({
                   />
                   <button
                     className="async-primary"
-                    disabled={!revision.trim() || Boolean(busy)}
+                    disabled={!revision.trim() || Boolean(busy) || isDeveloping}
                     onClick={() => {
                       const message = revision;
                       void runDevelopment('refine-initial', async (operationId) => {
@@ -837,7 +885,11 @@ function InitialCreatorStudio({
                         return next;
                       });
                     }}
-                  ><Send /> {busy === 'refine-initial' ? '正在修改…' : '发送并修改草稿'}</button>
+                  ><Send /> {isDeveloping
+                    ? '正在修改…'
+                    : developmentProgress?.status === 'failed'
+                      ? '重新修改草稿'
+                      : '发送并修改草稿'}</button>
                 </div>
               </section>
             </>
@@ -850,7 +902,7 @@ function InitialCreatorStudio({
             : <div className="async-empty-preview"><FileCode2 /><span>生成或上传后在这里试玩</span></div>}
           <button
             className="async-publish"
-            disabled={!ownApp?.draft_code || Boolean(busy)}
+            disabled={!ownApp?.draft_code || Boolean(busy) || isDeveloping}
             onClick={() => action('publish-initial', async () => {
               const next = await communityGalleryApi.publishInitial(clientId);
               const publishedApp = next.apps.find((candidate) => candidate.creator_code === next.viewer?.code);
@@ -3746,6 +3798,7 @@ function HostPanel({
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState('');
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([]);
+  const [downloadingVersionId, setDownloadingVersionId] = useState<number | null>(null);
 
   useEffect(() => {
     setTestCreators(serverTestCreators);
@@ -3899,6 +3952,25 @@ function HostPanel({
       `${archiveName}-${workspaceLabel}.zip`,
     );
     return communityGalleryApi.newWorkspaceStudy(clientId, isTest);
+  };
+  const downloadPublishedVersion = async (
+    app: CommunityApp,
+    version: CommunityGalleryState['versions'][number],
+  ) => {
+    setDownloadingVersionId(version.id);
+    try {
+      const displayVersion = Math.max(0, Number(version.version_number) - 1);
+      const filename = `${safeDownloadName(app.creator_code, 'creator')}`
+        + `-${safeDownloadName(app.title, 'app')}-V${displayVersion}.html`;
+      await downloadUrl(
+        communityGalleryApi.publishedVersionDownloadUrl(clientId, app.id, version.id),
+        filename,
+      );
+    } catch (error) {
+      window.alert(`作品代码下载失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDownloadingVersionId(null);
+    }
   };
   return (
     <>
@@ -4105,6 +4177,9 @@ function HostPanel({
             {publishedApps.map((app) => {
               const firstStatus = developmentStatusFor(app, 1);
               const secondStatus = developmentStatusFor(app, 2);
+              const publishedVersions = state.versions
+                .filter((version) => version.app_id === app.id)
+                .sort((left, right) => Number(left.version_number) - Number(right.version_number));
               return (
                 <article key={app.id} role="row" className={selectedAppIds.includes(app.id) ? 'is-selected' : ''}>
                   <div className="async-development-app" role="cell">
@@ -4126,6 +4201,24 @@ function HostPanel({
                     <div className="async-current-round-counts" aria-label="本轮互动数量">
                       <span><MessageCircle /> 普通评论 <strong>{app.current_round_comment_count}</strong></span>
                       <span><Lightbulb /> 综合评论 <strong>{app.current_round_synthesis_count}</strong></span>
+                    </div>
+                    <div className="async-published-code-downloads" aria-label="下载已发布作品代码">
+                      <span><Download /> 已发布代码</span>
+                      <div>
+                        {publishedVersions.map((version) => {
+                          const displayVersion = Math.max(0, Number(version.version_number) - 1);
+                          const downloading = downloadingVersionId === version.id;
+                          return (
+                            <button
+                              key={version.id}
+                              type="button"
+                              disabled={Boolean(busy) || downloadingVersionId !== null}
+                              title={`下载 ${app.creator_code} 的 V${displayVersion} HTML 代码`}
+                              onClick={() => void downloadPublishedVersion(app, version)}
+                            ><Download /> {downloading ? '下载中…' : `下载 V${displayVersion}`}</button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                   {[firstStatus, secondStatus].map((status, index) => (

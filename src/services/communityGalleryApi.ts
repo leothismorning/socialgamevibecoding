@@ -249,6 +249,13 @@ export const communityGalleryApi = {
     + `?clientId=${encodeURIComponent(clientId)}&version=${version}&v=${encodeURIComponent(cacheKey)}`
     + (versionId ? `&versionId=${encodeURIComponent(versionId)}` : '')
     + (performanceMode ? `&performance=${encodeURIComponent(performanceMode)}` : ''),
+  publishedVersionDownloadUrl: (
+    clientId: string,
+    appId: string,
+    versionId: number,
+  ) => `/api/community-gallery/apps/${encodeURIComponent(appId)}`
+    + `/versions/${encodeURIComponent(versionId)}/download`
+    + `?clientId=${encodeURIComponent(clientId)}`,
   track: (
     clientId: string,
     eventType: string,

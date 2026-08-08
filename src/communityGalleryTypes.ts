@@ -218,7 +218,7 @@ export type CreatorDevelopmentProgress = {
   client_id: string;
   creator_code: string;
   app_id?: string;
-  phase: 'initial' | 'project';
+  phase: 'initial' | 'community' | 'project';
   action: 'generate' | 'refine';
   status: 'running' | 'completed' | 'failed';
   error?: string;
@@ -276,6 +276,7 @@ export type CommunityGalleryState = {
   }>;
   generationJobs: CommunityGenerationJob[];
   generationEvents: CommunityGenerationEvent[];
+  creatorDevelopment: CreatorDevelopmentProgress | null;
   notifications: CommunityNotification[];
   developmentMessages: Array<{
     id: number;

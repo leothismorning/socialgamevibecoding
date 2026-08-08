@@ -271,6 +271,8 @@
 .async-creator-progress li.is-running > span { color: #fff; border-color: #7453d5; background: #7453d5; box-shadow: 0 5px 12px rgba(93, 69, 190, .18); }
 .async-creator-progress li.is-completed { color: #19714d; }
 .async-creator-progress li.is-completed > span { color: #fff; border-color: #269669; background: #269669; }
+.async-creator-progress li.is-failed { color: #a63f55; }
+.async-creator-progress li.is-failed > span { color: #fff; border-color: #c74461; background: #c74461; }
 .async-creator-progress > footer { display: flex; align-items: center; gap: 8px; margin-top: 13px; padding: 9px 11px; color: #9a4b21; border: 1px solid #f1d1b4; border-radius: 10px; background: #fff8ed; font-size: 8px; }
 .async-creator-progress > footer strong { flex: 0 0 auto; }
 .async-creator-progress.is-completed { border-color: #b9e3cf; background: linear-gradient(120deg, #f2fbf7, #f6fbff); }
@@ -1439,6 +1441,14 @@
 .async-current-round-counts > span { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; color: #67758a; border: 1px solid #e0e6ef; border-radius: 7px; background: #fff; font-size: 7px; font-weight: 800; }
 .async-current-round-counts svg { width: 10px; height: 10px; }
 .async-current-round-counts strong { color: #584595; font-size: 8px; }
+.async-published-code-downloads { display: grid; gap: 5px; margin-top: 4px; padding-top: 7px; border-top: 1px dashed #dce3ed; }
+.async-published-code-downloads > span { display: flex; align-items: center; gap: 4px; color: #53647b; font-size: 7px; font-weight: 900; }
+.async-published-code-downloads > span svg { width: 10px; height: 10px; }
+.async-published-code-downloads > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.async-published-code-downloads button { min-height: 27px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; color: #574294; border: 1px solid #d8cff0; border-radius: 8px; background: #f8f5ff; font-size: 7px; font-weight: 900; cursor: pointer; }
+.async-published-code-downloads button:hover:not(:disabled) { color: #fff; border-color: #6c53b7; background: #6c53b7; }
+.async-published-code-downloads button:disabled { cursor: not-allowed; opacity: .5; }
+.async-published-code-downloads button svg { width: 10px; height: 10px; }
 .async-development-state { min-width: 0; display: grid; grid-template-columns: 1fr auto; align-content: center; gap: 4px 8px; padding: 9px 10px; border: 1px solid #e1e6ed; border-radius: 11px; background: #f8fafc; }
 .async-development-state > span { display: flex; align-items: center; gap: 5px; font-size: 9px; font-weight: 950; }
 .async-development-state > span svg { width: 13px; height: 13px; }

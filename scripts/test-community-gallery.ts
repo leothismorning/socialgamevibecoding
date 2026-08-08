@@ -38,6 +38,29 @@ for (const account of [1, 2, 3, 4, 5]) {
   assert.equal(Number(creatorState.viewer?.isTest), account <= 2 ? 1 : 0);
 }
 
+const failedOperationId = 'creator-operation-failure-test';
+gallery.startCreatorDevelopmentOperation(client(5), failedOperationId, 'generate');
+gallery.recordCreatorDevelopmentProgress(failedOperationId, {
+  step: 'logic',
+  order: 5,
+  status: 'running',
+  title: 'AI 正在实现交互逻辑',
+  detail: '测试中的开发步骤。',
+});
+gallery.failCreatorDevelopmentOperation(failedOperationId, new Error('upstream disconnected'));
+const failedCreatorState = gallery.getCommunityGalleryState(client(5));
+assert.equal(failedCreatorState.creatorDevelopment?.status, 'failed');
+assert.match(failedCreatorState.creatorDevelopment?.error || '', /失败，请重试/);
+assert.equal(failedCreatorState.creatorDevelopment?.events[0]?.status, 'failed');
+assert.match(failedCreatorState.creatorDevelopment?.events[0]?.title || '', /失败，请重试/);
+
+const reloggedCreatorClient = 'client-5-relogin';
+const reloggedCreatorState = gallery.joinCommunityGallery(reloggedCreatorClient, '5', '5');
+assert.equal(reloggedCreatorState.creatorDevelopment?.id, failedOperationId);
+const retryOperationId = 'creator-operation-retry-test';
+gallery.startCreatorDevelopmentOperation(reloggedCreatorClient, retryOperationId, 'generate');
+gallery.failCreatorDevelopmentOperation(retryOperationId, new Error('test cleanup'));
+
 const publishInitial = (account: number, title: string) => {
   const clientId = client(account);
   gallery.saveInitialDraft({
@@ -72,6 +95,26 @@ assert.equal(Number(testApp.is_test), 1);
 assert.equal(Number(regularApp.is_test), 0);
 assert.equal(testApp.flow_stage, 'round_1');
 assert.equal(regularApp.flow_stage, 'round_1');
+
+const regularInitialVersion = hostState.versions.find(
+  (version: any) => version.app_id === regularApp.id && version.kind === 'initial',
+);
+assert.ok(regularInitialVersion);
+const hostDownload = gallery.getPublishedCommunityVersionDownload(
+  hostClient,
+  regularApp.id,
+  Number(regularInitialVersion.id),
+);
+assert.equal(hostDownload.code, html('Regular App Three'));
+assert.equal(hostDownload.creator_code, 'C03');
+assert.throws(
+  () => gallery.getPublishedCommunityVersionDownload(
+    client(4),
+    regularApp.id,
+    Number(regularInitialVersion.id),
+  ),
+  /主持人身份/,
+);
 
 assert.throws(
   () => gallery.deleteOwnInitialApp(client(4), temporaryApp.id),

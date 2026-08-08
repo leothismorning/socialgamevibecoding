@@ -777,6 +777,38 @@ if (!synthesisColumns.some((column) => column.name === 'target_version_id')) {
   db.exec(`ALTER TABLE vg_async_syntheses ADD COLUMN target_version_id INTEGER`);
 }
 
+// AI work only lives in the current Node process. If Railway restarts or a new
+// deployment replaces that process, any task still marked running can no
+// longer finish and must be made retryable instead of spinning forever.
+const interruptedAtStartup = now();
+const interruptedAtStartupMessage = '服务在开发过程中重启，本轮开发失败，请重试。';
+db.prepare(`
+  UPDATE vg_async_creator_progress
+  SET status = 'failed', title = '开发失败，请重试', detail = ?, updated_at = ?
+  WHERE status IN ('pending', 'running')
+    AND operation_id IN (
+      SELECT id FROM vg_async_creator_operations WHERE status = 'running'
+    )
+`).run(interruptedAtStartupMessage, interruptedAtStartup);
+db.prepare(`
+  UPDATE vg_async_creator_operations
+  SET status = 'failed', error = ?, completed_at = ?
+  WHERE status = 'running'
+`).run(interruptedAtStartupMessage, interruptedAtStartup);
+db.prepare(`
+  UPDATE vg_async_generation_events
+  SET status = 'failed', title = '开发失败，请重试', detail = ?, updated_at = ?
+  WHERE status IN ('pending', 'running')
+    AND job_id IN (
+      SELECT id FROM vg_async_generation_jobs WHERE status = 'running'
+    )
+`).run(interruptedAtStartupMessage, interruptedAtStartup);
+db.prepare(`
+  UPDATE vg_async_generation_jobs
+  SET status = 'failed', error = ?, completed_at = ?
+  WHERE status = 'running'
+`).run(interruptedAtStartupMessage, interruptedAtStartup);
+
 function seedParticipants(studyId: string) {
   const existingParticipants = db.prepare(`
     SELECT COUNT(*) AS count
@@ -1350,12 +1382,24 @@ export function failCreatorDevelopmentOperation(operationId: string, error: unkn
     SELECT * FROM vg_async_creator_operations WHERE id = ?
   `).get(operationId) as any;
   if (!operation) return;
-  const message = error instanceof Error ? error.message : String(error);
-  db.prepare(`
-    UPDATE vg_async_creator_operations
-    SET status = 'failed', error = ?, completed_at = ?
-    WHERE id = ?
-  `).run(message, now(), operationId);
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = rawMessage.includes('请重试')
+    ? rawMessage
+    : `AI 开发过程中出现异常，本轮开发失败，请重试。错误信息：${rawMessage}`;
+  const timestamp = now();
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE vg_async_creator_operations
+      SET status = 'failed', error = ?, completed_at = ?
+      WHERE id = ?
+    `).run(message, timestamp, operationId);
+    db.prepare(`
+      UPDATE vg_async_creator_progress
+      SET status = 'failed', title = '开发失败，请重试', detail = ?, updated_at = ?
+      WHERE operation_id = ? AND status IN ('pending', 'running')
+    `).run(message, timestamp, operationId);
+  });
+  transaction();
   recordEvent(
     operation.creator_code,
     'fail_creator_development',
@@ -1370,8 +1414,8 @@ export function getCreatorDevelopmentProgress(clientId: string, operationId: str
   const currentStudy = study();
   const operation = db.prepare(`
     SELECT * FROM vg_async_creator_operations
-    WHERE id = ? AND study_id = ? AND client_id = ? AND creator_code = ?
-  `).get(operationId, currentStudy.id, clientId, viewer.code) as any;
+    WHERE id = ? AND study_id = ? AND creator_code = ?
+  `).get(operationId, currentStudy.id, viewer.code) as any;
   if (!operation) throw new Error('开发任务不存在或已经失效。');
   const events = db.prepare(`
     SELECT step_key, sort_order, status, title, detail, updated_at
@@ -3227,6 +3271,7 @@ export function getCommunityGenerationInput(jobId: number) {
 
 export function recordCommunityGenerationProgress(jobId: number, progress: DevelopmentAgentProgress) {
   const input = getCommunityGenerationInput(jobId);
+  if (input.job.status !== 'running') return;
   const timestamp = now();
   db.prepare(`
     INSERT INTO vg_async_generation_events
@@ -3327,11 +3372,24 @@ export function completeCommunityGeneration(jobId: number, code: string, summary
 
 export function failCommunityGeneration(jobId: number, error: unknown) {
   const input = getCommunityGenerationInput(jobId);
-  db.prepare(`
-    UPDATE vg_async_generation_jobs
-    SET status = 'failed', error = ?, completed_at = ?
-    WHERE study_id = ? AND id = ?
-  `).run(error instanceof Error ? error.message : String(error), now(), study().id, jobId);
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = rawMessage.includes('请重试')
+    ? rawMessage
+    : `AI 开发过程中出现异常，本轮开发失败，请重试。错误信息：${rawMessage}`;
+  const timestamp = now();
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE vg_async_generation_jobs
+      SET status = 'failed', error = ?, completed_at = ?
+      WHERE study_id = ? AND id = ?
+    `).run(message, timestamp, study().id, jobId);
+    db.prepare(`
+      UPDATE vg_async_generation_events
+      SET status = 'failed', title = '开发失败，请重试', detail = ?, updated_at = ?
+      WHERE study_id = ? AND job_id = ? AND status IN ('pending', 'running')
+    `).run(message, timestamp, study().id, jobId);
+  });
+  transaction();
   recordEvent(input.job.creator_code, 'fail_community_generation', 'generation_job', jobId);
 }
 
@@ -4052,6 +4110,29 @@ export function getCommunityPreview(
   return row?.code || '';
 }
 
+export function getPublishedCommunityVersionDownload(
+  clientId: string,
+  appId: string,
+  versionId: number,
+) {
+  const viewer = requireViewer(clientId, 'host');
+  const currentStudy = study();
+  const version = db.prepare(`
+    SELECT v.*, a.title AS app_title, a.creator_code
+    FROM vg_async_versions v
+    JOIN vg_async_apps a ON a.id = v.app_id AND a.study_id = v.study_id
+    WHERE v.study_id = ? AND v.app_id = ? AND v.id = ?
+      AND a.status = 'published'
+  `).get(currentStudy.id, appId, versionId) as any;
+  if (!version?.code) throw new Error('该已发布版本不存在或代码为空。');
+  recordEvent(viewer.code, 'download_published_app_code', 'version', String(version.id), {
+    appId: version.app_id,
+    creatorCode: version.creator_code,
+    versionNumber: Number(version.version_number),
+  });
+  return version;
+}
+
 export function getCommunityGalleryState(clientId = '') {
   const currentStudy = study();
   const regularWorkspace = workspaceState(currentStudy.id, 0);
@@ -4345,6 +4426,26 @@ export function getCommunityGalleryState(clientId = '') {
       `).all(currentStudy.id, viewer.code) as any[]
     : [];
 
+  const latestCreatorOperation = viewer?.role === 'creator'
+    ? db.prepare(`
+        SELECT * FROM vg_async_creator_operations
+        WHERE study_id = ? AND creator_code = ?
+        ORDER BY started_at DESC LIMIT 1
+      `).get(currentStudy.id, viewer.code) as any
+    : null;
+  const creatorDevelopment = latestCreatorOperation
+    && latestCreatorOperation.status !== 'completed'
+    ? {
+        ...latestCreatorOperation,
+        events: db.prepare(`
+          SELECT step_key, sort_order, status, title, detail, updated_at
+          FROM vg_async_creator_progress
+          WHERE study_id = ? AND operation_id = ?
+          ORDER BY sort_order, id
+        `).all(currentStudy.id, latestCreatorOperation.id),
+      }
+    : null;
+
   const notifications = viewer && viewer.role !== 'host'
     ? db.prepare(`
         SELECT n.*, a.title AS app_title
@@ -4405,6 +4506,7 @@ export function getCommunityGalleryState(clientId = '') {
     assignments,
     generationJobs,
     generationEvents,
+    creatorDevelopment,
     notifications,
     developmentMessages,
     participants: participantRows,

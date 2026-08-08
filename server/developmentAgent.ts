@@ -42,6 +42,48 @@ export type DevelopmentAgentOutput = AIResult & {
   steps: string[];
 };
 
+const DEFAULT_AGENT_STEP_TIMEOUT_MS = 6 * 60 * 1000;
+const DEFAULT_AGENT_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
+
+function positiveTimeoutFromEnv(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 1000 ? value : fallback;
+}
+
+function timeoutMinutes(milliseconds: number) {
+  return Math.max(1, Math.round(milliseconds / 60_000));
+}
+
+async function withAbortTimeout<T>(
+  timeoutMs: number,
+  parentSignal: AbortSignal | undefined,
+  timeoutMessage: string,
+  task: (signal: AbortSignal) => Promise<T>,
+) {
+  const controller = new AbortController();
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal;
+  let timeoutId: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort(new Error(timeoutMessage));
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([task(signal), timeout]);
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(timeoutMessage);
+    if (parentSignal?.aborted) {
+      throw new Error('AI 开发连接已经中断，本轮开发失败，请重试。');
+    }
+    throw error;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 const TEXT_ONLY_SYSTEM =
   'You are one step in a web-development agent pipeline. Return only JSON with "text" containing the requested artifact and "code" set to an empty string. Do not use Markdown fences unless the user explicitly asks for fenced code.';
 
@@ -500,16 +542,25 @@ async function runAgentTextStep(
     title: `Agent step: ${title}`,
     detail: { provider, promptLength: prompt.length, maxTokens },
   });
-  const result = await generateWithAI(provider, prompt, {
-    systemPrompt: TEXT_ONLY_SYSTEM,
-    maxTokens,
+  const timeoutMs = positiveTimeoutFromEnv(
+    'AI_AGENT_STEP_TIMEOUT_MS',
+    DEFAULT_AGENT_STEP_TIMEOUT_MS,
+  );
+  const result = await withAbortTimeout(
+    timeoutMs,
     signal,
-    apiKey,
-  });
+    `AI 当前生成步骤超过 ${timeoutMinutes(timeoutMs)} 分钟未响应，本轮开发失败，请重试。`,
+    (stepSignal) => generateWithAI(provider, prompt, {
+      systemPrompt: TEXT_ONLY_SYSTEM,
+      maxTokens,
+      signal: stepSignal,
+      apiKey,
+    }),
+  );
   return result.text.trim();
 }
 
-export async function runDevelopmentAgent(input: DevelopmentAgentInput): Promise<DevelopmentAgentOutput> {
+async function runDevelopmentAgentPipeline(input: DevelopmentAgentInput): Promise<DevelopmentAgentOutput> {
   const startedAt = performance.now();
   const progress = (event: DevelopmentAgentProgress) => {
     try {
@@ -895,4 +946,17 @@ Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwi
       `Agent assembled and validated a complete HTML document (${code.length} chars).`,
     ],
   };
+}
+
+export async function runDevelopmentAgent(input: DevelopmentAgentInput): Promise<DevelopmentAgentOutput> {
+  const timeoutMs = positiveTimeoutFromEnv(
+    'AI_AGENT_TOTAL_TIMEOUT_MS',
+    DEFAULT_AGENT_TOTAL_TIMEOUT_MS,
+  );
+  return withAbortTimeout(
+    timeoutMs,
+    input.signal,
+    `AI 整体开发超过 ${timeoutMinutes(timeoutMs)} 分钟仍未完成，本轮开发失败，请重试。`,
+    (signal) => runDevelopmentAgentPipeline({ ...input, signal }),
+  );
 }

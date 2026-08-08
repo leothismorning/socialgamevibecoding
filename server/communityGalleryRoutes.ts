@@ -22,6 +22,7 @@ import {
   getCommunityGalleryState,
   getCommunityGenerationInput,
   getCommunityPreview,
+  getPublishedCommunityVersionDownload,
   getCreatorDevelopmentProgress,
   getCreatorDraftContext,
   joinCommunityGallery,
@@ -245,6 +246,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/apps/generate-initial', async (req, res) => {
     let operationId = '';
+    let operationStarted = false;
     try {
       const clientId = clientIdFrom(req);
       const state = getCommunityGalleryState(clientId);
@@ -256,6 +258,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
       if (!title || !prompt) throw new Error('请填写应用名称和创作提示。');
       operationId = String(req.body?.operationId || randomUUID()).trim();
       startCreatorDevelopmentOperation(clientId, operationId, 'generate');
+      operationStarted = true;
       const provider = getAIProvider();
       const result = await runQueuedDevelopmentAgent({
         provider,
@@ -285,10 +288,16 @@ export function registerCommunityGalleryRoutes(app: Express) {
         operationId,
         nextState.apps.find((item) => item.creator_code === state.viewer?.code)?.id,
       );
-      res.json(nextState);
+      res.json(getCommunityGalleryState(clientId));
     } catch (error) {
-      if (operationId) failCreatorDevelopmentOperation(operationId, error);
-      sendError(res, error);
+      if (operationId) {
+        failCreatorDevelopmentOperation(operationId, error);
+        sendError(res, operationStarted
+          ? new Error('AI 开发过程中出现异常，本轮开发失败，请重试。')
+          : error);
+      } else {
+        sendError(res, error);
+      }
     }
   });
 
@@ -311,6 +320,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/apps/refine', async (req, res) => {
     let operationId = '';
+    let operationStarted = false;
     try {
       const clientId = clientIdFrom(req);
       const message = String(req.body?.message || '').trim();
@@ -319,6 +329,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
       operationId = String(req.body?.operationId || randomUUID()).trim();
       const operationPhase = context.messagePhase as 'initial' | 'community' | 'project';
       startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
+      operationStarted = true;
       const provider = getAIProvider();
       const result = await runQueuedDevelopmentAgent({
         provider,
@@ -343,7 +354,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
           initialCreatorProgress(progress),
         ),
       }, (progress) => recordCreatorDevelopmentProgress(operationId, progress));
-      const nextState = saveRefinedDraft(
+      saveRefinedDraft(
         clientId,
         result.code,
         result.text,
@@ -351,10 +362,16 @@ export function registerCommunityGalleryRoutes(app: Express) {
         publicAgentMessage(result),
       );
       completeCreatorDevelopmentOperation(operationId, context.app.id);
-      res.json(nextState);
+      res.json(getCommunityGalleryState(clientId));
     } catch (error) {
-      if (operationId) failCreatorDevelopmentOperation(operationId, error);
-      sendError(res, error);
+      if (operationId) {
+        failCreatorDevelopmentOperation(operationId, error);
+        sendError(res, operationStarted
+          ? new Error('AI 开发过程中出现异常，本轮开发失败，请重试。')
+          : error);
+      } else {
+        sendError(res, error);
+      }
     }
   });
 
@@ -363,6 +380,24 @@ export function registerCommunityGalleryRoutes(app: Express) {
       res.json(publishInitialVersion(clientIdFrom(req)));
     } catch (error) {
       sendError(res, error);
+    }
+  });
+
+  app.get('/api/community-gallery/apps/:appId/versions/:versionId/download', (req, res) => {
+    try {
+      const version = getPublishedCommunityVersionDownload(
+        clientIdFrom(req),
+        String(req.params.appId),
+        Number(req.params.versionId),
+      );
+      const displayVersion = Math.max(0, Number(version.version_number) - 1);
+      const filename = `${version.creator_code}-V${displayVersion}.html`;
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.type('html').send(version.code);
+    } catch (error) {
+      return sendError(res, error);
     }
   });
 
