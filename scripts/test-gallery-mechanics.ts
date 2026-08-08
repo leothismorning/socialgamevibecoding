@@ -49,6 +49,7 @@ const {
   inspectAgentArtifacts,
   inspectAgentInteractionStyles,
   repairAgentInteractionClassNames,
+  removePlatformOwnedAgentToast,
 } = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
 
@@ -112,6 +113,14 @@ assert.deepEqual(
 assert.deepEqual(repairedInteraction.inspection.missingStateClasses, []);
 assert.match(repairedInteraction.js, /classList\.add\('selected'\)/);
 assert.match(repairedInteraction.js, /classList\.toggle\(\"correct\", true\)/);
+assert.equal(
+  removePlatformOwnedAgentToast(`
+    <main id="prototype"><button>开始</button></main>
+    <div id="agentToast" class="agent-toast" aria-live="polite"><span>旧提示</span></div>
+  `),
+  '<main id="prototype"><button>开始</button></main>',
+  'the platform-owned agent toast must be removed before the final document appends its single canonical toast',
+);
 
 const migratedSessionsSchema = db.prepare(`
   SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'gallery_sessions'

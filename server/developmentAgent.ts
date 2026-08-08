@@ -44,6 +44,7 @@ export type DevelopmentAgentOutput = AIResult & {
 
 const DEFAULT_AGENT_STEP_TIMEOUT_MS = 6 * 60 * 1000;
 const DEFAULT_AGENT_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_AGENT_REPAIR_ATTEMPTS = 2;
 
 function positiveTimeoutFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -52,6 +53,11 @@ function positiveTimeoutFromEnv(name: string, fallback: number) {
 
 function timeoutMinutes(milliseconds: number) {
   return Math.max(1, Math.round(milliseconds / 60_000));
+}
+
+function repairAttemptsFromEnv() {
+  const value = Number(process.env.AI_AGENT_REPAIR_ATTEMPTS);
+  return Number.isInteger(value) && value >= 0 ? Math.min(value, 3) : DEFAULT_AGENT_REPAIR_ATTEMPTS;
 }
 
 async function withAbortTimeout<T>(
@@ -238,6 +244,29 @@ function cleanJs(value: string) {
   return stripFence(value)
     .replace(/<\/?script[^>]*>/gi, '')
     .trim();
+}
+
+export function removePlatformOwnedAgentToast(body: string) {
+  return body
+    .replace(/<([a-z][\w:-]*)\b(?=[^>]*\bid=["']agentToast["'])[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<[a-z][\w:-]*\b(?=[^>]*\bid=["']agentToast["'])[^>]*\/?\s*>/gi, '')
+    .trim();
+}
+
+type RepairArtifact = 'body' | 'css' | 'javascript';
+
+function parseRepairArtifact(value: string): { artifact: RepairArtifact; content: string } {
+  const text = stripFence(value);
+  const match = text.match(/^ARTIFACT\s*:\s*(BODY|CSS|JAVASCRIPT|JS)\s*\r?\n/i);
+  if (!match) {
+    throw new Error('The correction agent did not identify the artifact it repaired.');
+  }
+  const artifact = match[1].toLowerCase() === 'js'
+    ? 'javascript'
+    : match[1].toLowerCase() as RepairArtifact;
+  const content = stripFence(text.slice(match[0].length));
+  if (!content) throw new Error(`The correction agent returned an empty ${artifact} artifact.`);
+  return { artifact, content };
 }
 
 function truncate(value: string, max = 6000) {
@@ -482,6 +511,7 @@ if (!window.__vibecodingAgentReady) {
 
 function buildHtml(input: DevelopmentAgentInput, summary: string, body: string, css: string, js: string) {
   const safeTitle = input.experimentTitle || 'Vibecoding Prototype';
+  const safeBody = removePlatformOwnedAgentToast(body);
   return ensureStandalonePerformanceGuard(`<!doctype html>
 <!-- SUMMARY: ${summary.replace(/-->/g, '--&gt;')} -->
 <html lang="zh-CN">
@@ -494,7 +524,7 @@ ${css}
   </style>
 </head>
 <body>
-${body}
+${safeBody}
   <div id="agentToast" class="agent-toast" aria-live="polite"></div>
   <script>
 ${ensurePlayableFallbackScript(js)}
@@ -512,6 +542,21 @@ function validateAssembledHtml(
   const scriptClose = (code.match(/<\/script>/gi) || []).length;
   if (!/<\/body>/i.test(code) || !/<\/html>/i.test(code) || scriptOpen !== scriptClose) {
     throw new Error('The development agent assembled an incomplete HTML document.');
+  }
+  const markupForIdValidation = code
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+  const ids = [...markupForIdValidation.matchAll(/\bid=["']([^"']+)["']/gi)].map((match) => match[1]);
+  const duplicateIds = unique(ids.filter((id, index) => ids.indexOf(id) !== index));
+  if (duplicateIds.length > 0) {
+    throw new Error(`The development agent generated duplicate HTML ids: ${duplicateIds.slice(0, 12).join(', ')}.`);
+  }
+  const scripts = [...code.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1]);
+  try {
+    for (const script of scripts) new Function(script);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`The development agent generated invalid JavaScript: ${message}`);
   }
   if (/cdn\.tailwindcss\.com|tailwind\.min\.css/i.test(code)) {
     throw new Error('The development agent output still depends on Tailwind instead of self-contained CSS.');
@@ -558,6 +603,111 @@ async function runAgentTextStep(
     }),
   );
   return result.text.trim();
+}
+
+async function runAgentCorrectionStep(
+  input: DevelopmentAgentInput,
+  plan: string,
+  failureReason: string,
+  body: string,
+  css: string,
+  js: string,
+  attempt: number,
+) {
+  const response = await runAgentTextStep(
+    input.provider,
+    `automatic correction ${attempt}`,
+    `You are correcting one failed artifact in a self-contained web prototype.
+
+Creator request:
+${input.creatorMessage || input.creatorPrompt || input.brief || 'Preserve the existing prototype and make only the required correction.'}
+
+Implementation plan:
+${truncate(plan, 5000)}
+
+Blocking validation error:
+${truncate(failureReason, 1800)}
+
+Current BODY INNER HTML:
+${truncate(body, 22000)}
+
+Current CSS:
+${truncate(css, 18000)}
+
+Current JavaScript:
+${truncate(js, 16000)}
+
+Choose the single artifact responsible for the blocking error and replace only that artifact.
+Preserve every requirement, existing feature, id, section, interaction, visual direction, and unrelated behavior.
+Make the smallest correction that resolves the exact validation error.
+The platform owns #agentToast, so BODY must never include an element with id="agentToast".
+Do not use Tailwind, Bootstrap, external CSS frameworks, inline onclick handlers, or remote CSS imports.
+JavaScript must parse as a classic browser script, bind safely, and keep continuous animation bounded to at most 30 FPS.
+
+Return the full replacement for exactly one artifact in this format:
+ARTIFACT: BODY
+<complete body inner HTML only>
+
+or:
+ARTIFACT: CSS
+<complete CSS only>
+
+or:
+ARTIFACT: JAVASCRIPT
+<complete JavaScript only>
+
+Do not return Markdown fences, explanations, multiple artifacts, or a full HTML document.`,
+    6144,
+    input.signal,
+    input.apiKey,
+  );
+  return parseRepairArtifact(response);
+}
+
+async function runAgentIntegrationAudit(
+  input: DevelopmentAgentInput,
+  code: string,
+  body: string,
+  css: string,
+  js: string,
+  inspection: ArtifactInspection,
+  interactionInspection: InteractionStyleInspection,
+  imageReport: ImageResolutionReport,
+) {
+  return runAgentTextStep(
+    input.provider,
+    'final integration gate',
+    `Act as the final integration gate for a self-contained web prototype.
+
+Deterministic validation:
+- HTML class coverage: ${Math.round(inspection.coverage * 100)}%
+- Missing HTML classes: ${inspection.missingClasses.join(', ') || 'none'}
+- Unsupported utility classes: ${inspection.utilityClasses.join(', ') || 'none'}
+- Images checked: ${imageReport.checked}
+- Valid images preserved: ${imageReport.preserved}
+- Invalid images replaced through Wikimedia: ${imageReport.replaced}
+- Embedded image fallbacks: ${imageReport.fallbacks}
+- HTML length: ${code.length}
+- CSS length: ${css.length}
+- JavaScript length: ${js.length}
+- JavaScript state-class coverage: ${Math.round(interactionInspection.coverage * 100)}%
+- Unstyled JavaScript state classes: ${interactionInspection.missingStateClasses.join(', ') || 'none'}
+
+HTML body excerpt:
+${truncate(body, 6000)}
+
+CSS excerpt:
+${truncate(css, 6000)}
+
+JavaScript excerpt:
+${truncate(js, 3500)}
+
+Check that the visible layout has styling, images cannot render as broken icons, and required controls have matching ids. If the supplied requirements include a game, also check that it has real event logic. If the JavaScript contains continuous animation, also check that it uses one bounded loop, targets no more than 30 FPS, pauses work while document.hidden, and does not grow particle/history collections without a cap.
+Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwise "FAIL: concrete blocking reason".`,
+    2048,
+    input.signal,
+    input.apiKey,
+  );
 }
 
 async function runDevelopmentAgentPipeline(input: DevelopmentAgentInput): Promise<DevelopmentAgentOutput> {
@@ -643,6 +793,7 @@ For an existing App, retain every existing section, control, text, image, id, an
 If there is a mini-game, include the board, controls, score/status elements, and clear instructions.
 Use a small set of descriptive semantic kebab-case classes.
 Do not use Tailwind, Bootstrap, utility classes, responsive prefixes, or external CSS frameworks. Every class must be styled by the separate CSS step.
+Do not create an element with id="agentToast"; the platform appends that shared status element automatically.
 Only for images required by the supplied requirements or existing project, use <img src="" data-image-query="specific Wikimedia search phrase" alt="meaningful fallback text">. Do not add decorative images, invent remote URLs, or use remote CSS background-image URLs.
 Use stable ids that JavaScript can bind and preserve during later repair. Avoid inline onclick handlers.
 Keep the fragment under 260 lines.`,
@@ -650,6 +801,7 @@ Keep the fragment under 260 lines.`,
     input.signal,
     input.apiKey,
   ));
+  body = removePlatformOwnedAgentToast(body);
 
   let structureInspection = inspectAgentArtifacts(body, '');
   if (structureInspection.utilityClasses.length > 0) {
@@ -674,11 +826,14 @@ Keep it compact and complete.`,
       input.signal,
       input.apiKey,
     ));
+    body = removePlatformOwnedAgentToast(body);
     repairNotes.push(`Agent rewrote HTML to remove ${structureInspection.utilityClasses.length} unsupported utility classes.`);
     structureInspection = inspectAgentArtifacts(body, '');
   }
   if (structureInspection.utilityClasses.length > 0) {
-    throw new Error(`The development agent kept unsupported utility classes after repair: ${structureInspection.utilityClasses.slice(0, 12).join(', ')}.`);
+    repairNotes.push(
+      `Semantic HTML repair still left unsupported utility classes for final automatic correction: ${structureInspection.utilityClasses.slice(0, 12).join(', ')}.`,
+    );
   }
   progress({ step: 'structure', order: 2, status: 'completed', title: '页面结构已经完成', detail: `已生成完整页面结构，包含 ${structureInspection.usedClasses.length} 组界面样式标记。` });
 
@@ -687,7 +842,7 @@ Keep it compact and complete.`,
   const imageResolution = await resolveBodyImageAssets(body);
   input.signal?.throwIfAborted();
   body = imageResolution.body;
-  const imageReport = imageResolution.report;
+  let imageReport = imageResolution.report;
   addDebugLog({
     kind: 'ai',
     phase: 'info',
@@ -835,8 +990,8 @@ Keep .agent-toast and .agent-toast.show. Do not use external frameworks, @import
     repairNotes.push('Agent regenerated CSS to cover JavaScript-applied interaction state classes.');
   }
   if (interactionInspection.missingStateClasses.length > 0) {
-    throw new Error(
-      `The development agent could not style JavaScript state classes after repair: ${interactionInspection.missingStateClasses.slice(0, 12).join(', ')}.`,
+    repairNotes.push(
+      `Interaction CSS repair still left state classes for final automatic correction: ${interactionInspection.missingStateClasses.slice(0, 12).join(', ')}.`,
     );
   }
   progress({
@@ -866,46 +1021,116 @@ Image assets: ${imageReport.preserved} preserved, ${imageReport.replaced} replac
   );
   progress({ step: 'summary', order: 6, status: 'completed', title: '本次修改说明已经完成', detail: summary });
 
-  const code = buildHtml(input, summary, body, css, js);
-  validateAssembledHtml(code, inspection, interactionInspection);
-
   progress({ step: 'validation', order: 7, status: 'running', title: '系统正在进行最终检查', detail: '正在检查页面、样式、图片与交互是否完整连接。' });
-  const integrationAudit = await runAgentTextStep(
-    input.provider,
-    'final integration gate',
-    `Act as the final integration gate for a self-contained web prototype.
+  const maxRepairAttempts = repairAttemptsFromEnv();
+  let code = '';
+  let integrationAudit = '';
+  let lastFailureReason = '';
+  let validationPassed = false;
 
-Deterministic validation:
-- HTML class coverage: ${Math.round(inspection.coverage * 100)}%
-- Missing HTML classes: ${inspection.missingClasses.join(', ') || 'none'}
-- Unsupported utility classes: ${inspection.utilityClasses.join(', ') || 'none'}
-- Images checked: ${imageReport.checked}
-- Valid images preserved: ${imageReport.preserved}
-- Invalid images replaced through Wikimedia: ${imageReport.replaced}
-- Embedded image fallbacks: ${imageReport.fallbacks}
-- HTML length: ${code.length}
-- CSS length: ${css.length}
-- JavaScript length: ${js.length}
-- JavaScript state-class coverage: ${Math.round(interactionInspection.coverage * 100)}%
-- Unstyled JavaScript state classes: ${interactionInspection.missingStateClasses.join(', ') || 'none'}
+  for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
+    body = removePlatformOwnedAgentToast(body);
+    inspection = inspectAgentArtifacts(body, css);
+    const classRepair = repairAgentInteractionClassNames(js, css);
+    js = classRepair.js;
+    if (classRepair.replacements.length > 0) {
+      repairNotes.push(
+        `Automatic validation aligned JavaScript state classes: ${classRepair.replacements
+          .map((replacement) => `${replacement.from} -> ${replacement.to}`)
+          .join(', ')}.`,
+      );
+    }
+    interactionInspection = classRepair.inspection;
+    code = buildHtml(input, summary, body, css, js);
+    lastFailureReason = '';
 
-HTML body excerpt:
-${truncate(body, 6000)}
+    try {
+      validateAssembledHtml(code, inspection, interactionInspection);
+    } catch (error) {
+      lastFailureReason = error instanceof Error ? error.message : String(error);
+    }
 
-CSS excerpt:
-${truncate(css, 6000)}
+    if (!lastFailureReason) {
+      integrationAudit = await runAgentIntegrationAudit(
+        input,
+        code,
+        body,
+        css,
+        js,
+        inspection,
+        interactionInspection,
+        imageReport,
+      );
+      if (/^PASS\s*:/i.test(integrationAudit.trim())) {
+        validationPassed = true;
+        break;
+      }
+      lastFailureReason = `The integration gate rejected the draft: ${integrationAudit.slice(0, 700)}`;
+    }
 
-JavaScript excerpt:
-${truncate(js, 3500)}
+    if (attempt >= maxRepairAttempts) break;
+    const repairNumber = attempt + 1;
+    progress({
+      step: 'validation',
+      order: 7,
+      status: 'warning',
+      title: `最终检查发现问题，正在自动纠错（${repairNumber}/${maxRepairAttempts}）`,
+      detail: lastFailureReason,
+    });
+    addDebugLog({
+      kind: 'ai',
+      phase: 'info',
+      title: `Development agent automatic correction ${repairNumber}`,
+      detail: { provider: input.provider, mode: input.mode, failure: lastFailureReason },
+    });
 
-Check that the visible layout has styling, images cannot render as broken icons, and required controls have matching ids. If the supplied requirements include a game, also check that it has real event logic. If the JavaScript contains continuous animation, also check that it uses one bounded loop, targets no more than 30 FPS, pauses work while document.hidden, and does not grow particle/history collections without a cap.
-Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwise "FAIL: concrete blocking reason".`,
-    2048,
-    input.signal,
-    input.apiKey,
-  );
-  if (!/^PASS\s*:/i.test(integrationAudit.trim())) {
-    throw new Error(`The development agent integration gate rejected the draft: ${integrationAudit.slice(0, 500)}`);
+    try {
+      const correction = await runAgentCorrectionStep(
+        input,
+        plan,
+        lastFailureReason,
+        body,
+        css,
+        js,
+        repairNumber,
+      );
+      if (correction.artifact === 'body') {
+        body = removePlatformOwnedAgentToast(cleanBodyFragment(correction.content));
+        const repairedImages = await resolveBodyImageAssets(body);
+        body = repairedImages.body;
+        imageReport = repairedImages.report;
+      } else if (correction.artifact === 'css') {
+        css = cleanCss(correction.content);
+        css = await resolveCssImageAssets(css, imageReport);
+      } else {
+        js = cleanJs(correction.content);
+      }
+      repairNotes.push(
+        `Agent automatic correction ${repairNumber}/${maxRepairAttempts} replaced ${correction.artifact} after: ${lastFailureReason}`,
+      );
+      progress({
+        step: 'validation',
+        order: 7,
+        status: 'running',
+        title: `自动纠错 ${repairNumber} 已完成，正在重新检查`,
+        detail: `已修复 ${correction.artifact.toUpperCase()}，系统正在重新运行完整验证。`,
+      });
+    } catch (error) {
+      const correctionError = error instanceof Error ? error.message : String(error);
+      repairNotes.push(`Agent automatic correction ${repairNumber}/${maxRepairAttempts} could not be applied: ${correctionError}`);
+      addDebugLog({
+        kind: 'ai',
+        phase: 'error',
+        title: `Development agent automatic correction ${repairNumber} could not be applied`,
+        detail: { failure: lastFailureReason, correctionError },
+      });
+    }
+  }
+
+  if (!validationPassed) {
+    throw new Error(
+      `AI 已自动纠错 ${maxRepairAttempts} 次，但作品仍未通过最终检查：${lastFailureReason.slice(0, 700)}`,
+    );
   }
   progress({ step: 'validation', order: 7, status: 'completed', title: '最终检查已经通过', detail: integrationAudit.replace(/^PASS\s*:\s*/i, '') });
 
