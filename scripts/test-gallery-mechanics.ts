@@ -50,6 +50,7 @@ const {
   inspectAgentInteractionStyles,
   repairAgentInteractionClassNames,
   removePlatformOwnedAgentToast,
+  appendAgentCss,
 } = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
 
@@ -120,6 +121,14 @@ assert.equal(
   `),
   '<main id="prototype"><button>开始</button></main>',
   'the platform-owned agent toast must be removed before the final document appends its single canonical toast',
+);
+assert.equal(
+  appendAgentCss(
+    '.hero { color: #fff; background: linear-gradient(#123, #456); }',
+    '.missing-state { outline: 2px solid #f5c542; }',
+  ),
+  '.hero { color: #fff; background: linear-gradient(#123, #456); }\n\n.missing-state { outline: 2px solid #f5c542; }',
+  'CSS repair additions must preserve the complete original visual stylesheet',
 );
 
 const migratedSessionsSchema = db.prepare(`

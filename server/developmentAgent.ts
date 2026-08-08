@@ -240,6 +240,10 @@ function cleanCss(value: string) {
     .trim();
 }
 
+export function appendAgentCss(baseCss: string, additions: string) {
+  return [baseCss.trim(), additions.trim()].filter(Boolean).join('\n\n');
+}
+
 function cleanJs(value: string) {
   return stripFence(value)
     .replace(/<\/?script[^>]*>/gi, '')
@@ -253,17 +257,20 @@ export function removePlatformOwnedAgentToast(body: string) {
     .trim();
 }
 
-type RepairArtifact = 'body' | 'css' | 'javascript';
+type RepairArtifact = 'body' | 'css-append' | 'javascript';
 
 function parseRepairArtifact(value: string): { artifact: RepairArtifact; content: string } {
   const text = stripFence(value);
-  const match = text.match(/^ARTIFACT\s*:\s*(BODY|CSS|JAVASCRIPT|JS)\s*\r?\n/i);
+  const match = text.match(/^ARTIFACT\s*:\s*(BODY|CSS_APPEND|JAVASCRIPT|JS)\s*\r?\n/i);
   if (!match) {
     throw new Error('The correction agent did not identify the artifact it repaired.');
   }
-  const artifact = match[1].toLowerCase() === 'js'
+  const normalizedArtifact = match[1].toLowerCase();
+  const artifact = normalizedArtifact === 'js'
     ? 'javascript'
-    : match[1].toLowerCase() as RepairArtifact;
+    : normalizedArtifact === 'css_append'
+      ? 'css-append'
+      : normalizedArtifact as RepairArtifact;
   const content = stripFence(text.slice(match[0].length));
   if (!content) throw new Error(`The correction agent returned an empty ${artifact} artifact.`);
   return { artifact, content };
@@ -637,9 +644,10 @@ ${truncate(css, 18000)}
 Current JavaScript:
 ${truncate(js, 16000)}
 
-Choose the single artifact responsible for the blocking error and replace only that artifact.
+Choose the single artifact responsible for the blocking error and repair only that artifact.
 Preserve every requirement, existing feature, id, section, interaction, visual direction, and unrelated behavior.
 Make the smallest correction that resolves the exact validation error.
+Visual quality is part of correctness: preserve the existing composition, color palette, typography, spacing, depth, decorative detail, and theme. Never simplify, flatten, neutralize, or redesign an unaffected area.
 The platform owns #agentToast, so BODY must never include an element with id="agentToast".
 Do not use Tailwind, Bootstrap, external CSS frameworks, inline onclick handlers, or remote CSS imports.
 JavaScript must parse as a classic browser script, bind safely, and keep continuous animation bounded to at most 30 FPS.
@@ -649,13 +657,15 @@ ARTIFACT: BODY
 <complete body inner HTML only>
 
 or:
-ARTIFACT: CSS
-<complete CSS only>
+ARTIFACT: CSS_APPEND
+<only the new or overriding CSS rules needed to fix the error>
 
 or:
 ARTIFACT: JAVASCRIPT
 <complete JavaScript only>
 
+For CSS_APPEND, do not repeat, replace, normalize, or omit the existing stylesheet. Return only narrowly scoped additions or overrides; they will be appended to the intact current CSS.
+For BODY or JAVASCRIPT, return the complete artifact and copy every unaffected part without simplification.
 Do not return Markdown fences, explanations, multiple artifacts, or a full HTML document.`,
     6144,
     input.signal,
@@ -702,7 +712,9 @@ ${truncate(css, 6000)}
 JavaScript excerpt:
 ${truncate(js, 3500)}
 
-Check that the visible layout has styling, images cannot render as broken icons, and required controls have matching ids. If the supplied requirements include a game, also check that it has real event logic. If the JavaScript contains continuous animation, also check that it uses one bounded loop, targets no more than 30 FPS, pauses work while document.hidden, and does not grow particle/history collections without a cap.
+Check that the visible layout has complete styling, clear hierarchy, readable contrast, intentional spacing, coherent typography and color, and a distinctive visual direction appropriate to the Creator's concept. Reject generic unstyled layouts, repetitive default card grids, accidental visual flattening, or a loss of the existing App's design language.
+Rich static visual detail is compatible with the performance contract and must not be rejected merely for using gradients, textures, layered backgrounds, borders, moderate shadows, or localized glow.
+Images cannot render as broken icons, and required controls must have matching ids. If the supplied requirements include a game, also check that it has real event logic. If the JavaScript contains continuous animation, also check that it uses one bounded loop, targets no more than 30 FPS, pauses work while document.hidden, and does not grow particle/history collections without a cap.
 Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwise "FAIL: concrete blocking reason".`,
     2048,
     input.signal,
@@ -749,11 +761,14 @@ Current HTML excerpt:
 ${truncate(input.currentCode || '', 18000)}
 
 Mandatory performance contract:
+- These are implementation constraints, not a request for a plain, minimal, flat, or neutral visual style. Preserve or create a rich, distinctive, concept-driven art direction.
+- Static gradients, textures, layered backgrounds, borders, typography, moderate shadows, localized glow, and other non-looping visual detail are welcome when they support the concept.
 - Any continuous animation must target at most 30 FPS and use one bounded requestAnimationFrame loop rather than overlapping loops.
 - Pause animation work while document.hidden is true and resume safely when visible again.
 - Keep particle, trail, object, and history collections explicitly bounded; reuse objects instead of allocating large collections every frame.
 - For Canvas/WebGL, cap rendering density to Math.min(window.devicePixelRatio || 1, 1.5) and resize only when dimensions change.
-- Avoid expensive blur, shadow, backdrop-filter, layout reads, DOM creation, and event-listener registration inside animation frames.
+- Avoid repeatedly animating large-area blur, filter, backdrop-filter, box-shadow, or layout-affecting properties. Local static effects and lightweight transform/opacity animation are allowed.
+- Avoid layout reads, DOM creation, and event-listener registration inside animation frames.
 - Preserve ordinary clicks, forms, keyboard controls, timers, and non-animation interactions.`;
 
   const repairNotes: string[] = [];
@@ -765,9 +780,9 @@ Mandatory performance contract:
 
 Create a compact implementation plan for a self-contained web prototype.
 Plan only work required by the Creator request, selected ideas, approved fusion plan, or existing functionality.
-Do not introduce product features, themes, copy, branding, games, controls, or interactions that were not supplied in those sources.
+Do not introduce unrelated product features, copy, branding, games, controls, or interactions that were not supplied in those sources. A visual interpretation derived from the supplied subject and emotional tone is required and is not an unrelated feature or theme.
 For an existing App, list only the explicitly requested scoped edits and identify the existing parts that must remain unchanged.
-When details are underspecified, choose the smallest neutral implementation rather than inventing content or product claims.
+When visual details are underspecified, derive a cohesive and distinctive art direction from the Creator's subject, wording, and emotional tone. Do not fall back to a generic dashboard, generic card grid, or plain neutral template. Still avoid inventing unsupported product claims or unrelated features.
 If a mini-game is requested, define its exact state, controls, win condition, and DOM ids.
 Only when the supplied requirements or existing HTML require real images, specify a concrete Wikimedia Commons search phrase and meaningful fallback text for each required image.
 Do not plan Tailwind, Bootstrap, external CSS frameworks, or invented image URLs.
@@ -873,10 +888,12 @@ Generate CSS ONLY. No <style> tag.
 Create complete self-contained CSS for this exact body. Define a visible rule for every class used in the HTML.
 Preserve the existing visual system and styling of all elements not explicitly targeted by the new request.
 Do not use Tailwind, Bootstrap, @import, external stylesheets, or remote background-image URLs.
-Preserve any visual direction explicitly supplied by the Creator, selected ideas, fusion plan, or current HTML. If none is supplied, use restrained neutral styling only for readability, layout, usability, and responsive behavior.
+Preserve any visual direction explicitly supplied by the Creator, selected ideas, fusion plan, or current HTML.
+For a new App without an explicit style reference, infer a distinctive, polished visual language from the subject and emotional tone. Establish intentional typography, hierarchy, spacing, palette, depth, and one or two memorable concept-specific visual motifs. Avoid generic SaaS dashboards, repetitive card grids, default gradients, and plain neutral templates unless explicitly requested.
+Visual richness and performance are compatible: favor static gradients, layered backgrounds, textures, borders, moderate shadows, localized glow, and carefully limited transform/opacity motion. Only avoid continuously animated large-area blur/filter/shadow effects and excessive animated object counts.
 Include .agent-toast and .agent-toast.show styles.
-Keep continuous decorative animation lightweight. Do not animate large blur, filter, backdrop-filter, box-shadow, or layout-affecting properties across many elements.
-Keep CSS under 320 lines.`,
+Keep continuous decorative animation lightweight and purposeful.
+Keep CSS under 420 lines.`,
     6144,
     input.signal,
     input.apiKey,
@@ -885,7 +902,7 @@ Keep CSS under 320 lines.`,
   let inspection = inspectAgentArtifacts(body, css);
   if (inspection.coverage < 0.9 || inspection.missingClasses.length > 4) {
     progress({ step: 'styles', order: 4, status: 'running', title: '正在补全遗漏的视觉样式', detail: `自动检查发现 ${inspection.missingClasses.length} 个界面样式尚未覆盖，AI 正在修复。` });
-    css = cleanCss(await runAgentTextStep(
+    const cssCoverageAdditions = cleanCss(await runAgentTextStep(
       input.provider,
       '3b/4 CSS coverage repair',
       `${context}
@@ -899,12 +916,15 @@ ${truncate(css, 10000)}
 Deterministic validation found ${inspection.missingClasses.length} unstyled classes and ${Math.round(inspection.coverage * 100)}% coverage.
 Missing classes: ${inspection.missingClasses.join(', ')}
 
-Generate replacement CSS ONLY, with no style tag. Define every HTML class, preserve only the visual direction present in the supplied requirements or existing project, include required responsive states, and include .agent-toast plus .agent-toast.show. Do not use any external framework or remote background image, and do not introduce a new visual theme.`,
+Generate CSS ADDITIONS ONLY, with no style tag. Add narrowly scoped rules for the missing classes and required responsive states.
+Do not repeat, replace, simplify, normalize, or omit any rule from the first CSS attempt; it remains intact and your additions will be appended to it.
+Match its exact visual language, typography, palette, spacing, depth, and component treatment. Include .agent-toast or .agent-toast.show only if either is missing. Do not use any external framework or remote background image, and do not introduce a new visual theme.`,
       6144,
       input.signal,
       input.apiKey,
     ));
-    repairNotes.push(`Agent regenerated CSS after detecting ${inspection.missingClasses.length} unstyled HTML classes.`);
+    css = appendAgentCss(css, cssCoverageAdditions);
+    repairNotes.push(`Agent appended CSS coverage for ${inspection.missingClasses.length} unstyled HTML classes without replacing the visual design.`);
     inspection = inspectAgentArtifacts(body, css);
   }
 
@@ -958,7 +978,7 @@ Keep JavaScript under 260 lines.`,
       title: '正在补全交互状态样式',
       detail: `检查发现 ${interactionInspection.missingStateClasses.length} 个 JavaScript 状态缺少可见样式，AI 正在修复。`,
     });
-    css = cleanCss(await runAgentTextStep(
+    const interactionCssAdditions = cleanCss(await runAgentTextStep(
       input.provider,
       '4b/4 interaction state CSS repair',
       `${context}
@@ -975,19 +995,20 @@ ${truncate(js, 8000)}
 Deterministic validation found JavaScript-applied state classes with no matching CSS:
 ${interactionInspection.missingStateClasses.join(', ')}
 
-Generate replacement CSS ONLY, with no style tag.
-Preserve the complete current visual design and every existing HTML class rule.
-Add clearly visible styling for every missing JavaScript state class, using the exact class names from the JavaScript.
+Generate CSS ADDITIONS ONLY, with no style tag.
+The complete current CSS remains intact. Do not repeat, replace, simplify, normalize, or omit existing rules.
+Add narrowly scoped, clearly visible styling for every missing JavaScript state class, using the exact class names from the JavaScript and matching the current visual design.
 Selected, correct, wrong, active, disabled, revealed, and completed states must be visibly distinguishable where present.
 Keep .agent-toast and .agent-toast.show. Do not use external frameworks, @import, or remote background images.`,
       6144,
       input.signal,
       input.apiKey,
     ));
+    css = appendAgentCss(css, interactionCssAdditions);
     css = await resolveCssImageAssets(css, imageReport);
     inspection = inspectAgentArtifacts(body, css);
     interactionInspection = inspectAgentInteractionStyles(js, css);
-    repairNotes.push('Agent regenerated CSS to cover JavaScript-applied interaction state classes.');
+    repairNotes.push('Agent appended CSS for JavaScript-applied interaction state classes without replacing the visual design.');
   }
   if (interactionInspection.missingStateClasses.length > 0) {
     repairNotes.push(
@@ -1099,8 +1120,8 @@ Image assets: ${imageReport.preserved} preserved, ${imageReport.replaced} replac
         const repairedImages = await resolveBodyImageAssets(body);
         body = repairedImages.body;
         imageReport = repairedImages.report;
-      } else if (correction.artifact === 'css') {
-        css = cleanCss(correction.content);
+      } else if (correction.artifact === 'css-append') {
+        css = appendAgentCss(css, cleanCss(correction.content));
         css = await resolveCssImageAssets(css, imageReport);
       } else {
         js = cleanJs(correction.content);
