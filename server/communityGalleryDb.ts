@@ -3819,10 +3819,18 @@ export function deleteOwnInitialApp(clientId: string, appId: string) {
   const { viewer, app } = ownedApp(clientId, appId);
   const currentStudy = study();
   const workspace = workspaceState(currentStudy.id, Number(viewer.isTest));
-  if (workspace.status !== 'setup' || appFlowStage(app) !== 'round_1') {
-    throw new Error('评论流程开始后不能删除已发布的应用。');
+  const flowStage = appFlowStage(app);
+  const draft = db.prepare(`
+    SELECT app_id FROM vg_async_drafts WHERE study_id = ? AND app_id = ? AND kind = 'initial'
+  `).get(currentStudy.id, app.id) as { app_id?: string } | undefined;
+  const isUnpublishedDraft = !app.initial_version_id
+    && app.status === 'draft'
+    && flowStage === 'waiting_round_1'
+    && Boolean(draft?.app_id);
+  const isPublishedInitial = Boolean(app.initial_version_id) && flowStage === 'round_1';
+  if (workspace.status !== 'setup' || (!isUnpublishedDraft && !isPublishedInitial)) {
+    throw new Error('评论流程开始后不能删除当前项目。');
   }
-  if (!app.initial_version_id) throw new Error('当前没有已发布的应用可以删除。');
   const runningTaskCount = Number((db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM vg_async_creator_operations
@@ -3896,10 +3904,17 @@ export function deleteOwnInitialApp(clientId: string, appId: string) {
       .run(currentStudy.id, app.id);
   });
   transaction();
-  recordEvent(viewer.code, 'delete_own_initial_app', 'participant', viewer.code, {
-    deletedAppId: app.id,
-    deletedAppTitle: app.title,
-  });
+  recordEvent(
+    viewer.code,
+    isUnpublishedDraft ? 'delete_own_initial_draft' : 'delete_own_initial_app',
+    'participant',
+    viewer.code,
+    {
+      deletedAppId: app.id,
+      deletedAppTitle: app.title,
+      deletedDraftOnly: isUnpublishedDraft,
+    },
+  );
   return getCommunityGalleryState(clientId);
 }
 

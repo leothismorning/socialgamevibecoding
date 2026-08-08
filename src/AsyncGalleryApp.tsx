@@ -716,6 +716,26 @@ function InitialCreatorStudio({
     }));
   };
 
+  const deleteCurrentDraft = async () => {
+    if (!ownApp?.id) return;
+    if (!window.confirm(
+      `确认删除当前未发布项目“${ownApp.title}”吗？草稿、修改记录和当前项目都会被清除，删除后可以重新创建。`,
+    )) return;
+    let deleted = false;
+    await action('delete-current-draft', async () => {
+      const next = await communityGalleryApi.deleteInitialApp(clientId, ownApp.id);
+      deleted = true;
+      return next;
+    });
+    if (!deleted) return;
+    loaded.current = '';
+    setTitle('');
+    setBrief('');
+    setPrompt('');
+    setRevision('');
+    setDevelopmentProgress(null);
+  };
+
   return (
     <section className="async-studio">
       <header>
@@ -845,6 +865,15 @@ function InitialCreatorStudio({
                 <span><CheckCircle2 /> 可运行草稿已生成</span>
                 <strong>{ownApp.title}</strong>
                 <p>{ownApp.brief || '你可以在右侧试玩，并继续告诉 AI 怎样修改。'}</p>
+              </div>
+              <div className="async-draft-reset-row">
+                <span><strong>想重新开始？</strong><small>清除当前未发布草稿和修改记录，回到初始创建界面。</small></span>
+                <button
+                  type="button"
+                  className="async-delete-initial-app"
+                  disabled={Boolean(busy) || isDeveloping}
+                  onClick={() => void deleteCurrentDraft()}
+                ><Trash2 /> {busy === 'delete-current-draft' ? '正在删除…' : '删除当前项目并重新开发'}</button>
               </div>
               <section className="async-creator-chat">
                 <header>

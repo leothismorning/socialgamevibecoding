@@ -32,7 +32,7 @@ assert.throws(
   /先选择|身份/,
 );
 
-for (const account of [1, 2, 3, 4, 5]) {
+for (const account of [1, 2, 3, 4, 5, 6]) {
   const creatorState = gallery.joinCommunityGallery(client(account), String(account), String(account));
   assert.equal(creatorState.viewer?.code, `C${String(account).padStart(2, '0')}`);
   assert.equal(Number(creatorState.viewer?.isTest), account <= 2 ? 1 : 0);
@@ -79,6 +79,23 @@ publishInitial(2, 'Test App Two');
 publishInitial(3, 'Regular App Three');
 publishInitial(4, 'Regular App Four');
 publishInitial(5, 'Temporary App Five');
+
+state = gallery.saveInitialDraft({
+  clientId: client(6),
+  title: 'Disposable Draft Six',
+  brief: 'Unpublished draft deletion test',
+  prompt: 'Build a disposable draft',
+  code: html('Disposable Draft Six'),
+  summary: 'Draft only',
+});
+const disposableDraft = state.apps.find((app: any) => app.creator_code === 'C06');
+assert.ok(disposableDraft);
+assert.equal(disposableDraft.initial_version_id, null);
+assert.equal(disposableDraft.flow_stage, 'waiting_round_1');
+assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_drafts WHERE app_id = ?`).get(disposableDraft.id) as { count: number }).count), 1);
+state = gallery.deleteOwnInitialApp(client(6), disposableDraft.id);
+assert.equal(state.apps.some((app: any) => app.id === disposableDraft.id), false);
+assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_drafts WHERE app_id = ?`).get(disposableDraft.id) as { count: number }).count), 0);
 
 const hostState = gallery.getCommunityGalleryState(hostClient);
 const testApp = hostState.apps.find((app: any) => app.creator_code === 'C01');
