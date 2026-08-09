@@ -99,8 +99,8 @@ export class DevelopmentChannelPool {
   }
 
   private availableSlot() {
-    return this.slots.find((slot) => slot.provider === 'gpt5' && !slot.busy)
-      || this.slots.find((slot) => slot.provider === 'deepseek' && !slot.busy);
+    return this.slots.find((slot) => slot.provider === 'deepseek' && !slot.busy)
+      || this.slots.find((slot) => slot.provider === 'gpt5' && !slot.busy);
   }
 
   private createLease(slot: ChannelSlot): DevelopmentChannelLease {

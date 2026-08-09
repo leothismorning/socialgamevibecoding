@@ -100,7 +100,7 @@ function queuedKeyProgress(snapshot: DevelopmentChannelQueueSnapshot): Developme
     order: 0,
     status: 'pending',
     title: `正在排队等待可用 AI 通道 · 第 ${snapshot.position} 位`,
-    detail: `GPT ${snapshot.gptActive}/${snapshot.gptCapacity}、DeepSeek ${snapshot.deepSeekActive}/${snapshot.deepSeekCapacity} 个通道正在使用。轮到你后会自动开始，无需重复点击。`,
+    detail: `DeepSeek ${snapshot.deepSeekActive}/${snapshot.deepSeekCapacity}、随想 GPT ${snapshot.gptActive}/${snapshot.gptCapacity} 个通道正在使用。轮到你后会自动开始，无需重复点击。`,
   };
 }
 
@@ -113,11 +113,11 @@ function acquiredKeyProgress(
     order: 0,
     status: 'completed',
     title: usingDeepSeek
-      ? 'GPT 通道繁忙，已自动切换 DeepSeek'
-      : '已获得 GPT 通道，正在开始开发',
+      ? '已获得 DeepSeek 通道，正在开始开发'
+      : 'DeepSeek 通道繁忙，已自动切换随想 GPT',
     detail: usingDeepSeek
       ? '本轮将由 DeepSeek V4 Flash 完成，并保留在开发进度记录中。'
-      : `当前 ${snapshot.gptActive} / ${snapshot.gptCapacity} 个 GPT 通道正在使用。`,
+      : '三个 DeepSeek 通道当前均在使用，本轮将由随想 GPT 完成。',
   };
 }
 

@@ -28,14 +28,14 @@ assert.deepEqual(pool.stats(), {
   deepSeekCapacity: 3,
 });
 
-const gpt = await pool.acquire();
 const firstDeepSeek = await pool.acquire();
 const secondDeepSeek = await pool.acquire();
 const thirdDeepSeek = await pool.acquire();
-assert.equal(gpt.provider, 'gpt5');
+const gpt = await pool.acquire();
 assert.equal(firstDeepSeek.provider, 'deepseek');
 assert.equal(secondDeepSeek.provider, 'deepseek');
 assert.equal(thirdDeepSeek.provider, 'deepseek');
+assert.equal(gpt.provider, 'gpt5');
 assert.deepEqual(pool.stats(), {
   waiting: 0,
   active: 4,
@@ -87,4 +87,4 @@ assert.deepEqual(pool.stats(), {
   deepSeekCapacity: 3,
 });
 
-console.log('One-GPT, three-DeepSeek, FIFO development channel tests passed');
+console.log('DeepSeek-first, Sui-Xiang-GPT-fallback, FIFO development channel tests passed');
