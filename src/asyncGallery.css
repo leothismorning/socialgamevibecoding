@@ -411,6 +411,9 @@
 .async-app-card.tone-2 .async-version-preview { grid-template-rows: 27px 220px; }
 .async-version-preview > span { display: grid; place-items: center; color: #607087; background: #f8fafc; font-size: 7px; font-weight: 900; }
 .async-preview { width: 100%; height: 100%; display: block; border: 0; background: #fff; }
+.async-interactive-preview { position: relative; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+.async-preview-loading { position: absolute; z-index: 2; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; color: #6552b9; background: rgba(248, 250, 255, .96); font-size: 12px; font-weight: 850; }
+.async-preview-loading svg { width: 24px; height: 24px; }
 .async-preview.is-compact { display: grid; overflow: hidden; pointer-events: none; }
 .async-preview.is-compact > iframe { width: 100%; height: 100%; border: 0; background: #fff; }
 .async-preview-suspended { display: grid; place-content: center; justify-items: center; gap: 7px; color: #8290a4; background: linear-gradient(145deg, #f8fafc, #eaf0f7); font-size: 8px; font-weight: 850; text-align: center; }

@@ -214,6 +214,8 @@ function AppPreview({
 }) {
   const compactContainerRef = useRef<HTMLDivElement>(null);
   const [compactActive, setCompactActive] = useState(!compact);
+  const [loadedInteractiveUrl, setLoadedInteractiveUrl] = useState('');
+  const revealFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!compact) {
@@ -240,6 +242,13 @@ function AppPreview({
     versionId,
     compact ? 'thumbnail' : 'interactive',
   );
+  const interactiveReady = loadedInteractiveUrl === previewUrl;
+
+  useEffect(() => () => {
+    if (revealFrameRef.current != null) {
+      window.cancelAnimationFrame(revealFrameRef.current);
+    }
+  }, []);
 
   if (compact) {
     return (
@@ -252,12 +261,29 @@ function AppPreview({
   }
 
   return (
-    <iframe
-      className="async-preview"
-      title={title}
-      src={previewUrl}
-      sandbox="allow-scripts allow-forms allow-modals"
-    />
+    <div className="async-interactive-preview" aria-busy={!interactiveReady}>
+      <iframe
+        className="async-preview"
+        title={title}
+        src={previewUrl}
+        sandbox="allow-scripts allow-forms allow-modals"
+        onLoad={() => {
+          if (revealFrameRef.current != null) {
+            window.cancelAnimationFrame(revealFrameRef.current);
+          }
+          revealFrameRef.current = window.requestAnimationFrame(() => {
+            revealFrameRef.current = null;
+            setLoadedInteractiveUrl(previewUrl);
+          });
+        }}
+      />
+      {!interactiveReady && (
+        <div className="async-preview-loading" role="status">
+          <LoaderCircle className="spin" />
+          <span>作品加载中</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -821,7 +847,7 @@ function InitialCreatorStudio({
             <>
               <label>应用名称<input value={title} disabled={isDeveloping} onChange={(event) => setTitle(event.target.value)} /></label>
               <label>一句话简介<input value={brief} disabled={isDeveloping} onChange={(event) => setBrief(event.target.value)} /></label>
-              <label>创作提示<textarea value={prompt} disabled={isDeveloping} onChange={(event) => setPrompt(event.target.value)} rows={5} /></label>
+              <label>创作提示词<textarea value={prompt} disabled={isDeveloping} onChange={(event) => setPrompt(event.target.value)} rows={5} /></label>
               <div className="async-button-row">
                 <button
                   className="async-primary"
