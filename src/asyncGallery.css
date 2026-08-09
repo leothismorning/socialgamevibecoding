@@ -443,6 +443,12 @@
 .async-detail-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 25px; margin-bottom: 16px; }
 .async-detail-heading h1 { margin: 7px 0 6px; font-size: clamp(30px, 4vw, 48px); letter-spacing: -.05em; }
 .async-detail-heading p { margin: 0; color: var(--muted); font-size: 11px; }
+.async-detail-version-actions { flex: 0 0 auto; display: grid; justify-items: end; gap: 8px; }
+.async-detail-like { min-height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; color: #c13a70; border: 1px solid #f0ccda; border-radius: 10px; background: #fff8fb; font-size: 9px; font-weight: 900; cursor: pointer; box-shadow: 0 5px 15px rgba(193, 58, 112, .08); }
+.async-detail-like svg { width: 15px; }
+.async-detail-like strong { min-width: 18px; padding-left: 7px; border-left: 1px solid currentColor; text-align: center; }
+.async-detail-like.is-liked { color: #fff; border-color: #df3b7c; background: #df3b7c; }
+.async-detail-like:disabled { cursor: not-allowed; opacity: .48; }
 .async-version-tabs { display: flex; gap: 5px; padding: 4px; border-radius: 11px; background: #edf1f6; }
 .async-version-tabs button { min-height: 34px; padding: 0 11px; color: #6a788d; border: 0; border-radius: 8px; background: transparent; font-size: 8px; font-weight: 900; cursor: pointer; }
 .async-version-tabs button.is-active { color: #fff; background: #182a49; box-shadow: 0 5px 14px rgba(24, 42, 73, .18); }
@@ -1587,6 +1593,8 @@
   .async-flow-legend { gap: 9px 12px; padding: 11px 14px; }
   .async-version-tabs { width: 100%; }
   .async-version-tabs button { flex: 1; }
+  .async-detail-version-actions { width: 100%; justify-items: stretch; }
+  .async-detail-like { justify-content: center; }
   .async-base-version-picker { grid-template-columns: 1fr; }
   .async-fireworks > section { padding: 24px 18px; }
   .async-fireworks > section h2 { font-size: 22px; }

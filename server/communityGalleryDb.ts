@@ -2683,7 +2683,8 @@ export function toggleCommunityCommentLike(clientId: string, commentId: number) 
 export function toggleCommunityAppLike(clientId: string, appId: string) {
   const viewer = requireParticipant(clientId);
   const { app } = accessibleApp(clientId, appId);
-  requireAppRoundOpen(app);
+  requireOpenStudy(Number(app.is_test));
+  if (app.status !== 'published') throw new Error('只能点赞已经发布的应用。');
   if (app.creator_code === viewer.code) throw new Error('不能点赞自己的应用。');
   const exists = db.prepare(`
     SELECT 1 FROM vg_async_app_likes

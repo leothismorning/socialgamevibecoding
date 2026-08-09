@@ -1057,7 +1057,8 @@ function GalleryVersionCard({
     ? contributorCodesForIteration(state, app.id, Number(app.community_version_count || 0))
     : [];
   const canLike = state.viewer?.role !== 'host'
-    && state.viewer?.code !== app.creator_code && isAppRoundOpen(app);
+    && state.viewer?.code !== app.creator_code
+    && state.study.status !== 'closed';
   return (
     <article
       className={`async-app-card tone-${index % 3}`}
@@ -1127,8 +1128,8 @@ function GalleryVersionCard({
               className={app.viewer_liked ? 'async-social-button is-liked' : 'async-social-button'}
               disabled={!canLike}
               onClick={like}
-              title={canLike ? '表达喜欢，不参与版本选择' : '当前 App 未开放互动，或不能点赞自己的应用'}
-            ><Heart /> {app.like_count}</button>
+              title={canLike ? '给作品点赞，可随时取消' : '主持人不能点赞、不能点赞自己的作品，研究结束后内容只读'}
+            ><Heart /> {app.viewer_liked ? '已点赞' : '点赞'} {app.like_count}</button>
             <span><MessageCircle /> {app.comment_count}</span>
             <span><Lightbulb /> {app.synthesis_count}</span>
           </div>
@@ -3730,6 +3731,10 @@ function AppDetail({
   ) || latestVersion;
   const [sourceSynthesis, setSourceSynthesis] = useState<CommunitySynthesis | null>(null);
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
+  const canLikeApp = state.viewer?.role !== 'host'
+    && !isOwner
+    && state.study.status !== 'closed';
+  const appLikeBusy = busy === `like-app-${app.id}`;
   const assignment = state.assignments.find((item) => item.app_id === app.id);
   const trackedAppDetailRef = useRef('');
   const lastTrackedVersionRef = useRef(0);
@@ -3801,18 +3806,35 @@ function AppDetail({
           <h1>{app.title}</h1>
           <p>{app.brief}</p>
         </div>
-        <div className="async-version-tabs">
-          {appVersions.map((version) => (
-            <button
-              key={version.id}
-              className={viewVersionId === version.id ? 'is-active' : ''}
-              onClick={() => setViewVersionId(version.id)}
-            >
-              {version.kind === 'initial'
-                ? '初始版本'
-                : `社区版本 ${version.version_number - 1}`}
-            </button>
-          ))}
+        <div className="async-detail-version-actions">
+          <button
+            className={app.viewer_liked ? 'async-detail-like is-liked' : 'async-detail-like'}
+            disabled={!canLikeApp || appLikeBusy}
+            onClick={() => void action(
+              `like-app-${app.id}`,
+              () => communityGalleryApi.likeApp(clientId, app.id),
+            )}
+            title={canLikeApp
+              ? '给整个作品点赞；所有版本和首页共享同一个点赞数'
+              : '主持人不能点赞、不能点赞自己的作品，研究结束后内容只读'}
+          >
+            <Heart fill={app.viewer_liked ? 'currentColor' : 'none'} />
+            <span>{app.viewer_liked ? '已点赞' : '点赞作品'}</span>
+            <strong>{app.like_count}</strong>
+          </button>
+          <div className="async-version-tabs">
+            {appVersions.map((version) => (
+              <button
+                key={version.id}
+                className={viewVersionId === version.id ? 'is-active' : ''}
+                onClick={() => setViewVersionId(version.id)}
+              >
+                {version.kind === 'initial'
+                  ? '初始版本'
+                  : `社区版本 ${version.version_number - 1}`}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
       <div className="async-detail-preview">

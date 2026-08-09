@@ -115,6 +115,31 @@ assert.equal(Number(regularApp.is_test), 0);
 assert.equal(testApp.flow_stage, 'round_1');
 assert.equal(regularApp.flow_stage, 'round_1');
 
+const publishedVersionsBeforeLike = db.prepare(`
+  SELECT id, app_id, version_number, kind, code
+  FROM vg_async_versions WHERE study_id = ? ORDER BY id
+`).all(hostState.study.id);
+state = gallery.toggleCommunityAppLike(client(2), testApp.id);
+let likedTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(Number(likedTestApp.like_count), 1);
+assert.equal(Number(likedTestApp.viewer_liked), 1);
+state = gallery.toggleCommunityAppLike(client(2), testApp.id);
+likedTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(Number(likedTestApp.like_count), 0);
+assert.equal(Number(likedTestApp.viewer_liked), 0);
+assert.throws(
+  () => gallery.toggleCommunityAppLike(client(1), testApp.id),
+  /不能点赞自己的应用/,
+);
+assert.deepEqual(
+  db.prepare(`
+    SELECT id, app_id, version_number, kind, code
+    FROM vg_async_versions WHERE study_id = ? ORDER BY id
+  `).all(hostState.study.id),
+  publishedVersionsBeforeLike,
+  'liking and unliking an App must never modify or remove a published version or its HTML',
+);
+
 const regularInitialVersion = hostState.versions.find(
   (version: any) => version.app_id === regularApp.id && version.kind === 'initial',
 );
@@ -200,6 +225,10 @@ assert.equal(Number(currentTestApp.current_round_comment_count), 1);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 1);
 let startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 1, true, [testApp.id]);
 assert.equal(startedDevelopment.jobIds.length, 1);
+state = gallery.toggleCommunityAppLike(client(2), testApp.id);
+likedTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(Number(likedTestApp.like_count), 1);
+assert.equal(Number(likedTestApp.viewer_liked), 1);
 gallery.failCommunityGeneration(startedDevelopment.jobIds[0], new Error('simulated generation failure'));
 let restartedDevelopment = gallery.retryLatestCommunityGenerations(hostClient, [testApp.id]);
 assert.equal(restartedDevelopment.jobIds.length, 1);
