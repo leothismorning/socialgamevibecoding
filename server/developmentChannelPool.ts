@@ -29,7 +29,10 @@ type ChannelSlot = {
 type QueueWaiter = {
   resolve: (lease: DevelopmentChannelLease) => void;
   onQueued?: (snapshot: DevelopmentChannelQueueSnapshot) => void;
+  providerOrder: DevelopmentChannelProvider[];
 };
+
+const DEFAULT_PROVIDER_ORDER: DevelopmentChannelProvider[] = ['deepseek', 'gpt5'];
 
 function uniqueKeys(values: Array<string | undefined>) {
   return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
@@ -86,21 +89,28 @@ export class DevelopmentChannelPool {
     };
   }
 
-  acquire(onQueued?: (snapshot: DevelopmentChannelQueueSnapshot) => void) {
-    if (!this.slots.length) {
-      return Promise.reject(new Error('No GPT or DeepSeek development API key is configured on the server.'));
+  acquire(
+    onQueued?: (snapshot: DevelopmentChannelQueueSnapshot) => void,
+    providerOrder: DevelopmentChannelProvider[] = DEFAULT_PROVIDER_ORDER,
+  ) {
+    const allowedProviders = [...new Set(providerOrder)];
+    if (!this.slots.some((slot) => allowedProviders.includes(slot.provider))) {
+      return Promise.reject(new Error('No requested development API channel is configured on the server.'));
     }
-    const available = this.availableSlot();
+    const available = this.availableSlot(allowedProviders);
     if (available) return Promise.resolve(this.createLease(available));
     return new Promise<DevelopmentChannelLease>((resolve) => {
-      this.waiters.push({ resolve, onQueued });
+      this.waiters.push({ resolve, onQueued, providerOrder: allowedProviders });
       this.notifyQueue();
     });
   }
 
-  private availableSlot() {
-    return this.slots.find((slot) => slot.provider === 'deepseek' && !slot.busy)
-      || this.slots.find((slot) => slot.provider === 'gpt5' && !slot.busy);
+  private availableSlot(providerOrder: DevelopmentChannelProvider[] = DEFAULT_PROVIDER_ORDER) {
+    for (const provider of providerOrder) {
+      const slot = this.slots.find((candidate) => candidate.provider === provider && !candidate.busy);
+      if (slot) return slot;
+    }
+    return undefined;
   }
 
   private createLease(slot: ChannelSlot): DevelopmentChannelLease {
@@ -120,9 +130,12 @@ export class DevelopmentChannelPool {
 
   private dispatch() {
     while (this.waiters.length) {
-      const available = this.availableSlot();
+      const waiterIndex = this.waiters.findIndex((waiter) => Boolean(this.availableSlot(waiter.providerOrder)));
+      if (waiterIndex < 0) break;
+      const waiter = this.waiters.splice(waiterIndex, 1)[0];
+      const available = this.availableSlot(waiter.providerOrder);
       if (!available) break;
-      this.waiters.shift()!.resolve(this.createLease(available));
+      waiter.resolve(this.createLease(available));
     }
     this.notifyQueue();
   }
@@ -154,13 +167,14 @@ export async function withDevelopmentChannel<T>(
   task: (lease: DevelopmentChannelLease) => Promise<T>,
   options: {
     onQueued?: (snapshot: DevelopmentChannelQueueSnapshot) => void;
+    providerOrder?: DevelopmentChannelProvider[];
     onAcquired?: (
       snapshot: DevelopmentChannelStats & { provider: DevelopmentChannelProvider },
     ) => void;
   } = {},
 ) {
   const pool = getDevelopmentChannelPool();
-  const lease = await pool.acquire(options.onQueued);
+  const lease = await pool.acquire(options.onQueued, options.providerOrder);
   options.onAcquired?.({ ...pool.stats(), provider: lease.provider });
   try {
     return await task(lease);

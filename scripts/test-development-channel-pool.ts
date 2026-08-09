@@ -87,4 +87,15 @@ assert.deepEqual(pool.stats(), {
   deepSeekCapacity: 3,
 });
 
+const fallbackPool = new DevelopmentChannelPool(
+  ['gpt-fallback'],
+  ['deepseek-primary'],
+);
+const primaryLease = await fallbackPool.acquire();
+assert.equal(primaryLease.provider, 'deepseek');
+const fallbackLease = await fallbackPool.acquire(undefined, ['gpt5']);
+assert.equal(fallbackLease.provider, 'gpt5');
+primaryLease.release();
+fallbackLease.release();
+
 console.log('DeepSeek-first, Sui-Xiang-GPT-fallback, FIFO development channel tests passed');

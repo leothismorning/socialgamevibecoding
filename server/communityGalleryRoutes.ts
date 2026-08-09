@@ -67,6 +67,7 @@ import {
   type DevelopmentChannelStats,
   type DevelopmentChannelProvider,
 } from './developmentChannelPool.js';
+import { isDeepSeekRecoverableResponseError } from './deepseek.js';
 
 function sendError(res: Response, error: unknown) {
   const status = Number((error as any)?.status || 400);
@@ -126,17 +127,52 @@ async function runQueuedDevelopmentAgent(
   recordQueueProgress: (progress: DevelopmentAgentProgress) => void,
 ) {
   if (input.provider !== 'gpt5') return runDevelopmentAgent(input);
-  return withDevelopmentChannel(
-    (lease) => runDevelopmentAgent({
-      ...input,
-      provider: lease.provider,
-      apiKey: lease.apiKey,
-    }),
-    {
-      onQueued: (snapshot) => recordQueueProgress(queuedKeyProgress(snapshot)),
-      onAcquired: (snapshot) => recordQueueProgress(acquiredKeyProgress(snapshot)),
-    },
-  );
+  try {
+    return await withDevelopmentChannel(
+      (lease) => runDevelopmentAgent({
+        ...input,
+        provider: lease.provider,
+        apiKey: lease.apiKey,
+      }),
+      {
+        onQueued: (snapshot) => recordQueueProgress(queuedKeyProgress(snapshot)),
+        onAcquired: (snapshot) => recordQueueProgress(acquiredKeyProgress(snapshot)),
+      },
+    );
+  } catch (error) {
+    if (!isDeepSeekRecoverableResponseError(error)) throw error;
+    recordQueueProgress({
+      step: 'queue',
+      order: 0,
+      status: 'warning',
+      title: 'DeepSeek 连续返回异常，正在自动切换随想 GPT',
+      detail: '系统将自动重新开始本轮开发，无需再次点击重试。',
+    });
+    return withDevelopmentChannel(
+      (lease) => runDevelopmentAgent({
+        ...input,
+        provider: 'gpt5',
+        apiKey: lease.apiKey,
+      }),
+      {
+        providerOrder: ['gpt5'],
+        onQueued: (snapshot) => recordQueueProgress({
+          step: 'queue',
+          order: 0,
+          status: 'pending',
+          title: `正在等待随想 GPT 备用通道 · 第 ${snapshot.position} 位`,
+          detail: 'DeepSeek 已自动重试三次；轮到你后系统会继续开发，无需重复点击。',
+        }),
+        onAcquired: () => recordQueueProgress({
+          step: 'queue',
+          order: 0,
+          status: 'completed',
+          title: '已切换随想 GPT，正在重新开发',
+          detail: 'DeepSeek 的异常已被自动处理，本轮开发正在继续。',
+        }),
+      },
+    );
+  }
 }
 
 async function runCommunityGenerationJob(jobId: number) {
