@@ -114,6 +114,21 @@ assert.deepEqual(
 assert.deepEqual(repairedInteraction.inspection.missingStateClasses, []);
 assert.match(repairedInteraction.js, /classList\.add\('selected'\)/);
 assert.match(repairedInteraction.js, /classList\.toggle\(\"correct\", true\)/);
+const dynamicInteractionJs = `
+  wheel.className = 'wheel-' + finalId;
+  segment.classList.add(\`segment-\${index}\`);
+  option.setAttribute('class', 'option-' + selectedValue);
+  card.classList.add('active');
+`;
+assert.deepEqual(
+  inspectAgentInteractionStyles(dynamicInteractionJs, '.card.active { outline: 2px solid blue; }'),
+  {
+    usedStateClasses: ['active'],
+    missingStateClasses: [],
+    coverage: 1,
+  },
+  'dynamic class-name fragments must not be mistaken for complete unstyled CSS classes',
+);
 assert.equal(
   removePlatformOwnedAgentToast(`
     <main id="prototype"><button>开始</button></main>

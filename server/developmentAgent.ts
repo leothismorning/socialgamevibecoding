@@ -171,6 +171,12 @@ function extractJsStateClasses(js: string) {
   const values: string[] = [];
   const addQuotedValues = (source: string) => {
     for (const match of source.matchAll(/(["'`])([^"'`]+)\1/g)) {
+      const matchIndex = match.index || 0;
+      const before = source.slice(0, matchIndex).trimEnd();
+      const after = source.slice(matchIndex + match[0].length).trimStart();
+      const isConcatenatedFragment = before.endsWith('+') || after.startsWith('+');
+      const isInterpolatedTemplate = match[1] === '`' && match[2].includes('${');
+      if (isConcatenatedFragment || isInterpolatedTemplate) continue;
       values.push(...match[2].split(/\s+/).filter(Boolean));
     }
   };
