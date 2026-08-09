@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { db, getAIProvider } from './studyDb.js';
+import { db } from './studyDb.js';
 import type { DevelopmentAgentProgress } from './developmentAgent.js';
 
 export type CommunityRole = 'host' | 'creator';
@@ -4525,7 +4525,7 @@ export function getCommunityGalleryState(clientId = '') {
     notifications,
     developmentMessages,
     participants: participantRows,
-    aiProvider: getAIProvider(),
+    aiProvider: 'gpt5',
     counts: {
       creators: CREATOR_COUNT,
       regularApps: Number(publishedCounts.find((row) => Number(row.is_test) === 0)?.count || 0),

@@ -9,6 +9,7 @@ const projectRoot = path.resolve(serverDirectory, '..');
 // import time. Railway-provided process variables keep precedence by default.
 dotenv.config({
   path: [
+    path.join(projectRoot, '.env.fallback.local'),
     path.join(projectRoot, '.env.pool.local'),
     path.join(projectRoot, '.env.local'),
     path.join(projectRoot, '.env'),

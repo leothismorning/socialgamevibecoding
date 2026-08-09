@@ -73,7 +73,6 @@
 .async-brand small { color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .055em; }
 .async-header-actions { display: flex; align-items: center; gap: 9px; }
 .async-viewer,
-.async-model-control,
 .async-basket-button,
 .async-notification-button,
 .async-refresh {
@@ -86,9 +85,6 @@
 .async-viewer { min-width: 104px; display: grid; align-content: center; gap: 1px; padding: 0 14px; }
 .async-viewer span { color: var(--muted); font-size: 8px; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
 .async-viewer strong { font-size: 12px; text-transform: capitalize; }
-.async-model-control { display: flex; align-items: center; gap: 7px; padding: 0 12px; }
-.async-model-control svg { width: 17px; color: var(--violet); }
-.async-model-control select { max-width: 135px; color: var(--ink); border: 0; outline: 0; background: transparent; font-size: 11px; font-weight: 850; }
 .async-basket-button { display: flex; align-items: center; gap: 7px; padding: 0 12px; color: #5a3cc4 !important; cursor: pointer; }
 .async-basket-button svg { width: 17px; }
 .async-basket-button span { font-size: 10px; font-weight: 850; }
@@ -1532,8 +1528,7 @@
   .async-page-back { min-height: 40px; padding: 0 13px; border-radius: 12px; font-size: 10px; }
   .async-brand small,
   .async-viewer span,
-  .async-basket-button span,
-  .async-model-control { display: none; }
+  .async-basket-button span { display: none; }
   .async-brand > span { width: 38px; height: 38px; }
   .async-brand strong { font-size: 15px; }
   .async-viewer { min-width: 55px; padding: 0 9px; }

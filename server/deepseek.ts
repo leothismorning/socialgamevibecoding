@@ -11,6 +11,7 @@ type DeepSeekOptions = {
   systemPrompt?: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  apiKey?: string;
 };
 
 const ALLOWED_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
@@ -21,7 +22,7 @@ export async function generateWithDeepSeek(
   options: DeepSeekOptions = {},
 ): Promise<DeepSeekResult> {
   const startedAt = performance.now();
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = options.apiKey || process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
     throw new Error('DEEPSEEK_API_KEY is not configured on the server.');
   }

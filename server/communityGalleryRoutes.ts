@@ -62,10 +62,11 @@ import {
   type PreviewPerformanceMode,
 } from './previewPerformance.js';
 import {
-  withSuiXiangKey,
-  type SuiXiangQueueSnapshot,
-} from './suixiangKeyPool.js';
-import { getAIProvider, setAIProvider, type StudyAIProvider } from './studyDb.js';
+  withDevelopmentChannel,
+  type DevelopmentChannelQueueSnapshot,
+  type DevelopmentChannelStats,
+  type DevelopmentChannelProvider,
+} from './developmentChannelPool.js';
 
 function sendError(res: Response, error: unknown) {
   const status = Number((error as any)?.status || 400);
@@ -93,23 +94,30 @@ function initialCreatorProgress(progress: Parameters<typeof recordCreatorDevelop
   };
 }
 
-function queuedKeyProgress(snapshot: SuiXiangQueueSnapshot): DevelopmentAgentProgress {
+function queuedKeyProgress(snapshot: DevelopmentChannelQueueSnapshot): DevelopmentAgentProgress {
   return {
     step: 'queue',
     order: 0,
     status: 'pending',
     title: `正在排队等待可用 AI 通道 · 第 ${snapshot.position} 位`,
-    detail: `当前 ${snapshot.active} 个任务正在开发，共有 ${snapshot.capacity} 个可用通道。轮到你后会自动开始，无需重复点击。`,
+    detail: `GPT ${snapshot.gptActive}/${snapshot.gptCapacity}、DeepSeek ${snapshot.deepSeekActive}/${snapshot.deepSeekCapacity} 个通道正在使用。轮到你后会自动开始，无需重复点击。`,
   };
 }
 
-function acquiredKeyProgress(snapshot: Omit<SuiXiangQueueSnapshot, 'position'>): DevelopmentAgentProgress {
+function acquiredKeyProgress(
+  snapshot: DevelopmentChannelStats & { provider: DevelopmentChannelProvider },
+): DevelopmentAgentProgress {
+  const usingDeepSeek = snapshot.provider === 'deepseek';
   return {
     step: 'queue',
     order: 0,
     status: 'completed',
-    title: '已获得 AI 通道，正在开始开发',
-    detail: `当前 ${snapshot.active} / ${snapshot.capacity} 个通道正在使用。`,
+    title: usingDeepSeek
+      ? 'GPT 通道繁忙，已自动切换 DeepSeek'
+      : '已获得 GPT 通道，正在开始开发',
+    detail: usingDeepSeek
+      ? '本轮将由 DeepSeek V4 Flash 完成，并保留在开发进度记录中。'
+      : `当前 ${snapshot.gptActive} / ${snapshot.gptCapacity} 个 GPT 通道正在使用。`,
   };
 }
 
@@ -118,8 +126,12 @@ async function runQueuedDevelopmentAgent(
   recordQueueProgress: (progress: DevelopmentAgentProgress) => void,
 ) {
   if (input.provider !== 'gpt5') return runDevelopmentAgent(input);
-  return withSuiXiangKey(
-    (apiKey) => runDevelopmentAgent({ ...input, apiKey }),
+  return withDevelopmentChannel(
+    (lease) => runDevelopmentAgent({
+      ...input,
+      provider: lease.provider,
+      apiKey: lease.apiKey,
+    }),
     {
       onQueued: (snapshot) => recordQueueProgress(queuedKeyProgress(snapshot)),
       onAcquired: (snapshot) => recordQueueProgress(acquiredKeyProgress(snapshot)),
@@ -129,9 +141,8 @@ async function runQueuedDevelopmentAgent(
 
 async function runCommunityGenerationJob(jobId: number) {
   const input = getCommunityGenerationInput(jobId);
-  const provider = getAIProvider();
   const result = await runQueuedDevelopmentAgent({
-    provider,
+    provider: 'gpt5',
     experimentTitle: input.job.app_title,
     roundNumber: Number(input.job.iteration_number || 1),
     brief: input.job.app_brief,
@@ -232,18 +243,6 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
-  app.post('/api/community-gallery/model', (req, res) => {
-    try {
-      const state = getCommunityGalleryState(clientIdFrom(req));
-      if (state.viewer?.role !== 'host') throw new Error('只有主持人可以选择 AI 模型。');
-      if (state.study.status !== 'setup') throw new Error('研究开放后不能更换统一 AI 模型。');
-      setAIProvider(String(req.body?.provider || '') as StudyAIProvider);
-      res.json(getCommunityGalleryState(clientIdFrom(req)));
-    } catch (error) {
-      sendError(res, error);
-    }
-  });
-
   app.post('/api/community-gallery/apps/generate-initial', async (req, res) => {
     let operationId = '';
     let operationStarted = false;
@@ -259,9 +258,8 @@ export function registerCommunityGalleryRoutes(app: Express) {
       operationId = String(req.body?.operationId || randomUUID()).trim();
       startCreatorDevelopmentOperation(clientId, operationId, 'generate');
       operationStarted = true;
-      const provider = getAIProvider();
       const result = await runQueuedDevelopmentAgent({
-        provider,
+        provider: 'gpt5',
         experimentTitle: title,
         brief,
         creatorPrompt: prompt,
@@ -330,9 +328,8 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const operationPhase = context.messagePhase as 'initial' | 'community' | 'project';
       startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
       operationStarted = true;
-      const provider = getAIProvider();
       const result = await runQueuedDevelopmentAgent({
-        provider,
+        provider: 'gpt5',
         experimentTitle: context.app.title,
         brief: context.app.brief,
         creatorPrompt: context.app.creator_prompt,

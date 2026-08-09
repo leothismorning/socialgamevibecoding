@@ -4628,15 +4628,6 @@ export default function AsyncGalleryApp() {
           </button>
         </div>
         <div className="async-header-actions">
-          {state.viewer?.role === 'host' && (
-            <label className="async-model-control"><Bot /><select value={state.aiProvider} disabled={state.study.status !== 'setup' || Boolean(busy)} onChange={(event) => action('model', () => communityGalleryApi.model(clientId, event.target.value as CommunityGalleryState['aiProvider']))}>
-              <option value="gpt5">GPT-5.5</option>
-              <option value="deepseek">DeepSeek Flash</option>
-              <option value="deepseek-pro">DeepSeek Pro</option>
-              <option value="gemini">Gemini</option>
-              <option value="glm">GLM-5.2</option>
-            </select></label>
-          )}
           {canUseCreativeTools(state) && state.viewer?.role !== 'host' && (
             <button className="async-basket-button" onClick={() => setBasketOpen(true)}><ShoppingBasket /><span>收藏夹</span><strong>{state.basket.length}</strong></button>
           )}

@@ -27,11 +27,6 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, account, password }),
     }),
-  model: (clientId: string, provider: CommunityGalleryState['aiProvider']) =>
-    request('/api/community-gallery/model', {
-      method: 'POST',
-      body: body({ clientId, provider }),
-    }),
   generateInitial: (
     clientId: string,
     values: { title: string; brief: string; prompt: string; operationId: string },
