@@ -2139,6 +2139,16 @@ function IdeaFlowBoard({
   const targetSources = state.synthesisSources.filter(
     (source) => targetSynthesisIds.has(Number(source.synthesis_id)),
   );
+  const developmentBriefIds = new Set(
+    targetSyntheses
+      .filter((synthesis) => Boolean(synthesis.is_development_brief))
+      .map((synthesis) => Number(synthesis.id)),
+  );
+  const developmentSelectedSourceKeys = new Set(
+    targetSources
+      .filter((source) => developmentBriefIds.has(Number(source.synthesis_id)))
+      .map((source) => sourceKey(source.source_type, Number(source.source_id))),
+  );
   const usedSourceKeys = new Set(
     targetSources.map((source) => sourceKey(source.source_type, Number(source.source_id))),
   );
@@ -2329,7 +2339,9 @@ function IdeaFlowBoard({
   synthesisDiscussions.forEach((comments) => comments.sort(
     (left, right) => Date.parse(left.created_at) - Date.parse(right.created_at),
   ));
-  const synthesisNodes = targetSyntheses.map<StagedFlowNode>((synthesis) => {
+  const synthesisNodes = targetSyntheses
+    .filter((synthesis) => !synthesis.is_development_brief)
+    .map<StagedFlowNode>((synthesis) => {
     const key = sourceKey('synthesis', Number(synthesis.id));
     const discussionComments = synthesis.deleted_at
       ? []
@@ -2364,7 +2376,7 @@ function IdeaFlowBoard({
       synthesis,
       discussionComments,
     };
-  });
+    });
 
   const selectionActive = Boolean(selectionLayer || developmentSelectionIteration || wildcardSelectionActive);
   const selectedKeySet = new Set(selectedKeys);
@@ -2949,7 +2961,7 @@ function IdeaFlowBoard({
                   'async-flow-node',
                   `is-${node.kind}`,
                   node.used ? 'is-used' : '',
-                  node.synthesis?.is_development_brief ? 'is-creator-development-brief' : '',
+                  developmentSelectedSourceKeys.has(node.key) ? 'is-selected-for-build' : '',
                   selectable ? 'is-selectable-source' : '',
                   sourceSelected ? 'is-source-selected' : '',
                   selectedByWildcard ? 'is-wildcard-selected' : '',
@@ -3048,6 +3060,11 @@ function IdeaFlowBoard({
                 )}
                 <footer>
                   <div>
+                    {developmentSelectedSourceKeys.has(node.key) && (
+                      <span className="async-flow-selected">
+                        <Check /> 已选作本轮开发方向
+                      </span>
+                    )}
                     {node.synthesis && synthesisIdeaCount > 0 && (
                       <span className="async-flow-used">
                         <Lightbulb /> 综合了 {synthesisIdeaCount} 个想法
