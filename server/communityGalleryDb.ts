@@ -19,7 +19,8 @@ const ACTIVE_STUDY_KEY = 'active_study_id';
 const NUMERIC_LOGIN_MIGRATION_KEY = 'numeric_account_password_login_v1';
 const INDIVIDUAL_APP_FLOW_MIGRATION_KEY = 'individual_app_flow_v1';
 const AUTOMATIC_APP_ROUNDS_MIGRATION_KEY = 'automatic_app_rounds_v2';
-const CREATOR_COUNT = 30;
+const CREATOR_COUNT = 50;
+const LEGACY_UNIFIED_CREATOR_COUNT = 30;
 const CREATOR_CODES = Array.from(
   { length: CREATOR_COUNT },
   (_, index) => `C${String(index + 1).padStart(2, '0')}`,
@@ -40,6 +41,7 @@ const COMMUNITY_STUDY_DATA_TABLES = [
   'vg_async_comments',
   'vg_async_comment_likes',
   'vg_async_app_likes',
+  'vg_async_version_likes',
   'vg_async_basket_items',
   'vg_async_syntheses',
   'vg_async_synthesis_sources',
@@ -241,6 +243,18 @@ db.exec(`
     created_at TEXT NOT NULL,
     PRIMARY KEY (study_id, app_id, participant_code)
   );
+
+  CREATE TABLE IF NOT EXISTS vg_async_version_likes (
+    study_id TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    version_id INTEGER NOT NULL,
+    participant_code TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (study_id, version_id, participant_code)
+  );
+
+  CREATE INDEX IF NOT EXISTS vg_async_version_likes_by_app
+    ON vg_async_version_likes (study_id, app_id);
 
   CREATE TABLE IF NOT EXISTS vg_async_basket_items (
     study_id TEXT NOT NULL,
@@ -508,6 +522,40 @@ ensureColumn('vg_async_participants', 'is_test', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('vg_async_apps', 'is_test', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('vg_async_apps', 'flow_stage', `TEXT NOT NULL DEFAULT 'waiting_round_1'`);
 
+// Preserve likes created before version-specific likes existed. Each legacy
+// App like is assigned to the newest version that had already been published
+// when the like was created (falling back to V0 for malformed old timestamps).
+db.exec(`
+  INSERT OR IGNORE INTO vg_async_version_likes
+    (study_id, app_id, version_id, participant_code, created_at)
+  SELECT legacy.study_id, legacy.app_id,
+    COALESCE(
+      (
+        SELECT version.id
+        FROM vg_async_versions version
+        WHERE version.study_id = legacy.study_id
+          AND version.app_id = legacy.app_id
+          AND version.created_at <= legacy.created_at
+        ORDER BY version.created_at DESC, version.version_number DESC
+        LIMIT 1
+      ),
+      (
+        SELECT version.id
+        FROM vg_async_versions version
+        WHERE version.study_id = legacy.study_id
+          AND version.app_id = legacy.app_id
+        ORDER BY version.version_number
+        LIMIT 1
+      )
+    ),
+    legacy.participant_code, legacy.created_at
+  FROM vg_async_app_likes legacy
+  WHERE EXISTS (
+    SELECT 1 FROM vg_async_versions version
+    WHERE version.study_id = legacy.study_id AND version.app_id = legacy.app_id
+  );
+`);
+
 const individualAppFlowMigrated = db.prepare(`
   SELECT value FROM vg_async_settings WHERE key = ?
 `).get(INDIVIDUAL_APP_FLOW_MIGRATION_KEY) as { value?: string } | undefined;
@@ -625,7 +673,7 @@ db.exec(`
 
 // Normalize empty legacy studies from the former C01–C12 + P01–P24 roster.
 // No App data exists in these studies, so their participants can safely move to
-// the current, Creator-only C01–C30 roster without losing project provenance.
+// the current, Creator-only roster without losing project provenance.
 const emptyLegacyStudies = db.prepare(`
   SELECT s.id
   FROM vg_async_studies s
@@ -681,6 +729,7 @@ if (activeLegacyStudyId) {
       `SELECT author_code AS code FROM vg_async_syntheses WHERE study_id = ? AND author_code GLOB 'P[0-9][0-9]'`,
       `SELECT participant_code AS code FROM vg_async_comment_likes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
       `SELECT participant_code AS code FROM vg_async_app_likes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
+      `SELECT participant_code AS code FROM vg_async_version_likes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
       `SELECT participant_code AS code FROM vg_async_synthesis_likes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
       `SELECT participant_code AS code FROM vg_async_basket_items WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
       `SELECT participant_code AS code FROM vg_async_synthesis_votes WHERE study_id = ? AND participant_code GLOB 'P[0-9][0-9]'`,
@@ -694,10 +743,10 @@ if (activeLegacyStudyId) {
     const retainedLegacyCodes = [
       ...legacyCodes.filter((code) => referencedCodes.has(code)),
       ...legacyCodes.filter((code) => !referencedCodes.has(code)),
-    ].slice(0, CREATOR_COUNT - 12).sort((left, right) => (
+    ].slice(0, LEGACY_UNIFIED_CREATOR_COUNT - 12).sort((left, right) => (
       Number(left.slice(1)) - Number(right.slice(1))
     ));
-    if (retainedLegacyCodes.length === CREATOR_COUNT - 12) {
+    if (retainedLegacyCodes.length === LEGACY_UNIFIED_CREATOR_COUNT - 12) {
       const codeColumns = [
         ['vg_async_sessions', 'participant_code'],
         ['vg_async_apps', 'creator_code'],
@@ -705,6 +754,7 @@ if (activeLegacyStudyId) {
         ['vg_async_syntheses', 'author_code'],
         ['vg_async_comment_likes', 'participant_code'],
         ['vg_async_app_likes', 'participant_code'],
+        ['vg_async_version_likes', 'participant_code'],
         ['vg_async_synthesis_likes', 'participant_code'],
         ['vg_async_basket_items', 'participant_code'],
         ['vg_async_synthesis_votes', 'participant_code'],
@@ -810,20 +860,26 @@ db.prepare(`
 `).run(interruptedAtStartupMessage, interruptedAtStartup);
 
 function seedParticipants(studyId: string) {
-  const existingParticipants = db.prepare(`
-    SELECT COUNT(*) AS count
+  const existingCodes = new Set((db.prepare(`
+    SELECT code
     FROM vg_async_participants
-    WHERE study_id = ? AND role <> 'host'
-  `).get(studyId) as { count: number };
-  if (Number(existingParticipants.count) > 0) return;
+    WHERE study_id = ?
+  `).all(studyId) as Array<{ code: string }>).map(({ code }) => code));
+  const missingCreatorCodes = CREATOR_CODES.filter((code) => !existingCodes.has(code));
+  if (existingCodes.has('H01') && missingCreatorCodes.length === 0) return;
   const insert = db.prepare(`
     INSERT OR IGNORE INTO vg_async_participants
       (study_id, code, role, condition_name, is_test, created_at)
     VALUES (?, ?, ?, ?, 0, ?)
   `);
   const timestamp = now();
-  insert.run(studyId, 'H01', 'host', null, timestamp);
-  CREATOR_CODES.forEach((code) => insert.run(studyId, code, 'creator', 'experimental', timestamp));
+  const transaction = db.transaction(() => {
+    if (!existingCodes.has('H01')) insert.run(studyId, 'H01', 'host', null, timestamp);
+    missingCreatorCodes.forEach((code) => (
+      insert.run(studyId, code, 'creator', 'experimental', timestamp)
+    ));
+  });
+  transaction();
 }
 
 function testRoleAssignmentKey(studyId: string) {
@@ -1081,10 +1137,16 @@ export function joinCommunityGallery(clientId: string, account: string, password
   const cleanAccount = account.trim();
   const cleanPassword = password.trim();
   if (!cleanClientId || cleanClientId.length > 160) throw new Error('缺少有效的浏览器会话。');
-  if (!/^(0|[1-9]|[12][0-9]|30)$/.test(cleanAccount) || cleanPassword !== cleanAccount) {
+  const accountNumber = Number(cleanAccount);
+  const hasValidAccountFormat = /^(0|[1-9][0-9]*)$/.test(cleanAccount);
+  if (
+    !hasValidAccountFormat
+    || accountNumber < 0
+    || accountNumber > CREATOR_COUNT
+    || cleanPassword !== cleanAccount
+  ) {
     throw new Error('账号或密码错误。');
   }
-  const accountNumber = Number(cleanAccount);
   const cleanCode = accountNumber === 0 ? 'H01' : `C${String(accountNumber).padStart(2, '0')}`;
   const currentStudy = study();
   const selectedParticipant = participant(currentStudy.id, cleanCode);
@@ -2680,29 +2742,58 @@ export function toggleCommunityCommentLike(clientId: string, commentId: number) 
   return getCommunityGalleryState(clientId);
 }
 
-export function toggleCommunityAppLike(clientId: string, appId: string) {
+export function toggleCommunityAppLike(clientId: string, appId: string, versionId: number) {
   const viewer = requireParticipant(clientId);
   const { app } = accessibleApp(clientId, appId);
   requireOpenStudy(Number(app.is_test));
   if (app.status !== 'published') throw new Error('只能点赞已经发布的应用。');
   if (app.creator_code === viewer.code) throw new Error('不能点赞自己的应用。');
+  const version = db.prepare(`
+    SELECT id, version_number, kind
+    FROM vg_async_versions
+    WHERE study_id = ? AND app_id = ? AND id = ?
+  `).get(study().id, appId, versionId) as {
+    id: number;
+    version_number: number;
+    kind: string;
+  } | undefined;
+  if (!version) throw new Error('只能点赞当前作品已经发布的版本。');
   const exists = db.prepare(`
-    SELECT 1 FROM vg_async_app_likes
-    WHERE study_id = ? AND app_id = ? AND participant_code = ?
-  `).get(study().id, appId, viewer.code);
-  if (exists) {
+    SELECT 1 FROM vg_async_version_likes
+    WHERE study_id = ? AND version_id = ? AND participant_code = ?
+  `).get(study().id, version.id, viewer.code);
+  const transaction = db.transaction(() => {
+    // A migrated legacy App like may remain as a compatibility backup. Once
+    // this participant interacts again, remove it so it cannot be re-imported.
     db.prepare(`
       DELETE FROM vg_async_app_likes
       WHERE study_id = ? AND app_id = ? AND participant_code = ?
     `).run(study().id, appId, viewer.code);
-  } else {
-    db.prepare(`
-      INSERT INTO vg_async_app_likes
-        (study_id, app_id, participant_code, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(study().id, appId, viewer.code, now());
-  }
-  recordEvent(viewer.code, exists ? 'unlike_app' : 'like_app', 'app', appId);
+    if (exists) {
+      db.prepare(`
+        DELETE FROM vg_async_version_likes
+        WHERE study_id = ? AND version_id = ? AND participant_code = ?
+      `).run(study().id, version.id, viewer.code);
+    } else {
+      db.prepare(`
+        INSERT INTO vg_async_version_likes
+          (study_id, app_id, version_id, participant_code, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(study().id, appId, version.id, viewer.code, now());
+    }
+  });
+  transaction();
+  recordEvent(
+    viewer.code,
+    exists ? 'unlike_app_version' : 'like_app_version',
+    'version',
+    version.id,
+    {
+      appId,
+      versionNumber: Number(version.version_number),
+      versionKind: version.kind,
+    },
+  );
   return getCommunityGalleryState(clientId);
 }
 
@@ -3629,6 +3720,7 @@ function collectCommunityWorkspaceData(studyId: string, isTest: boolean) {
     comments,
     comment_likes: all.comment_likes.filter((row) => commentIds.has(Number(row.comment_id))),
     app_likes: all.app_likes.filter((row) => appIds.has(row.app_id)),
+    version_likes: all.version_likes.filter((row) => appIds.has(row.app_id)),
     basket_items: all.basket_items.filter((row) => creatorCodes.has(row.participant_code)),
     syntheses,
     synthesis_sources: all.synthesis_sources.filter((row) => synthesisIds.has(Number(row.synthesis_id))),
@@ -3681,7 +3773,7 @@ function communityTestDataPreview(studyId: string) {
       (SELECT COUNT(*) FROM vg_async_comment_likes l
         JOIN vg_async_comments c ON c.id = l.comment_id JOIN vg_async_apps a ON a.id = c.app_id
         WHERE l.study_id = ? AND a.is_test = 1) +
-      (SELECT COUNT(*) FROM vg_async_app_likes l JOIN vg_async_apps a ON a.id = l.app_id
+      (SELECT COUNT(*) FROM vg_async_version_likes l JOIN vg_async_apps a ON a.id = l.app_id
         WHERE l.study_id = ? AND a.is_test = 1) +
       (SELECT COUNT(*) FROM vg_async_synthesis_likes l
         JOIN vg_async_syntheses s ON s.id = l.synthesis_id JOIN vg_async_apps a ON a.id = s.target_app_id
@@ -3775,6 +3867,8 @@ export function clearCommunityTestData(clientId: string, confirmation: string) {
       (SELECT c.id FROM vg_async_comments c JOIN vg_async_apps a ON a.id = c.app_id
        WHERE c.study_id = ? AND a.is_test = 1)`).run(currentStudy.id, currentStudy.id);
     db.prepare(`DELETE FROM vg_async_app_likes WHERE study_id = ? AND app_id IN
+      (SELECT id FROM vg_async_apps WHERE study_id = ? AND is_test = 1)`).run(currentStudy.id, currentStudy.id);
+    db.prepare(`DELETE FROM vg_async_version_likes WHERE study_id = ? AND app_id IN
       (SELECT id FROM vg_async_apps WHERE study_id = ? AND is_test = 1)`).run(currentStudy.id, currentStudy.id);
     db.prepare(`DELETE FROM vg_async_synthesis_likes WHERE study_id = ? AND synthesis_id IN
       (SELECT s.id FROM vg_async_syntheses s JOIN vg_async_apps a ON a.id = s.target_app_id
@@ -3888,6 +3982,8 @@ export function deleteOwnInitialApp(clientId: string, appId: string) {
     db.prepare(`DELETE FROM vg_async_synthesis_votes WHERE study_id = ? AND target_app_id = ?`)
       .run(currentStudy.id, app.id);
     db.prepare(`DELETE FROM vg_async_app_likes WHERE study_id = ? AND app_id = ?`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_version_likes WHERE study_id = ? AND app_id = ?`)
       .run(currentStudy.id, app.id);
     for (const table of ['vg_async_stage_selections', 'vg_async_generation_jobs',
       'vg_async_notifications', 'vg_async_assignments', 'vg_async_wildcards',
@@ -4027,6 +4123,7 @@ export function startNewAsyncCommunityWorkspace(clientId: string, isTest: boolea
     deleteRowsByValues('vg_async_generation_events', 'job_id', jobIds);
     deleteRowsByValues('vg_async_comment_likes', 'comment_id', commentIds);
     deleteRowsByValues('vg_async_app_likes', 'app_id', appIds);
+    deleteRowsByValues('vg_async_version_likes', 'app_id', appIds);
     deleteRowsByValues('vg_async_synthesis_likes', 'synthesis_id', synthesisIds);
     deleteRowsByValues('vg_async_synthesis_votes', 'target_app_id', appIds);
     deleteRowsByValues('vg_async_basket_items', 'participant_code', participantCodes);
@@ -4166,7 +4263,9 @@ export function getCommunityGalleryState(clientId = '') {
   const apps = viewer
     ? db.prepare(`
         SELECT a.*,
-          (SELECT COUNT(*) FROM vg_async_app_likes l WHERE l.study_id = a.study_id AND l.app_id = a.id) AS like_count,
+          (SELECT COUNT(*) FROM vg_async_version_likes l
+            WHERE l.study_id = a.study_id
+              AND l.version_id = COALESCE(a.community_version_id, a.initial_version_id)) AS like_count,
           (SELECT COUNT(*) FROM vg_async_comments c
             WHERE c.study_id = a.study_id AND c.app_id = a.id AND c.target_type = 'app' AND c.deleted_at IS NULL) AS comment_count,
           (SELECT COUNT(*) FROM vg_async_syntheses s
@@ -4189,8 +4288,10 @@ export function getCommunityGalleryState(clientId = '') {
                 ELSE 0 END) AS current_round_synthesis_count,
           (SELECT COUNT(*) FROM vg_async_versions v
             WHERE v.study_id = a.study_id AND v.app_id = a.id AND v.kind = 'community') AS community_version_count,
-          EXISTS(SELECT 1 FROM vg_async_app_likes l
-            WHERE l.study_id = a.study_id AND l.app_id = a.id AND l.participant_code = ?) AS viewer_liked,
+          EXISTS(SELECT 1 FROM vg_async_version_likes l
+            WHERE l.study_id = a.study_id
+              AND l.version_id = COALESCE(a.community_version_id, a.initial_version_id)
+              AND l.participant_code = ?) AS viewer_liked,
           d.kind AS draft_kind, d.code AS draft_code, d.summary AS draft_summary,
           d.prompt AS draft_prompt, d.synthesis_id AS draft_synthesis_id,
           d.selected_source_type AS draft_selected_source_type,
@@ -4218,13 +4319,18 @@ export function getCommunityGalleryState(clientId = '') {
   const placeholders = appIds.map(() => '?').join(',');
   const versions = appIds.length
     ? db.prepare(`
-        SELECT id, app_id, version_number, kind, title, summary, prompt, synthesis_id,
+        SELECT v.id, v.app_id, v.version_number, v.kind, v.title, v.summary, v.prompt, v.synthesis_id,
           selected_source_type, selected_source_id, base_version_id,
-          selection_reason, created_at
-        FROM vg_async_versions
-        WHERE study_id = ? AND app_id IN (${placeholders})
-        ORDER BY app_id, version_number
-      `).all(currentStudy.id, ...appIds) as any[]
+          selection_reason, v.created_at,
+          (SELECT COUNT(*) FROM vg_async_version_likes l
+            WHERE l.study_id = v.study_id AND l.version_id = v.id) AS like_count,
+          EXISTS(SELECT 1 FROM vg_async_version_likes l
+            WHERE l.study_id = v.study_id AND l.version_id = v.id
+              AND l.participant_code = ?) AS viewer_liked
+        FROM vg_async_versions v
+        WHERE v.study_id = ? AND v.app_id IN (${placeholders})
+        ORDER BY v.app_id, v.version_number
+      `).all(viewer?.code || '', currentStudy.id, ...appIds) as any[]
     : [];
   const comments = appIds.length
     ? db.prepare(`

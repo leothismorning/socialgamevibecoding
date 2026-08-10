@@ -516,9 +516,13 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
-  app.post('/api/community-gallery/apps/:appId/like', (req, res) => {
+  app.post('/api/community-gallery/apps/:appId/versions/:versionId/like', (req, res) => {
     try {
-      res.json(toggleCommunityAppLike(clientIdFrom(req), String(req.params.appId)));
+      res.json(toggleCommunityAppLike(
+        clientIdFrom(req),
+        String(req.params.appId),
+        Number(req.params.versionId),
+      ));
     } catch (error) {
       sendError(res, error);
     }

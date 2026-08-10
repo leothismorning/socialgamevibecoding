@@ -301,14 +301,14 @@ function IdentityGate({
       <div className="async-identity-copy">
         <span className="async-eyebrow">加入创意共创社区</span>
         <h1>把社区讨论变成可以运行的作品</h1>
-        <p>使用实验编号登录。创作者账号为 1–30，密码与账号相同；主持人账号和密码均为 0。</p>
+        <p>使用实验编号登录。创作者账号为 1–50，密码与账号相同；主持人账号和密码均为 0。</p>
       </div>
       <div className="async-identity-picker">
         <form className="async-login-form" onSubmit={(event) => {
           event.preventDefault();
           join(account, password);
         }}>
-          <label><span>账号（实验编号）</span><input inputMode="numeric" autoComplete="username" value={account} onChange={(event) => setAccount(event.target.value)} placeholder="0–30" /></label>
+          <label><span>账号（实验编号）</span><input inputMode="numeric" autoComplete="username" value={account} onChange={(event) => setAccount(event.target.value)} placeholder="0–50" /></label>
           <label><span>密码</span><input type="password" inputMode="numeric" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入密码" /></label>
           <button className="async-primary" type="submit" disabled={Boolean(busy) || !account || !password}><Lock /> 登录</button>
         </form>
@@ -930,7 +930,7 @@ function InitialCreatorStudio({
                     placeholder="例如：保留现在的功能，把首页改成更简洁的卡片布局，并增加搜索…"
                   />
                   <button
-                    className="async-primary"
+                    className="async-primary async-modify-draft"
                     disabled={!revision.trim() || Boolean(busy) || isDeveloping}
                     onClick={() => {
                       const message = revision;
@@ -940,11 +940,7 @@ function InitialCreatorStudio({
                         return next;
                       });
                     }}
-                  ><Send /> {isDeveloping
-                    ? '正在修改…'
-                    : developmentProgress?.status === 'failed'
-                      ? '重新修改草稿'
-                      : '发送并修改草稿'}</button>
+                  ><Send /> {isDeveloping ? '正在修改…' : '修改草稿'}</button>
                 </div>
               </section>
             </>
@@ -1042,7 +1038,7 @@ function GalleryVersionCard({
   clientId: string;
   assigned: boolean;
   open: () => void;
-  like: () => void;
+  like: (versionId: number) => void;
   index: number;
   version: 'initial' | 'community';
 }) {
@@ -1050,6 +1046,10 @@ function GalleryVersionCard({
   const latestCommunityVersion = state.versions.find(
     (item) => Number(item.id) === Number(app.community_version_id),
   );
+  const initialVersion = state.versions.find(
+    (item) => Number(item.id) === Number(app.initial_version_id),
+  );
+  const displayedVersion = isCommunity ? latestCommunityVersion : initialVersion;
   const selectedSynthesis = state.syntheses.find(
     (item) => Number(item.id) === Number(latestCommunityVersion?.synthesis_id),
   );
@@ -1125,11 +1125,11 @@ function GalleryVersionCard({
         <footer>
           <div>
             <button
-              className={app.viewer_liked ? 'async-social-button is-liked' : 'async-social-button'}
-              disabled={!canLike}
-              onClick={like}
-              title={canLike ? '给作品点赞，可随时取消' : '主持人不能点赞、不能点赞自己的作品，研究结束后内容只读'}
-            ><Heart /> {app.viewer_liked ? '已点赞' : '点赞'} {app.like_count}</button>
+              className={displayedVersion?.viewer_liked ? 'async-social-button is-liked' : 'async-social-button'}
+              disabled={!canLike || !displayedVersion}
+              onClick={() => displayedVersion && like(displayedVersion.id)}
+              title={canLike ? '给当前版本点赞，可随时取消' : '主持人不能点赞、不能点赞自己的作品，研究结束后内容只读'}
+            ><Heart /> {displayedVersion?.viewer_liked ? '已点赞' : '点赞'} {displayedVersion?.like_count || 0}</button>
             <span><MessageCircle /> {app.comment_count}</span>
             <span><Lightbulb /> {app.synthesis_count}</span>
           </div>
@@ -1154,7 +1154,7 @@ function GalleryCard({
   clientId: string;
   assigned: boolean;
   open: () => void;
-  like: () => void;
+  like: (versionId: number) => void;
   index: number;
 }) {
   const cardProps = { state, app, clientId, open, like, index };
@@ -3538,14 +3538,14 @@ function CommunityDraftPanel({
                 <div className="async-chat-composer">
                   <textarea value={revision} onChange={(event) => setRevision(event.target.value)} rows={4} placeholder="补充约束、修复问题或调整实现细节" />
                   <button
-                    className="async-secondary"
+                    className="async-secondary async-modify-draft"
                     disabled={!revision.trim() || Boolean(busy)}
                     onClick={() => action('refine-community', async () => {
                       const next = await communityGalleryApi.refine(clientId, revision);
                       setRevision('');
                       return next;
                     })}
-                  ><Send /> {busy === 'refine-community' ? '正在修改…' : '发送并修改草稿'}</button>
+                  ><Send /> {busy === 'refine-community' ? '正在修改…' : '修改草稿'}</button>
                 </div>
               </section>
             <button
@@ -3734,7 +3734,7 @@ function AppDetail({
   const canLikeApp = state.viewer?.role !== 'host'
     && !isOwner
     && state.study.status !== 'closed';
-  const appLikeBusy = busy === `like-app-${app.id}`;
+  const appLikeBusy = busy.startsWith(`like-app-${app.id}-version-`);
   const assignment = state.assignments.find((item) => item.app_id === app.id);
   const trackedAppDetailRef = useRef('');
   const lastTrackedVersionRef = useRef(0);
@@ -3808,19 +3808,19 @@ function AppDetail({
         </div>
         <div className="async-detail-version-actions">
           <button
-            className={app.viewer_liked ? 'async-detail-like is-liked' : 'async-detail-like'}
-            disabled={!canLikeApp || appLikeBusy}
+            className={viewedVersion?.viewer_liked ? 'async-detail-like is-liked' : 'async-detail-like'}
+            disabled={!canLikeApp || appLikeBusy || !viewedVersion}
             onClick={() => void action(
-              `like-app-${app.id}`,
-              () => communityGalleryApi.likeApp(clientId, app.id),
+              `like-app-${app.id}-version-${viewedVersion?.id || 0}`,
+              () => communityGalleryApi.likeApp(clientId, app.id, Number(viewedVersion?.id)),
             )}
             title={canLikeApp
-              ? '给整个作品点赞；所有版本和首页共享同一个点赞数'
+              ? '给当前正在查看的版本点赞；每个版本分别统计'
               : '主持人不能点赞、不能点赞自己的作品，研究结束后内容只读'}
           >
-            <Heart fill={app.viewer_liked ? 'currentColor' : 'none'} />
-            <span>{app.viewer_liked ? '已点赞' : '点赞作品'}</span>
-            <strong>{app.like_count}</strong>
+            <Heart fill={viewedVersion?.viewer_liked ? 'currentColor' : 'none'} />
+            <span>{viewedVersion?.viewer_liked ? '已点赞当前版本' : '点赞当前版本'}</span>
+            <strong>{viewedVersion?.like_count || 0}</strong>
           </button>
           <div className="async-version-tabs">
             {appVersions.map((version) => (
@@ -4183,7 +4183,7 @@ function HostPanel({
           </header>
           <div className="async-condition-groups">
             <section>
-              <header><div><strong>创作者账号 1–30</strong><small>点击编号切换测试角色；未选择的账号为正式实验角色</small></div></header>
+              <header><div><strong>创作者账号 1–50</strong><small>点击编号切换测试角色；未选择的账号为正式实验角色</small></div></header>
               <div>
                 {creatorParticipants.map((participant) => (
                   <button
@@ -4732,7 +4732,10 @@ export default function AsyncGalleryApp() {
                         navigateToApp(app.id);
                         void communityGalleryApi.track(clientId, 'open_app_from_feed', 'app', app.id);
                       }}
-                      like={() => void action(`like-app-${app.id}`, () => communityGalleryApi.likeApp(clientId, app.id))}
+                      like={(versionId) => void action(
+                        `like-app-${app.id}-version-${versionId}`,
+                        () => communityGalleryApi.likeApp(clientId, app.id, versionId),
+                      )}
                     />
                 </GalleryMasonryItem>
               ))}

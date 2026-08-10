@@ -14,7 +14,7 @@ const html = (title: string) => `<!doctype html><html><body><main><h1>${title}</
 const client = (account: number) => `client-${account}`;
 
 assert.throws(() => gallery.joinCommunityGallery('bad-password', '1', '2'), /账号或密码错误/);
-assert.throws(() => gallery.joinCommunityGallery('bad-account', '31', '31'), /账号或密码错误/);
+assert.throws(() => gallery.joinCommunityGallery('bad-account', '51', '51'), /账号或密码错误/);
 assert.throws(() => gallery.joinCommunityGallery('padded-account', '01', '01'), /账号或密码错误/);
 
 const hostClient = client(0);
@@ -26,6 +26,20 @@ state = gallery.setCommunityTestCreators(hostClient, ['C01', 'C02']);
 assert.equal(state.study.test_roles_configured, true);
 assert.equal((state.participants as any[]).find((participant) => participant.code === 'C01')?.is_test, 1);
 assert.equal((state.participants as any[]).find((participant) => participant.code === 'C03')?.is_test, 0);
+
+// Existing studies are expanded additively: missing new accounts are restored
+// without changing any existing participant number or role assignment.
+db.prepare(`DELETE FROM vg_async_participants WHERE study_id = ? AND code = 'C50'`).run(state.study.id);
+state = gallery.getCommunityGalleryState(hostClient);
+assert.equal((state.participants as any[]).find((participant) => participant.code === 'C01')?.is_test, 1);
+assert.equal((state.participants as any[]).find((participant) => participant.code === 'C30')?.code, 'C30');
+assert.equal((state.participants as any[]).find((participant) => participant.code === 'C50')?.code, 'C50');
+
+for (const account of [31, 50]) {
+  const creatorState = gallery.joinCommunityGallery(client(account), String(account), String(account));
+  assert.equal(creatorState.viewer?.code, `C${account}`);
+  assert.equal(Number(creatorState.viewer?.isTest), 0);
+}
 
 assert.throws(
   () => gallery.setCommunityTestCreators('not-host', ['C01']),
@@ -119,16 +133,23 @@ const publishedVersionsBeforeLike = db.prepare(`
   SELECT id, app_id, version_number, kind, code
   FROM vg_async_versions WHERE study_id = ? ORDER BY id
 `).all(hostState.study.id);
-state = gallery.toggleCommunityAppLike(client(2), testApp.id);
+const testInitialVersion = hostState.versions.find(
+  (version: any) => version.app_id === testApp.id && version.kind === 'initial',
+);
+assert.ok(testInitialVersion);
+state = gallery.toggleCommunityAppLike(client(2), testApp.id, Number(testInitialVersion.id));
 let likedTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(Number(likedTestApp.like_count), 1);
 assert.equal(Number(likedTestApp.viewer_liked), 1);
-state = gallery.toggleCommunityAppLike(client(2), testApp.id);
+let likedTestVersion = state.versions.find((version: any) => version.id === testInitialVersion.id);
+assert.equal(Number(likedTestVersion.like_count), 1);
+assert.equal(Number(likedTestVersion.viewer_liked), 1);
+state = gallery.toggleCommunityAppLike(client(2), testApp.id, Number(testInitialVersion.id));
 likedTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(Number(likedTestApp.like_count), 0);
 assert.equal(Number(likedTestApp.viewer_liked), 0);
 assert.throws(
-  () => gallery.toggleCommunityAppLike(client(1), testApp.id),
+  () => gallery.toggleCommunityAppLike(client(1), testApp.id, Number(testInitialVersion.id)),
   /不能点赞自己的应用/,
 );
 assert.deepEqual(
@@ -225,7 +246,7 @@ assert.equal(Number(currentTestApp.current_round_comment_count), 1);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 1);
 let startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 1, true, [testApp.id]);
 assert.equal(startedDevelopment.jobIds.length, 1);
-state = gallery.toggleCommunityAppLike(client(2), testApp.id);
+state = gallery.toggleCommunityAppLike(client(2), testApp.id, Number(testInitialVersion.id));
 likedTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(Number(likedTestApp.like_count), 1);
 assert.equal(Number(likedTestApp.viewer_liked), 1);
@@ -242,6 +263,21 @@ currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'round_2');
 assert.equal(Number(currentTestApp.current_round_comment_count), 0);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 0);
+likedTestVersion = state.versions.find((version: any) => version.id === testInitialVersion.id);
+const firstCommunityVersion = state.versions.find(
+  (version: any) => version.app_id === testApp.id && version.kind === 'community',
+);
+assert.ok(firstCommunityVersion);
+assert.equal(Number(likedTestVersion.like_count), 1);
+assert.equal(Number(firstCommunityVersion.like_count), 0);
+state = gallery.toggleCommunityAppLike(client(2), testApp.id, Number(firstCommunityVersion.id));
+likedTestVersion = state.versions.find((version: any) => version.id === testInitialVersion.id);
+const likedFirstCommunityVersion = state.versions.find(
+  (version: any) => version.id === firstCommunityVersion.id,
+);
+assert.equal(Number(likedTestVersion.like_count), 1);
+assert.equal(Number(likedFirstCommunityVersion.like_count), 1);
+assert.equal(Number(likedFirstCommunityVersion.viewer_liked), 1);
 state = gallery.saveCommunityComment({
   clientId: client(2),
   appId: testApp.id,
@@ -354,6 +390,6 @@ assert.equal(state.workspaces.test.status, 'setup');
 assert.equal(state.apps.some((app: any) => app.id === regularApp.id), false);
 assert.equal(state.apps.some((app: any) => app.id === testApp.id), false);
 assert.equal(state.comments.some((comment: any) => comment.content === 'A regular comment that must remain.'), false);
-assert.equal(state.participants.filter((participant: any) => participant.role === 'creator').length, 30);
+assert.equal(state.participants.filter((participant: any) => participant.role === 'creator').length, 50);
 
 console.log('community gallery auth, isolation, archive, independent reset, flow control, retry, and purge tests passed');

@@ -76,6 +76,8 @@ export type CommunityVersion = {
   base_version_id?: number;
   selection_reason?: string;
   created_at: string;
+  like_count: number;
+  viewer_liked: number;
 };
 
 export type CommunityComment = {

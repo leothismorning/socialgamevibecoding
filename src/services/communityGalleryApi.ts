@@ -93,8 +93,8 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
-  likeApp: (clientId: string, appId: string) =>
-    request(`/api/community-gallery/apps/${appId}/like`, {
+  likeApp: (clientId: string, appId: string, versionId: number) =>
+    request(`/api/community-gallery/apps/${appId}/versions/${versionId}/like`, {
       method: 'POST',
       body: body({ clientId }),
     }),
