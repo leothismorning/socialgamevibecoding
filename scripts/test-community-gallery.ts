@@ -311,6 +311,36 @@ state = gallery.startAsyncCommunityStudy(hostClient, false);
 assert.equal(state.workspaces.test.status, 'active');
 assert.equal(state.workspaces.regular.status, 'active');
 assert.equal(state.apps.find((app: any) => app.id === regularApp.id)?.flow_stage, 'round_1');
+
+// A Creator who has not published may still discard and recreate their draft
+// after comments open. Published Apps remain locked because community activity
+// can already refer to them.
+state = gallery.saveInitialDraft({
+  clientId: client(6),
+  title: 'Late Unpublished Draft Six',
+  brief: 'Created after the formal comment stage opened',
+  prompt: 'Build a late unpublished draft',
+  code: html('Late Unpublished Draft Six'),
+  summary: 'Late draft only',
+});
+const lateUnpublishedDraft = state.apps.find((app: any) => app.creator_code === 'C06');
+assert.ok(lateUnpublishedDraft);
+assert.equal(lateUnpublishedDraft.initial_version_id, null);
+state = gallery.deleteOwnInitialApp(client(6), lateUnpublishedDraft.id);
+assert.equal(state.apps.some((app: any) => app.id === lateUnpublishedDraft.id), false);
+state = gallery.saveInitialDraft({
+  clientId: client(6),
+  title: 'Recreated Draft Six',
+  brief: 'Recreated while comments are open',
+  prompt: 'Rebuild the draft from scratch',
+  code: html('Recreated Draft Six'),
+  summary: 'Recreated draft only',
+});
+const recreatedDraft = state.apps.find((app: any) => app.creator_code === 'C06');
+assert.ok(recreatedDraft);
+assert.notEqual(recreatedDraft.id, lateUnpublishedDraft.id);
+assert.equal(recreatedDraft.initial_version_id, null);
+
 assert.throws(
   () => gallery.deleteOwnInitialApp(client(3), regularApp.id),
   /评论流程开始后/,

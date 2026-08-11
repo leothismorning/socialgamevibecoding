@@ -745,7 +745,9 @@ function InitialCreatorStudio({
   const deleteCurrentDraft = async () => {
     if (!ownApp?.id) return;
     if (!window.confirm(
-      `确认删除当前未发布项目“${ownApp.title}”吗？草稿、修改记录和当前项目都会被清除，删除后可以重新创建。`,
+      state.study.status === 'active'
+        ? `评论阶段已经开始。确认删除当前未发布项目“${ownApp.title}”并重新创建吗？重新发布得越晚，获得社区反馈的时间可能越短。`
+        : `确认删除当前未发布项目“${ownApp.title}”吗？草稿、修改记录和当前项目都会被清除，删除后可以重新创建。`,
     )) return;
     let deleted = false;
     await action('delete-current-draft', async () => {
@@ -893,7 +895,12 @@ function InitialCreatorStudio({
                 <p>{ownApp.brief || '你可以在右侧试玩，并继续告诉 AI 怎样修改。'}</p>
               </div>
               <div className="async-draft-reset-row">
-                <span><strong>想重新开始？</strong><small>清除当前未发布草稿和修改记录，回到初始创建界面。</small></span>
+                <span>
+                  <strong>想重新开始？</strong>
+                  <small>{state.study.status === 'active'
+                    ? '评论阶段已经开始；仍可清除未发布草稿，但重新发布越晚，获得反馈的时间可能越短。'
+                    : '清除当前未发布草稿和修改记录，回到初始创建界面。'}</small>
+                </span>
                 <button
                   type="button"
                   className="async-delete-initial-app"

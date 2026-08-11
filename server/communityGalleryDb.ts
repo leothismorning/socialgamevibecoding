@@ -3923,8 +3923,16 @@ export function deleteOwnInitialApp(clientId: string, appId: string) {
     && flowStage === 'waiting_round_1'
     && Boolean(draft?.app_id);
   const isPublishedInitial = Boolean(app.initial_version_id) && flowStage === 'round_1';
-  if (workspace.status !== 'setup' || (!isUnpublishedDraft && !isPublishedInitial)) {
-    throw new Error('评论流程开始后不能删除当前项目。');
+  const canDeleteUnpublishedDraft = workspace.status !== 'closed' && isUnpublishedDraft;
+  const canDeletePublishedInitial = workspace.status === 'setup' && isPublishedInitial;
+  if (!canDeleteUnpublishedDraft && !canDeletePublishedInitial) {
+    if (workspace.status === 'closed') {
+      throw new Error('研究已经结束，不能删除当前项目。');
+    }
+    if (isPublishedInitial) {
+      throw new Error('评论流程开始后不能删除已发布作品。');
+    }
+    throw new Error('当前项目状态不允许删除。');
   }
   const runningTaskCount = Number((db.prepare(`
     SELECT
