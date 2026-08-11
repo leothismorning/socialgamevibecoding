@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowUpDown,
   Bell,
   Bot,
   Check,
@@ -3900,6 +3901,7 @@ function HostPanel({
   const [resetConfirmation, setResetConfirmation] = useState('');
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([]);
   const [downloadingVersionId, setDownloadingVersionId] = useState<number | null>(null);
+  const [creatorSortDirection, setCreatorSortDirection] = useState<'none' | 'asc' | 'desc'>('none');
 
   useEffect(() => {
     setTestCreators(serverTestCreators);
@@ -3909,6 +3911,7 @@ function HostPanel({
     setResetDialogOpen(false);
     setResetConfirmation('');
     setSelectedAppIds([]);
+    setCreatorSortDirection('none');
   }, [state.study.id]);
 
   const toggleTestCreator = (code: string) => {
@@ -3922,6 +3925,16 @@ function HostPanel({
   const joinedCreatorCount = creatorParticipants.filter((participant) => participant.joined).length;
   const communityVersions = state.apps.filter((app) => app.community_version_id).length;
   const publishedApps = state.apps.filter((app) => app.status === 'published');
+  const displayedPublishedApps = creatorSortDirection === 'none'
+    ? publishedApps
+    : [...publishedApps].sort((left, right) => {
+        const comparison = left.creator_code.localeCompare(
+          right.creator_code,
+          undefined,
+          { numeric: true },
+        );
+        return creatorSortDirection === 'asc' ? comparison : -comparison;
+      });
   const selectedApps = publishedApps.filter((app) => selectedAppIds.includes(app.id));
   const regularWorkspace = state.workspaces.regular;
   const testWorkspace = state.workspaces.test;
@@ -4243,6 +4256,24 @@ function HostPanel({
                   selectedAppIds.length === publishedApps.length ? [] : publishedApps.map((app) => app.id),
                 )}
               >{selectedAppIds.length === publishedApps.length ? '取消全选' : '全选 Creator'}</button>
+              <button
+                type="button"
+                className={creatorSortDirection !== 'none' ? 'is-active' : ''}
+                aria-pressed={creatorSortDirection !== 'none'}
+                title={creatorSortDirection === 'desc'
+                  ? '当前按 Creator 序号从大到小排列；点击切换为从小到大'
+                  : '按 Creator 序号从小到大排列'}
+                onClick={() => setCreatorSortDirection((current) => (
+                  current === 'asc' ? 'desc' : 'asc'
+                ))}
+              >
+                <ArrowUpDown />
+                {creatorSortDirection === 'asc'
+                  ? '序号：小 → 大'
+                  : creatorSortDirection === 'desc'
+                    ? '序号：大 → 小'
+                    : '按序号排序'}
+              </button>
               <strong>已选择 {selectedApps.length} 个</strong>
             </div>
             <div className="async-app-flow-actions">
@@ -4275,7 +4306,7 @@ function HostPanel({
               <span role="columnheader">第一次开发 · 版本 1</span>
               <span role="columnheader">第二次开发 · 版本 2</span>
             </div>
-            {publishedApps.map((app) => {
+            {displayedPublishedApps.map((app) => {
               const firstStatus = developmentStatusFor(app, 1);
               const secondStatus = developmentStatusFor(app, 2);
               const publishedVersions = state.versions

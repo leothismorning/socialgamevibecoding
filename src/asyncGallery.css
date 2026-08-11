@@ -1437,11 +1437,12 @@
 .async-app-flow-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border-bottom: 1px solid #e4e9f1; background: #fbfcff; }
 .async-app-flow-selection, .async-app-flow-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .async-app-flow-selection button, .async-app-flow-actions button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 10px; color: #46556c; border: 1px solid #cfd8e5; border-radius: 9px; background: #fff; font-size: 8px; font-weight: 900; cursor: pointer; }
+.async-app-flow-selection button.is-active { color: #6049aa; border-color: #cfc2ef; background: #f5f1ff; }
 .async-app-flow-selection strong { color: #6f5aae; font-size: 8px; white-space: nowrap; }
 .async-app-flow-actions button.async-primary { color: #fff; border-color: #6b56b1; background: #6b56b1; }
 .async-app-flow-actions button.async-retry-development { color: #fff; border-color: #a83f55; background: #a83f55; }
 .async-app-flow-selection button:disabled, .async-app-flow-actions button:disabled { cursor: not-allowed; opacity: .42; }
-.async-app-flow-actions svg { width: 12px; height: 12px; }
+.async-app-flow-selection svg, .async-app-flow-actions svg { width: 12px; height: 12px; }
 .async-development-summary { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .async-development-summary span { display: flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid #dfe5ee; border-radius: 999px; background: #fff; font-size: 8px; font-weight: 900; white-space: nowrap; }
 .async-development-summary svg { width: 12px; height: 12px; }
