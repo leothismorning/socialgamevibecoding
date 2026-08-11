@@ -886,6 +886,17 @@ function testRoleAssignmentKey(studyId: string) {
   return `host_test_role_assignment_v1:${studyId}`;
 }
 
+function homeFeedOrderKey(studyId: string) {
+  return `home_feed_order_v1:${studyId}`;
+}
+
+function homeFeedOrder(studyId: string): 'asc' | 'desc' {
+  const setting = db.prepare(`
+    SELECT value FROM vg_async_settings WHERE key = ?
+  `).get(homeFeedOrderKey(studyId)) as { value?: string } | undefined;
+  return setting?.value === 'desc' ? 'desc' : 'asc';
+}
+
 function testRolesConfigured(studyId: string) {
   const configured = db.prepare(`
     SELECT value FROM vg_async_settings WHERE key = ?
@@ -954,6 +965,19 @@ export function setCommunityTestCreators(
     testCreatorCount: creators.length,
     testCreatorCodes: creators,
   });
+  return getCommunityGalleryState(clientId);
+}
+
+export function setCommunityHomeFeedOrder(clientId: string, order: 'asc' | 'desc') {
+  const viewer = requireViewer(clientId, 'host');
+  if (order !== 'asc' && order !== 'desc') throw new Error('首页排序方式无效。');
+  const currentStudy = study();
+  db.prepare(`
+    INSERT INTO vg_async_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(homeFeedOrderKey(currentStudy.id), order, now());
+  recordEvent(viewer.code, 'set_home_feed_order', 'study', currentStudy.id, { order });
   return getCommunityGalleryState(clientId);
 }
 
@@ -4633,6 +4657,7 @@ export function getCommunityGalleryState(clientId = '') {
     study: {
       ...currentStudy,
       ...viewerWorkspace,
+      home_feed_order: homeFeedOrder(currentStudy.id),
       test_roles_configured: regularWorkspace.status !== 'setup' || testWorkspace.status !== 'setup'
         || testRolesConfigured(currentStudy.id),
     },

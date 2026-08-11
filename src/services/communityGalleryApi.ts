@@ -200,6 +200,11 @@ export const communityGalleryApi = {
     method: 'POST',
     body: body({ clientId, testCreatorCodes }),
   }),
+  setHomeFeedOrder: (clientId: string, order: 'asc' | 'desc') =>
+    request('/api/community-gallery/study/home-feed-order', {
+      method: 'POST',
+      body: body({ clientId, order }),
+    }),
   retryDevelopment: (clientId: string, jobId: number) =>
     request(`/api/community-gallery/jobs/${jobId}/retry`, {
       method: 'POST',

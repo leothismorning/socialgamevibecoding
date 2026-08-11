@@ -4642,6 +4642,20 @@ export default function AsyncGalleryApp() {
     () => state?.apps.filter((app) => app.status === 'published') || [],
     [state?.apps],
   );
+  const homePublishedApps = useMemo(() => {
+    const direction = state?.study.home_feed_order === 'desc' ? -1 : 1;
+    return [...publishedApps].sort((left, right) => {
+      const timeComparison = String(left.published_at || '').localeCompare(
+        String(right.published_at || ''),
+      );
+      if (timeComparison) return timeComparison * direction;
+      return left.creator_code.localeCompare(
+        right.creator_code,
+        undefined,
+        { numeric: true },
+      ) * direction;
+    });
+  }, [publishedApps, state?.study.home_feed_order]);
   const selectedApp = publishedApps.find((app) => app.id === selectedAppId);
 
   const navigateToApp = useCallback((appId: string) => {
@@ -4762,10 +4776,31 @@ export default function AsyncGalleryApp() {
                   ? '初始应用可以陆续发布；主持人点击开始后，大家才能发表评论和进行综合。'
                   : '先体验指定应用，也可以自由探索其他作品。普通讨论保持自然，综合创意由用户主动创建。'}</p>
               </div>
-              {state.viewer.role !== 'host' && ownApp?.initial_version_id && <span className="async-own-app-note"><CheckCircle2 /> 你的初始应用已发布</span>}
+              {state.viewer.role === 'host' ? (
+                <button
+                  type="button"
+                  className={`async-home-order-button${state.study.home_feed_order === 'desc' ? ' is-active' : ''}`}
+                  aria-pressed={state.study.home_feed_order === 'desc'}
+                  disabled={Boolean(busy)}
+                  title={state.study.home_feed_order === 'desc'
+                    ? '当前所有账号的首页均按发布时间倒序；点击恢复时间正序'
+                    : '让所有账号的首页按发布时间倒序显示'}
+                  onClick={() => void action('set-home-feed-order', () => (
+                    communityGalleryApi.setHomeFeedOrder(
+                      clientId,
+                      state.study.home_feed_order === 'desc' ? 'asc' : 'desc',
+                    )
+                  ))}
+                >
+                  <ArrowUpDown />
+                  {state.study.home_feed_order === 'desc' ? '恢复时间正序' : '按时间倒序'}
+                </button>
+              ) : ownApp?.initial_version_id ? (
+                <span className="async-own-app-note"><CheckCircle2 /> 你的初始应用已发布</span>
+              ) : null}
             </header>
             <div className={`async-gallery-grid columns-${galleryColumnCount}`}>
-              {publishedApps.map((app, index) => (
+              {homePublishedApps.map((app, index) => (
                 <GalleryMasonryItem key={app.id} paired={Boolean(app.community_version_id)}>
                     <GalleryCard
                       state={state}

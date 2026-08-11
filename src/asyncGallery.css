@@ -361,6 +361,10 @@
 .async-home-heading p { max-width: 800px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .async-own-app-note { display: flex; align-items: center; gap: 7px; padding: 9px 11px; color: #16734c; border-radius: 10px; background: #e9f9f0; font-size: 9px; font-weight: 850; white-space: nowrap; }
 .async-own-app-note svg { width: 15px; }
+.async-home-order-button { min-height: 38px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; color: #5f6d82; border: 1px solid #d7deea; border-radius: 10px; background: #fff; font-size: 9px; font-weight: 900; white-space: nowrap; cursor: pointer; }
+.async-home-order-button.is-active { color: #6049aa; border-color: #cfc2ef; background: #f5f1ff; }
+.async-home-order-button:disabled { cursor: not-allowed; opacity: .55; }
+.async-home-order-button svg { width: 15px; }
 .async-gallery-grid {
   display: grid;
   grid-auto-flow: dense;

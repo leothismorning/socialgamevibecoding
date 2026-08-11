@@ -39,6 +39,7 @@ import {
   saveCommunityComment,
   saveInitialDraft,
   saveRefinedDraft,
+  setCommunityHomeFeedOrder,
   setCommunityTestCreators,
   startCreatorDevelopmentOperation,
   startAsyncCommunityStudy,
@@ -729,6 +730,17 @@ export function registerCommunityGalleryRoutes(app: Express) {
         Array.isArray(req.body?.testCreatorCodes)
           ? req.body.testCreatorCodes.map(String)
           : [],
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/study/home-feed-order', (req, res) => {
+    try {
+      res.json(setCommunityHomeFeedOrder(
+        clientIdFrom(req),
+        String(req.body?.order || '') as 'asc' | 'desc',
       ));
     } catch (error) {
       sendError(res, error);

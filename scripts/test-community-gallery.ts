@@ -52,6 +52,22 @@ for (const account of [1, 2, 3, 4, 5, 6]) {
   assert.equal(Number(creatorState.viewer?.isTest), account <= 2 ? 1 : 0);
 }
 
+assert.equal(gallery.getCommunityGalleryState(hostClient).study.home_feed_order, 'asc');
+assert.throws(
+  () => gallery.setCommunityHomeFeedOrder(client(1), 'desc'),
+  /主持人|身份/,
+);
+assert.throws(
+  () => gallery.setCommunityHomeFeedOrder(hostClient, 'newest' as any),
+  /排序方式无效/,
+);
+state = gallery.setCommunityHomeFeedOrder(hostClient, 'desc');
+assert.equal(state.study.home_feed_order, 'desc');
+assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_order, 'desc');
+state = gallery.setCommunityHomeFeedOrder(hostClient, 'asc');
+assert.equal(state.study.home_feed_order, 'asc');
+assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'asc');
+
 const failedOperationId = 'creator-operation-failure-test';
 gallery.startCreatorDevelopmentOperation(client(5), failedOperationId, 'generate');
 gallery.recordCreatorDevelopmentProgress(failedOperationId, {
