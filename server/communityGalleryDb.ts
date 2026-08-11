@@ -3913,37 +3913,45 @@ export function clearCommunityTestData(clientId: string, confirmation: string) {
 export function deleteOwnInitialApp(clientId: string, appId: string) {
   const { viewer, app } = ownedApp(clientId, appId);
   const currentStudy = study();
-  const workspace = workspaceState(currentStudy.id, Number(viewer.isTest));
-  const flowStage = appFlowStage(app);
-  const draft = db.prepare(`
-    SELECT app_id FROM vg_async_drafts WHERE study_id = ? AND app_id = ? AND kind = 'initial'
-  `).get(currentStudy.id, app.id) as { app_id?: string } | undefined;
-  const isUnpublishedDraft = !app.initial_version_id
-    && app.status === 'draft'
-    && flowStage === 'waiting_round_1'
-    && Boolean(draft?.app_id);
-  const isPublishedInitial = Boolean(app.initial_version_id) && flowStage === 'round_1';
-  const canDeleteUnpublishedDraft = workspace.status !== 'closed' && isUnpublishedDraft;
-  const canDeletePublishedInitial = workspace.status === 'setup' && isPublishedInitial;
-  if (!canDeleteUnpublishedDraft && !canDeletePublishedInitial) {
-    if (workspace.status === 'closed') {
-      throw new Error('研究已经结束，不能删除当前项目。');
-    }
-    if (isPublishedInitial) {
-      throw new Error('评论流程开始后不能删除已发布作品。');
-    }
-    throw new Error('当前项目状态不允许删除。');
-  }
-  const runningTaskCount = Number((db.prepare(`
-    SELECT
-      (SELECT COUNT(*) FROM vg_async_creator_operations
-        WHERE study_id = ? AND app_id = ? AND status = 'running') +
-      (SELECT COUNT(*) FROM vg_async_generation_jobs
-        WHERE study_id = ? AND app_id = ? AND status = 'running') AS count
-  `).get(currentStudy.id, app.id, currentStudy.id, app.id) as { count?: number } | undefined)?.count || 0);
-  if (runningTaskCount > 0) throw new Error('该应用仍有开发任务正在运行，暂时不能删除。');
+  const isUnpublishedDraft = !app.initial_version_id && app.status === 'draft';
+  const isPublishedApp = Boolean(app.initial_version_id) && app.status === 'published';
+  if (!isUnpublishedDraft && !isPublishedApp) throw new Error('当前项目状态不允许删除。');
 
   const transaction = db.transaction(() => {
+    const feedbackCounts = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM vg_async_comments
+          WHERE study_id = ? AND app_id = ? AND parent_comment_id IS NULL) AS comment_count,
+        (SELECT COUNT(*) FROM vg_async_comments
+          WHERE study_id = ? AND app_id = ? AND parent_comment_id IS NOT NULL) AS reply_count,
+        (SELECT COUNT(*) FROM vg_async_syntheses
+          WHERE study_id = ? AND target_app_id = ?
+            AND COALESCE(is_development_brief, 0) = 0) AS synthesis_count
+    `).get(
+      currentStudy.id, app.id,
+      currentStudy.id, app.id,
+      currentStudy.id, app.id,
+    ) as { comment_count: number; reply_count: number; synthesis_count: number };
+    if (
+      Number(feedbackCounts.comment_count) > 0
+      || Number(feedbackCounts.reply_count) > 0
+      || Number(feedbackCounts.synthesis_count) > 0
+    ) {
+      throw new Error('作品已有评论，不能删除');
+    }
+
+    const runningTaskCount = Number((db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM vg_async_creator_operations
+          WHERE study_id = ? AND app_id = ? AND status = 'running') +
+        (SELECT COUNT(*) FROM vg_async_generation_jobs
+          WHERE study_id = ? AND app_id = ? AND status = 'running') AS count
+    `).get(
+      currentStudy.id, app.id,
+      currentStudy.id, app.id,
+    ) as { count?: number } | undefined)?.count || 0);
+    if (runningTaskCount > 0) throw new Error('该应用仍有开发任务正在运行，暂时不能删除。');
+
     db.prepare(`
       DELETE FROM vg_async_events
       WHERE study_id = ? AND (
@@ -4279,6 +4287,15 @@ export function getCommunityGalleryState(clientId = '') {
           (SELECT COUNT(*) FROM vg_async_syntheses s
             WHERE s.study_id = a.study_id AND s.target_app_id = a.id
               AND s.withdrawn_at IS NULL AND s.deleted_at IS NULL) AS synthesis_count,
+          (SELECT COUNT(*) FROM vg_async_comments c
+            WHERE c.study_id = a.study_id AND c.app_id = a.id
+              AND c.parent_comment_id IS NULL) AS feedback_comment_count,
+          (SELECT COUNT(*) FROM vg_async_comments c
+            WHERE c.study_id = a.study_id AND c.app_id = a.id
+              AND c.parent_comment_id IS NOT NULL) AS feedback_reply_count,
+          (SELECT COUNT(*) FROM vg_async_syntheses s
+            WHERE s.study_id = a.study_id AND s.target_app_id = a.id
+              AND COALESCE(s.is_development_brief, 0) = 0) AS feedback_synthesis_count,
           (SELECT COUNT(*) FROM vg_async_comments c
             WHERE c.study_id = a.study_id AND c.app_id = a.id
               AND c.target_type = 'app' AND c.deleted_at IS NULL

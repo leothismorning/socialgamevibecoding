@@ -312,9 +312,7 @@ assert.equal(state.workspaces.test.status, 'active');
 assert.equal(state.workspaces.regular.status, 'active');
 assert.equal(state.apps.find((app: any) => app.id === regularApp.id)?.flow_stage, 'round_1');
 
-// A Creator who has not published may still discard and recreate their draft
-// after comments open. Published Apps remain locked because community activity
-// can already refer to them.
+// A Creator may discard and recreate an unpublished draft after comments open.
 state = gallery.saveInitialDraft({
   clientId: client(6),
   title: 'Late Unpublished Draft Six',
@@ -341,15 +339,105 @@ assert.ok(recreatedDraft);
 assert.notEqual(recreatedDraft.id, lateUnpublishedDraft.id);
 assert.equal(recreatedDraft.initial_version_id, null);
 
-assert.throws(
-  () => gallery.deleteOwnInitialApp(client(3), regularApp.id),
-  /评论流程开始后/,
+// A published App with no comments can also be deleted after the workspace has
+// started. The deletion is scoped to that App ID: its versions, likes and draft
+// disappear, while another Creator's App and the workspace flow stay intact.
+const secondRegularInitialVersion = state.versions.find(
+  (version: any) => version.app_id === secondRegularApp.id && version.kind === 'initial',
 );
-gallery.saveCommunityComment({
+assert.ok(secondRegularInitialVersion);
+state = gallery.toggleCommunityAppLike(
+  client(3),
+  secondRegularApp.id,
+  Number(secondRegularInitialVersion.id),
+);
+db.prepare(`
+  INSERT OR REPLACE INTO vg_async_drafts
+    (study_id, app_id, kind, code, summary, prompt, updated_at)
+  VALUES (?, ?, 'project', ?, 'Disposable project draft', 'Delete only this App', ?)
+`).run(state.study.id, secondRegularApp.id, html('Disposable C04 draft'), new Date().toISOString());
+const regularVersionCountBeforeDelete = Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_versions WHERE study_id = ? AND app_id = ?
+`).get(state.study.id, regularApp.id) as { count: number }).count);
+state = gallery.deleteOwnInitialApp(client(4), secondRegularApp.id);
+assert.equal(state.apps.some((app: any) => app.id === secondRegularApp.id), false);
+assert.equal(state.apps.some((app: any) => app.id === regularApp.id), true);
+assert.equal(state.workspaces.regular.status, 'active');
+assert.equal(state.apps.find((app: any) => app.id === regularApp.id)?.flow_stage, 'round_1');
+assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_versions WHERE app_id = ?`).get(secondRegularApp.id) as { count: number }).count), 0);
+assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_version_likes WHERE app_id = ?`).get(secondRegularApp.id) as { count: number }).count), 0);
+assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_drafts WHERE app_id = ?`).get(secondRegularApp.id) as { count: number }).count), 0);
+assert.equal(Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_versions WHERE study_id = ? AND app_id = ?
+`).get(state.study.id, regularApp.id) as { count: number }).count), regularVersionCountBeforeDelete);
+
+state = gallery.saveInitialDraft({
+  clientId: client(4),
+  title: 'Recreated Regular App Four',
+  brief: 'Only C04 was reset after deleting its unreviewed App',
+  prompt: 'Recreate C04 without changing other Creators',
+  code: html('Recreated Regular App Four'),
+  summary: 'Replacement draft',
+});
+const recreatedRegularDraft = state.apps.find((app: any) => app.creator_code === 'C04');
+assert.ok(recreatedRegularDraft);
+assert.notEqual(recreatedRegularDraft.id, secondRegularApp.id);
+assert.equal(recreatedRegularDraft.initial_version_id, null);
+
+// Ordinary comments, replies and syntheses each contribute to a permanent
+// deletion guard. Even after their authors delete them, the App cannot be
+// removed because community activity has already occurred.
+state = gallery.saveCommunityComment({
   clientId: client(4),
   appId: regularApp.id,
-  content: 'A regular comment that must remain.',
+  content: 'A regular comment that must preserve the App.',
 });
+const guardedComment = state.comments.find(
+  (comment: any) => comment.content === 'A regular comment that must preserve the App.',
+);
+assert.ok(guardedComment);
+state = gallery.saveCommunityComment({
+  clientId: client(5),
+  appId: regularApp.id,
+  parentCommentId: guardedComment.id,
+  content: 'A reply that also blocks App deletion.',
+});
+const guardedReply = state.comments.find(
+  (comment: any) => comment.content === 'A reply that also blocks App deletion.',
+);
+assert.ok(guardedReply);
+state = gallery.createSynthesis({
+  clientId: client(5),
+  targetAppId: regularApp.id,
+  title: 'Deletion guard synthesis',
+  content: 'A synthesis that also blocks App deletion.',
+  sources: [{ type: 'comment', id: guardedComment.id }],
+});
+const guardedSynthesis = state.syntheses.find(
+  (synthesis: any) => synthesis.title === 'Deletion guard synthesis',
+);
+assert.ok(guardedSynthesis);
+let guardedRegularApp = state.apps.find((app: any) => app.id === regularApp.id);
+assert.equal(Number(guardedRegularApp.feedback_comment_count), 1);
+assert.equal(Number(guardedRegularApp.feedback_reply_count), 1);
+assert.equal(Number(guardedRegularApp.feedback_synthesis_count), 1);
+assert.throws(
+  () => gallery.deleteOwnInitialApp(client(3), regularApp.id),
+  /作品已有评论，不能删除/,
+);
+gallery.deleteCommunitySynthesis(client(5), guardedSynthesis.id);
+gallery.deleteCommunityComment(client(5), guardedReply.id);
+state = gallery.deleteCommunityComment(client(4), guardedComment.id);
+guardedRegularApp = state.apps.find((app: any) => app.id === regularApp.id);
+assert.equal(Number(guardedRegularApp.comment_count), 0);
+assert.equal(Number(guardedRegularApp.synthesis_count), 0);
+assert.equal(Number(guardedRegularApp.feedback_comment_count), 1);
+assert.equal(Number(guardedRegularApp.feedback_reply_count), 1);
+assert.equal(Number(guardedRegularApp.feedback_synthesis_count), 1);
+assert.throws(
+  () => gallery.deleteOwnInitialApp(client(3), regularApp.id),
+  /作品已有评论，不能删除/,
+);
 
 state = gallery.getCommunityGalleryState(hostClient);
 assert.equal(state.testData.testCreatorCount, 2);
@@ -394,7 +482,11 @@ assert.equal(state.workspaces.regular.status, 'active');
 assert.equal(state.apps.some((app: any) => app.id === testApp.id), false);
 assert.equal(state.apps.some((app: any) => app.id === regularApp.id), true);
 assert.equal(state.comments.some((comment: any) => comment.content === 'A test-only comment.'), false);
-assert.equal(state.comments.some((comment: any) => comment.content === 'A regular comment that must remain.'), true);
+assert.equal(Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_comments WHERE study_id = ? AND app_id = ?
+`).get(state.study.id, regularApp.id) as { count: number }).count), 2);
+assert.equal(Number(state.apps.find((app: any) => app.id === regularApp.id)?.feedback_comment_count), 1);
+assert.equal(Number(state.apps.find((app: any) => app.id === regularApp.id)?.feedback_reply_count), 1);
 assert.equal(state.testData.testAppCount, 0);
 assert.equal(state.testData.testSessionCount, 0);
 

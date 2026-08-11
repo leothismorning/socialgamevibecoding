@@ -340,6 +340,8 @@
 .async-studio-published h2 { margin: 4px 0; font-size: 20px; }
 .async-studio-published p { margin: 0; color: var(--muted); font-size: 10px; }
 .async-control-continue-note { flex: 0 0 auto; padding: 8px 10px; color: #66748a; border: 1px solid #dbe2ec; border-radius: 9px; background: #f7f9fc; font-size: 8px; font-weight: 850; }
+.async-delete-app-control { flex: 0 0 auto; display: grid; justify-items: end; gap: 5px; }
+.async-delete-app-control > small { color: #a1364f; font-size: 7px; font-weight: 850; white-space: nowrap; }
 .async-delete-initial-app { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: 0 0 auto; padding: 0 12px; color: #a1364f; border: 1px solid #e6bac6; border-radius: 10px; background: #fff6f8; font-size: 9px; font-weight: 900; cursor: pointer; }
 .async-delete-initial-app:hover { color: #fff; border-color: #b93d59; background: #b93d59; }
 .async-delete-initial-app:disabled { cursor: not-allowed; opacity: .55; }

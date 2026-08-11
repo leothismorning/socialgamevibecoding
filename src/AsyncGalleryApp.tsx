@@ -348,6 +348,10 @@ function PublishedCreatorStudio({
   if (!ownApp || !latestVersion) return null;
   const isDeveloping = busy === 'refine-project';
   const hasProjectDraft = ownApp.draft_kind === 'project' && Boolean(ownApp.draft_code);
+  const feedbackCount = Number(ownApp.feedback_comment_count || 0)
+    + Number(ownApp.feedback_reply_count || 0)
+    + Number(ownApp.feedback_synthesis_count || 0);
+  const deleteBlockedByFeedback = feedbackCount > 0;
   const progressSteps = [
     ['plan', '理解需求'],
     ['structure', '搭建页面'],
@@ -419,19 +423,22 @@ function PublishedCreatorStudio({
             下一轮开发只能由主持人锁定本轮点赞并完成抽取后启动；生成草稿后，你可以继续修改并决定是否发布。
           </p>
         </div>
-        {ownApp.flow_stage === 'round_1' && state.study.status === 'setup' ? (
+        <aside className={`async-delete-app-control${deleteBlockedByFeedback ? ' is-blocked' : ''}`}>
           <button
             type="button"
             className="async-delete-initial-app"
-            disabled={Boolean(busy)}
+            disabled={Boolean(busy) || deleteBlockedByFeedback}
+            aria-describedby={deleteBlockedByFeedback ? 'delete-app-feedback-note' : undefined}
+            title={deleteBlockedByFeedback ? '作品已有评论，不能删除' : '删除这个 App 并重新开始创作'}
             onClick={() => {
               if (!window.confirm(`确认删除“${ownApp.title}”吗？删除后需要重新创建并发布。`)) return;
               void action('delete-initial-app', () => communityGalleryApi.deleteInitialApp(clientId, ownApp.id));
             }}
           ><Trash2 /> 删除这个 App</button>
-        ) : (
-          <span className="async-control-continue-note">等待主持人启动下一轮开发</span>
-        )}
+          {deleteBlockedByFeedback && (
+            <small id="delete-app-feedback-note">作品已有评论，不能删除</small>
+          )}
+        </aside>
       </section>
 
       {workspaceOpen && (

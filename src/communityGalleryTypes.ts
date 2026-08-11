@@ -47,6 +47,9 @@ export type CommunityApp = {
   like_count: number;
   comment_count: number;
   synthesis_count: number;
+  feedback_comment_count: number;
+  feedback_reply_count: number;
+  feedback_synthesis_count: number;
   current_round_comment_count: number;
   current_round_synthesis_count: number;
   viewer_liked: number;
