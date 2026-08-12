@@ -42,6 +42,32 @@ export type DevelopmentAgentOutput = AIResult & {
   steps: string[];
 };
 
+export type AgentPatchOperation = {
+  type: 'replace' | 'insert_before' | 'insert_after';
+  search: string;
+  content: string;
+  reason: string;
+};
+
+export type AgentPatchDraft = {
+  summary: string;
+  operations: AgentPatchOperation[];
+};
+
+export type AgentPreservationInspection = {
+  baselineIds: string[];
+  candidateIds: string[];
+  missingIds: string[];
+  addedIds: string[];
+  baselineControls: Record<string, number>;
+  candidateControls: Record<string, number>;
+  reducedControls: string[];
+  baselineEventBindings: number;
+  candidateEventBindings: number;
+  retainedIdCoverage: number;
+  lengthRatio: number;
+};
+
 const DEFAULT_AGENT_STEP_TIMEOUT_MS = 6 * 60 * 1000;
 const DEFAULT_AGENT_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_REPAIR_ATTEMPTS = 2;
@@ -285,6 +311,173 @@ function parseRepairArtifact(value: string): { artifact: RepairArtifact; content
 function truncate(value: string, max = 6000) {
   if (!value) return '';
   return value.length <= max ? value : `${value.slice(0, max)}\n\n[truncated: ${value.length - max} characters omitted]`;
+}
+
+function extractJsonObject(value: string) {
+  const text = stripFence(value);
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('增量开发没有返回有效的 JSON 补丁。');
+  return text.slice(start, end + 1);
+}
+
+export function parseAgentPatchDraft(value: string): AgentPatchDraft {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(extractJsonObject(value));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`增量开发返回的补丁无法解析：${message}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.operations)) {
+    throw new Error('增量开发补丁缺少 operations 数组。');
+  }
+  if (parsed.operations.length === 0) {
+    throw new Error('增量开发没有生成任何修改。');
+  }
+  if (parsed.operations.length > 24) {
+    throw new Error('增量开发一次返回了过多修改，已停止以避免整页重写。');
+  }
+  const operations = parsed.operations.map((operation: any, index: number): AgentPatchOperation => {
+    const type = String(operation?.type || '') as AgentPatchOperation['type'];
+    const search = String(operation?.search || '');
+    const content = String(operation?.content ?? '');
+    const reason = String(operation?.reason || '').trim();
+    if (!['replace', 'insert_before', 'insert_after'].includes(type)) {
+      throw new Error(`第 ${index + 1} 个增量修改使用了不支持的类型。`);
+    }
+    if (!search.trim()) throw new Error(`第 ${index + 1} 个增量修改缺少精确查找内容。`);
+    if (type === 'replace' && !content.trim()) {
+      throw new Error(`第 ${index + 1} 个增量修改试图删除原有内容，已停止以保护旧功能。`);
+    }
+    return { type, search, content, reason };
+  });
+  return {
+    summary: String(parsed.summary || '').trim() || '已按照入选评论增量更新应用。',
+    operations,
+  };
+}
+
+export function applyAgentPatch(baseCode: string, draft: AgentPatchDraft) {
+  if (!baseCode.trim()) throw new Error('增量开发缺少上一已发布版本。');
+  let code = baseCode;
+  let totalSearchLength = 0;
+  draft.operations.forEach((operation, index) => {
+    totalSearchLength += operation.search.length;
+    if (operation.search.length > 6000) {
+      throw new Error(`第 ${index + 1} 个增量修改范围过大，已停止以避免重写原有功能。`);
+    }
+    if (
+      operation.type === 'replace'
+      && operation.search.length >= 200
+      && operation.content.length < operation.search.length * 0.75
+    ) {
+      throw new Error(`第 ${index + 1} 个增量修改删除了过多旧代码，已停止以保护原有功能。`);
+    }
+    const occurrences = code.split(operation.search).length - 1;
+    if (occurrences !== 1) {
+      throw new Error(
+        `第 ${index + 1} 个增量修改无法安全应用：精确目标出现 ${occurrences} 次（必须恰好 1 次）。`,
+      );
+    }
+    const replacement = operation.type === 'replace'
+      ? operation.content
+      : operation.type === 'insert_before'
+        ? `${operation.content}${operation.search}`
+        : `${operation.search}${operation.content}`;
+    code = code.replace(operation.search, () => replacement);
+  });
+  if (totalSearchLength > Math.max(8000, baseCode.length * 0.4)) {
+    throw new Error('本次增量修改触及的旧代码过多，已停止以避免整页重写。');
+  }
+  if (code === baseCode) throw new Error('增量开发没有改变上一版本。');
+  return ensureStandalonePerformanceGuard(code);
+}
+
+function markupWithoutCode(code: string) {
+  return code
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+}
+
+function extractDocumentIds(code: string) {
+  return unique(
+    [...markupWithoutCode(code).matchAll(/\bid=["']([^"']+)["']/gi)]
+      .map((match) => match[1])
+      .filter((id) => id !== 'agentToast'),
+  );
+}
+
+function countTag(code: string, tagName: string) {
+  return (markupWithoutCode(code).match(new RegExp(`<${tagName}\\b`, 'gi')) || []).length;
+}
+
+function countEventBindings(code: string) {
+  return (code.match(/\.addEventListener\s*\(/g) || []).length
+    + (code.match(/\bon[a-z]+\s*=/gi) || []).length;
+}
+
+export function inspectAgentPreservation(
+  baseCode: string,
+  candidateCode: string,
+): AgentPreservationInspection {
+  const baselineIds = extractDocumentIds(baseCode);
+  const candidateIds = extractDocumentIds(candidateCode);
+  const candidateIdSet = new Set(candidateIds);
+  const baselineIdSet = new Set(baselineIds);
+  const missingIds = baselineIds.filter((id) => !candidateIdSet.has(id));
+  const addedIds = candidateIds.filter((id) => !baselineIdSet.has(id));
+  const baselineControls: Record<string, number> = {};
+  const candidateControls: Record<string, number> = {};
+  const reducedControls: string[] = [];
+  ['button', 'input', 'select', 'textarea', 'form', 'canvas', 'nav'].forEach((tagName) => {
+    baselineControls[tagName] = countTag(baseCode, tagName);
+    candidateControls[tagName] = countTag(candidateCode, tagName);
+    if (candidateControls[tagName] < baselineControls[tagName]) reducedControls.push(tagName);
+  });
+  return {
+    baselineIds,
+    candidateIds,
+    missingIds,
+    addedIds,
+    baselineControls,
+    candidateControls,
+    reducedControls,
+    baselineEventBindings: countEventBindings(baseCode),
+    candidateEventBindings: countEventBindings(candidateCode),
+    retainedIdCoverage: baselineIds.length === 0
+      ? 1
+      : (baselineIds.length - missingIds.length) / baselineIds.length,
+    lengthRatio: baseCode.length === 0 ? 1 : candidateCode.length / baseCode.length,
+  };
+}
+
+export function validateAgentPreservation(
+  baseCode: string,
+  candidateCode: string,
+) {
+  const inspection = inspectAgentPreservation(baseCode, candidateCode);
+  if (inspection.missingIds.length > 0) {
+    throw new Error(
+      `旧功能保留检查失败：以下原有组件消失了：${inspection.missingIds.slice(0, 12).join(', ')}。`,
+    );
+  }
+  if (inspection.reducedControls.length > 0) {
+    throw new Error(
+      `旧功能保留检查失败：以下交互组件数量减少：${inspection.reducedControls.join(', ')}。`,
+    );
+  }
+  if (inspection.candidateEventBindings < inspection.baselineEventBindings) {
+    throw new Error(
+      `旧功能保留检查失败：事件绑定从 ${inspection.baselineEventBindings} 个减少到 ${inspection.candidateEventBindings} 个。`,
+    );
+  }
+  if (inspection.lengthRatio < 0.9) {
+    throw new Error(
+      `旧功能保留检查失败：候选版本仅为上一版本的 ${Math.round(inspection.lengthRatio * 100)}%，疑似发生整页删减。`,
+    );
+  }
+  return inspection;
 }
 
 function isPrivateIp(address: string) {
@@ -585,6 +778,22 @@ function validateAssembledHtml(
   }
 }
 
+function inspectCompleteHtml(code: string) {
+  const body = code.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] || '';
+  const bodyWithoutCode = body
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+  const css = [...code.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)]
+    .map((match) => match[1])
+    .join('\n');
+  const js = [...code.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
+    .map((match) => match[1])
+    .join('\n');
+  const artifactInspection = inspectAgentArtifacts(bodyWithoutCode, css);
+  const interactionInspection = inspectAgentInteractionStyles(js, css);
+  return { body: bodyWithoutCode, css, js, artifactInspection, interactionInspection };
+}
+
 async function runAgentTextStep(
   provider: AIProvider,
   title: string,
@@ -726,6 +935,265 @@ Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwi
     input.signal,
     input.apiKey,
   );
+}
+
+async function runAgentPatchAudit(
+  input: DevelopmentAgentInput,
+  plan: string,
+  draft: AgentPatchDraft,
+  preservation: AgentPreservationInspection,
+) {
+  return runAgentTextStep(
+    input.provider,
+    'incremental change gate',
+    `Act as a strict integration gate for an incremental change to an existing web App.
+
+Requested change:
+${input.creatorMessage || input.creatorPrompt || input.brief || 'No change request supplied.'}
+
+Selected participant ideas:
+${ideaList(input.selectedIdeas)}
+
+Approved implementation plan:
+${plan}
+
+Exact patch operations (complete, not excerpts):
+${JSON.stringify(draft, null, 2)}
+
+Deterministic preservation results:
+- Existing ids retained: ${preservation.baselineIds.length - preservation.missingIds.length}/${preservation.baselineIds.length}
+- Missing existing ids: ${preservation.missingIds.join(', ') || 'none'}
+- Added ids: ${preservation.addedIds.join(', ') || 'none'}
+- Reduced control types: ${preservation.reducedControls.join(', ') || 'none'}
+- Event bindings: ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}
+- Candidate/base size: ${Math.round(preservation.lengthRatio * 100)}%
+
+Judge only these blocking questions:
+1. Do the actual HTML/CSS/JavaScript changes implement the requested idea, rather than merely mentioning it in text?
+2. If the idea needs interaction, do the patch operations include the required interface, visible states, and executable event logic?
+3. Are the changes scoped and additive, without redesigning or replacing unrelated existing functionality?
+4. Do all newly referenced ids and JavaScript-applied state classes have matching HTML/CSS in the operations or clearly target preserved existing elements?
+
+Reply exactly "PASS: concise reason" when the patch is safe to preview. Otherwise reply "FAIL: concrete blocking reason".`,
+    2048,
+    input.signal,
+    input.apiKey,
+  );
+}
+
+async function runIncrementalDevelopmentAgentPipeline(
+  input: DevelopmentAgentInput,
+): Promise<DevelopmentAgentOutput> {
+  const startedAt = performance.now();
+  const baseCode = input.currentCode?.trim() || '';
+  if (!baseCode) throw new Error('社区开发缺少上一已发布版本，已停止生成以避免覆盖原作品。');
+  const progress = (event: DevelopmentAgentProgress) => {
+    try {
+      input.onProgress?.(event);
+    } catch (error) {
+      addDebugLog({
+        kind: 'server',
+        phase: 'error',
+        title: 'Unable to save public incremental-development progress',
+        detail: { error: error instanceof Error ? error.message : String(error), event },
+      });
+    }
+  };
+  const requestedChange = input.creatorMessage || input.creatorPrompt || input.brief || '';
+
+  progress({
+    step: 'plan',
+    order: 1,
+    status: 'running',
+    title: 'AI 正在制定增量修改计划',
+    detail: '正在读取完整的上一版本，并定位入选评论需要改动的位置。',
+  });
+  const plan = await runAgentTextStep(
+    input.provider,
+    'incremental implementation plan',
+    `Create a compact, implementation-ready plan for adding one selected idea to an existing self-contained HTML App.
+
+Requested change:
+${requestedChange}
+
+Selected participant ideas:
+${ideaList(input.selectedIdeas)}
+
+Fusion plan:
+${input.fusionPlan || 'No fusion plan supplied.'}
+
+Complete canonical HTML (nothing is omitted):
+${baseCode}
+
+The existing document is immutable except for the smallest exact edits required by the request. Prefer adding a new, namespaced HTML/CSS/JavaScript component alongside the old implementation. Preserve every existing section, id, control, event, function, style, text, image, navigation path, and behavior. Do not rewrite the page, body, stylesheet, or main script. Do not touch platform performance-guard code or #agentToast. Identify exact safe insertion or small replacement locations. Use the Creator's language and keep the plan under 900 characters.`,
+    2048,
+    input.signal,
+    input.apiKey,
+  );
+  progress({ step: 'plan', order: 1, status: 'completed', title: '增量修改计划已经完成', detail: plan });
+
+  const maxRepairAttempts = repairAttemptsFromEnv();
+  const attemptFailures: string[] = [];
+  let candidateCode = '';
+  let patchDraft: AgentPatchDraft | null = null;
+  let preservation: AgentPreservationInspection | null = null;
+  let audit = '';
+
+  for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
+    const attemptNumber = attempt + 1;
+    progress({
+      step: 'structure',
+      order: 2,
+      status: 'running',
+      title: attempt === 0 ? 'AI 正在生成精确修改补丁' : `AI 正在重新生成安全补丁（${attemptNumber}/${maxRepairAttempts + 1}）`,
+      detail: '每个修改必须精确命中上一版本；未命中的内容会保持原样。',
+    });
+
+    try {
+      const patchResponse = await runAgentTextStep(
+        input.provider,
+        `incremental patch attempt ${attemptNumber}`,
+        `Produce exact, minimal patch operations for the canonical HTML below.
+
+Requested change:
+${requestedChange}
+
+Selected participant ideas:
+${ideaList(input.selectedIdeas)}
+
+Fusion plan:
+${input.fusionPlan || 'No fusion plan supplied.'}
+
+Implementation plan:
+${plan}
+
+${attemptFailures.length ? `The previous patch was rejected. Correct this exact problem while starting again from the untouched canonical HTML:\n${attemptFailures.at(-1)}\n` : ''}
+Complete canonical HTML (nothing is omitted):
+${baseCode}
+
+The text artifact inside the required outer response must contain one JSON object with this exact schema:
+{
+  "summary": "one concise public sentence describing the implemented change",
+  "operations": [
+    {
+      "type": "replace | insert_before | insert_after",
+      "search": "an exact, unique, verbatim substring copied from the canonical HTML",
+      "content": "the complete replacement or insertion",
+      "reason": "why this edit is required"
+    }
+  ]
+}
+
+Safety contract:
+- Make the smallest additive change that implements the selected idea. Do not return a full HTML document.
+- Every search string must occur exactly once in the canonical HTML and should contain enough neighboring text to be unique.
+- Prefer inserting a namespaced component plus separate scoped <style> and <script> blocks before </body> instead of replacing existing body/CSS/JavaScript.
+- A replace operation may edit a small targeted fragment but may not delete a feature or replace a whole section, stylesheet, script, body, head, or document.
+- Preserve all existing ids, controls, functions, listeners, content, navigation, images, styles, and behaviors, even when implementing the new idea.
+- Do not touch scripts marked data-vibecoding-performance-guard, #agentToast, or the existing fallback machinery.
+- New controls must have working JavaScript. New runtime classes must have visibly distinct CSS. Use unique prefixed ids/classes to avoid collisions.
+- Do not use Tailwind, external frameworks, inline onclick, @import, or placeholder-only behavior.
+- Escape the patch JSON correctly. Put only that serialized patch JSON in the outer response's text field, keep the outer code field empty, and do not add Markdown fences or explanation.`,
+        8192,
+        input.signal,
+        input.apiKey,
+      );
+      patchDraft = parseAgentPatchDraft(patchResponse);
+      candidateCode = applyAgentPatch(baseCode, patchDraft);
+      const completeInspection = inspectCompleteHtml(candidateCode);
+      validateAssembledHtml(
+        candidateCode,
+        completeInspection.artifactInspection,
+        completeInspection.interactionInspection,
+      );
+      preservation = validateAgentPreservation(baseCode, candidateCode);
+      audit = await runAgentPatchAudit(input, plan, patchDraft, preservation);
+      if (!/^PASS\s*:/i.test(audit.trim())) {
+        throw new Error(`增量实现检查未通过：${audit.replace(/^FAIL\s*:\s*/i, '').slice(0, 900)}`);
+      }
+      break;
+    } catch (error) {
+      const failure = error instanceof Error ? error.message : String(error);
+      attemptFailures.push(failure);
+      addDebugLog({
+        kind: 'ai',
+        phase: 'info',
+        title: `Incremental patch attempt ${attemptNumber} rejected`,
+        detail: { provider: input.provider, mode: input.mode, failure },
+      });
+      if (attempt >= maxRepairAttempts) {
+        throw new Error(
+          `系统已拒绝可能破坏旧功能的版本。上一已发布版本保持不变。最后原因：${failure.slice(0, 900)}`,
+        );
+      }
+      progress({
+        step: 'validation',
+        order: 7,
+        status: 'warning',
+        title: `安全检查发现问题，正在从上一版本重新生成（${attemptNumber}/${maxRepairAttempts}）`,
+        detail: failure,
+      });
+    }
+  }
+
+  if (!patchDraft || !candidateCode || !preservation || !/^PASS\s*:/i.test(audit.trim())) {
+    throw new Error('增量开发没有生成可安全预览的版本，上一已发布版本保持不变。');
+  }
+
+  progress({
+    step: 'structure', order: 2, status: 'completed', title: '页面增量修改已经完成',
+    detail: `已安全应用 ${patchDraft.operations.length} 个精确修改，未重写原页面。`,
+  });
+  progress({
+    step: 'images', order: 3, status: 'completed', title: '原有图片已经保留',
+    detail: '沿用上一版本的图片资源，未对无关素材进行替换。',
+  });
+  progress({
+    step: 'styles', order: 4, status: 'completed', title: '增量样式已经检查',
+    detail: '新增样式保持局部作用域，原有视觉样式保持不变。',
+  });
+  progress({
+    step: 'logic', order: 5, status: 'completed', title: '新旧交互已经连接',
+    detail: `原有 ${preservation.baselineEventBindings} 个事件绑定均已保留。`,
+  });
+  progress({
+    step: 'summary', order: 6, status: 'completed', title: '本次修改说明已经完成',
+    detail: patchDraft.summary,
+  });
+  progress({
+    step: 'validation', order: 7, status: 'completed', title: '新旧功能保留检查已经通过',
+    detail: `保留 ${preservation.baselineIds.length}/${preservation.baselineIds.length} 个原有组件；${audit.replace(/^PASS\s*:\s*/i, '')}`,
+  });
+
+  addDebugLog({
+    kind: 'ai',
+    phase: 'response',
+    title: 'Development agent applied incremental patch',
+    durationMs: Math.round(performance.now() - startedAt),
+    detail: {
+      provider: input.provider,
+      mode: input.mode,
+      baseLength: baseCode.length,
+      candidateLength: candidateCode.length,
+      operationCount: patchDraft.operations.length,
+      preservation,
+      audit,
+      rejectedAttempts: attemptFailures,
+    },
+  });
+
+  return {
+    text: patchDraft.summary,
+    code: candidateCode,
+    model: `${input.provider}-incremental-agent`,
+    usage: null,
+    steps: [
+      `增量修改计划：\n${plan}`,
+      `已应用 ${patchDraft.operations.length} 个精确补丁。`,
+      `旧功能保留检查：保留 ${preservation.baselineIds.length}/${preservation.baselineIds.length} 个原有组件，事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}。`,
+      `增量实现检查：${audit}`,
+    ],
+  };
 }
 
 async function runDevelopmentAgentPipeline(input: DevelopmentAgentInput): Promise<DevelopmentAgentOutput> {
@@ -1209,6 +1677,8 @@ export async function runDevelopmentAgent(input: DevelopmentAgentInput): Promise
     timeoutMs,
     input.signal,
     `AI 整体开发超过 ${timeoutMinutes(timeoutMs)} 分钟仍未完成，本轮开发失败，请重试。`,
-    (signal) => runDevelopmentAgentPipeline({ ...input, signal }),
+    (signal) => input.mode === 'round-candidate' && Boolean(input.currentCode?.trim())
+      ? runIncrementalDevelopmentAgentPipeline({ ...input, signal })
+      : runDevelopmentAgentPipeline({ ...input, signal }),
   );
 }

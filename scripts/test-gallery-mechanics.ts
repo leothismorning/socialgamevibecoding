@@ -51,6 +51,10 @@ const {
   repairAgentInteractionClassNames,
   removePlatformOwnedAgentToast,
   appendAgentCss,
+  parseAgentPatchDraft,
+  applyAgentPatch,
+  inspectAgentPreservation,
+  validateAgentPreservation,
 } = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
 
@@ -144,6 +148,58 @@ assert.equal(
   ),
   '.hero { color: #fff; background: linear-gradient(#123, #456); }\n\n.missing-state { outline: 2px solid #f5c542; }',
   'CSS repair additions must preserve the complete original visual stylesheet',
+);
+
+const incrementalBase = `<!doctype html><html><head><style>.old-button{color:blue}</style></head><body>
+<main id="existingApp"><button id="oldButton" class="old-button">旧功能</button></main>
+<script>document.getElementById('oldButton').addEventListener('click', () => {});</script>
+</body></html>`;
+const incrementalDraft = parseAgentPatchDraft(JSON.stringify({
+  summary: '新增创意卡片，同时保留旧功能。',
+  operations: [{
+    type: 'insert_before',
+    search: '</body>',
+    content: '<section id="newIdea">新创意</section>',
+    reason: '加入入选评论要求的新内容',
+  }],
+}));
+const incrementalCandidate = applyAgentPatch(incrementalBase, incrementalDraft);
+assert.match(incrementalCandidate, /id="oldButton"/);
+assert.match(incrementalCandidate, /id="newIdea"/);
+const incrementalPreservation = validateAgentPreservation(incrementalBase, incrementalCandidate);
+assert.deepEqual(incrementalPreservation.missingIds, []);
+assert.deepEqual(incrementalPreservation.addedIds, ['newIdea']);
+assert.equal(incrementalPreservation.baselineEventBindings, 1);
+assert.equal(incrementalPreservation.candidateEventBindings, 1);
+assert.match(
+  applyAgentPatch(incrementalBase, {
+    summary: '保留 JavaScript 替换字符串',
+    operations: [{
+      type: 'insert_before',
+      search: '</body>',
+      content: '<script>const replacementToken = "$&";</script>',
+      reason: '验证补丁内容按原样写入',
+    }],
+  }),
+  /replacementToken = "\$&"/,
+  'dollar replacement tokens in generated JavaScript must be applied literally',
+);
+assert.throws(
+  () => applyAgentPatch(incrementalBase, {
+    summary: '不安全修改',
+    operations: [{ type: 'replace', search: '<missing>', content: '<p>new</p>', reason: '' }],
+  }),
+  /出现 0 次/,
+  'an incremental patch must fail instead of guessing when its exact target is absent',
+);
+const destructiveCandidate = incrementalBase
+  .replace(' id="oldButton"', '')
+  .replace("document.getElementById('oldButton').addEventListener('click', () => {});", '');
+assert.deepEqual(inspectAgentPreservation(incrementalBase, destructiveCandidate).missingIds, ['oldButton']);
+assert.throws(
+  () => validateAgentPreservation(incrementalBase, destructiveCandidate),
+  /oldButton/,
+  'a candidate that removes an existing component must be rejected before it can become a draft',
 );
 
 const migratedSessionsSchema = db.prepare(`
