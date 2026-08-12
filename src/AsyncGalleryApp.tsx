@@ -4656,6 +4656,18 @@ export default function AsyncGalleryApp() {
       ) * direction;
     });
   }, [publishedApps, state?.study.home_feed_order]);
+  const secondRoundPublishedApps = useMemo(
+    () => homePublishedApps.filter((app) => (
+      Number(app.community_version_count || 0) >= 1 || Boolean(app.community_version_id)
+    )),
+    [homePublishedApps],
+  );
+  const firstRoundPublishedApps = useMemo(
+    () => homePublishedApps.filter((app) => (
+      Number(app.community_version_count || 0) < 1 && !app.community_version_id
+    )),
+    [homePublishedApps],
+  );
   const selectedApp = publishedApps.find((app) => app.id === selectedAppId);
 
   const navigateToApp = useCallback((appId: string) => {
@@ -4799,27 +4811,72 @@ export default function AsyncGalleryApp() {
                 <span className="async-own-app-note"><CheckCircle2 /> 你的初始应用已发布</span>
               ) : null}
             </header>
-            <div className={`async-gallery-grid columns-${galleryColumnCount}`}>
-              {homePublishedApps.map((app, index) => (
-                <GalleryMasonryItem key={app.id} paired={Boolean(app.community_version_id)}>
-                    <GalleryCard
-                      state={state}
-                      app={app}
-                      clientId={clientId}
-                      assigned={assignedIds.has(app.id)}
-                      index={index}
-                      open={() => {
-                        navigateToApp(app.id);
-                        void communityGalleryApi.track(clientId, 'open_app_from_feed', 'app', app.id);
-                      }}
-                      like={(versionId) => void action(
-                        `like-app-${app.id}-version-${versionId}`,
-                        () => communityGalleryApi.likeApp(clientId, app.id, versionId),
-                      )}
-                    />
-                </GalleryMasonryItem>
-              ))}
-            </div>
+            {publishedApps.length > 0 && (
+              <div className="async-home-round-sections">
+                {[
+                  {
+                    key: 'second',
+                    title: '第二轮作品',
+                    description: '已经发布社区版本 1，进入第二轮反馈或后续开发的作品。',
+                    apps: secondRoundPublishedApps,
+                    icon: <GitBranch />,
+                  },
+                  {
+                    key: 'first',
+                    title: '第一轮作品',
+                    description: '目前只有初始版本，正在收集第一轮评论与综合创意的作品。',
+                    apps: firstRoundPublishedApps,
+                    icon: <Code2 />,
+                  },
+                ].map((section) => (
+                  <section
+                    key={section.key}
+                    className={`async-home-round-section is-${section.key}`}
+                    aria-labelledby={`home-${section.key}-round-title`}
+                  >
+                    <header className="async-home-round-heading">
+                      <span>{section.icon}</span>
+                      <div>
+                        <h2 id={`home-${section.key}-round-title`}>{section.title}</h2>
+                        <p>{section.description}</p>
+                      </div>
+                      <strong>{section.apps.length} 个作品</strong>
+                    </header>
+                    {section.apps.length > 0 ? (
+                      <div className={`async-gallery-grid columns-${galleryColumnCount}`}>
+                        {section.apps.map((app, index) => (
+                          <GalleryMasonryItem key={app.id} paired={Boolean(app.community_version_id)}>
+                            <GalleryCard
+                              state={state}
+                              app={app}
+                              clientId={clientId}
+                              assigned={assignedIds.has(app.id)}
+                              index={index}
+                              open={() => {
+                                navigateToApp(app.id);
+                                void communityGalleryApi.track(clientId, 'open_app_from_feed', 'app', app.id);
+                              }}
+                              like={(versionId) => void action(
+                                `like-app-${app.id}-version-${versionId}`,
+                                () => communityGalleryApi.likeApp(clientId, app.id, versionId),
+                              )}
+                            />
+                          </GalleryMasonryItem>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="async-home-round-empty">
+                        {section.icon}
+                        <strong>暂无{section.title}</strong>
+                        <span>{section.key === 'second'
+                          ? '第一批社区版本发布后，作品会自动移动到这里。'
+                          : '当前已发布作品都已经进入第二轮。'}</span>
+                      </div>
+                    )}
+                  </section>
+                ))}
+              </div>
+            )}
             {publishedApps.length === 0 && (
               <div className="async-empty-gallery"><Code2 /><h2>等待初始应用发布</h2><p>创作者发布后，作品会以瀑布流卡片出现在这里。</p></div>
             )}
