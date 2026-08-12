@@ -1,5 +1,8 @@
 import { type AIProvider, type AIResult, generateWithAI } from './ai.js';
-import { isSuiXiangTransientUpstreamError } from './suixiang.js';
+import {
+  isSuiXiangTransientUpstreamError,
+  type SuiXiangReasoningEffort,
+} from './suixiang.js';
 import { addDebugLog } from './debugLog.js';
 import { ensureStandalonePerformanceGuard } from './previewPerformance.js';
 import { lookup } from 'node:dns/promises';
@@ -1053,13 +1056,14 @@ async function runAgentTextStep(
   maxTokens = 3072,
   signal?: AbortSignal,
   apiKey?: string,
+  reasoningEffort?: SuiXiangReasoningEffort,
 ) {
   signal?.throwIfAborted();
   addDebugLog({
     kind: 'ai',
     phase: 'info',
     title: `Agent step: ${title}`,
-    detail: { provider, promptLength: prompt.length, maxTokens },
+    detail: { provider, promptLength: prompt.length, maxTokens, reasoningEffort },
   });
   const timeoutMs = positiveTimeoutFromEnv(
     'AI_AGENT_STEP_TIMEOUT_MS',
@@ -1074,6 +1078,7 @@ async function runAgentTextStep(
       maxTokens,
       signal: stepSignal,
       apiKey,
+      reasoningEffort,
     }),
   );
   return result.text.trim();
@@ -1326,9 +1331,10 @@ Safety contract:
 - New controls must have working JavaScript. New runtime classes must have visibly distinct CSS. Use unique prefixed ids/classes to avoid collisions.
 - Do not use Tailwind, external frameworks, inline onclick, @import, or placeholder-only behavior.
 - Escape the patch JSON correctly. Put only that serialized patch JSON in the outer response's text field, keep the outer code field empty, and do not add Markdown fences or explanation.`,
-        8192,
+        6144,
         input.signal,
         input.apiKey,
+        'medium',
       );
       try {
         patchDraft = parseAgentPatchDraft(patchResponse);

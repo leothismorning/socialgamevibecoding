@@ -1,7 +1,11 @@
 import { generateWithDeepSeek } from './deepseek.js';
 import { GEMINI_MODEL, generateWithGemini, type GeminiOptions } from './gemini.js';
 import { generateWithGLM, GLM_MODEL } from './glm.js';
-import { generateWithSuiXiangGPT, SUIXIANG_GPT_MODEL } from './suixiang.js';
+import {
+  generateWithSuiXiangGPT,
+  SUIXIANG_GPT_MODEL,
+  type SuiXiangReasoningEffort,
+} from './suixiang.js';
 
 export type AIProvider = 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';
 export type AIResult = {
@@ -13,6 +17,7 @@ export type AIResult = {
 
 export type AIOptions = GeminiOptions & {
   apiKey?: string;
+  reasoningEffort?: SuiXiangReasoningEffort;
 };
 
 export const AI_PROVIDER_LABELS: Record<AIProvider, string> = {

@@ -170,9 +170,14 @@ const incrementalBase = `<!doctype html><html><head><style>.old-button{color:blu
 </body></html>`;
 const originalAgentFetch = globalThis.fetch;
 let incrementalAgentRequestCount = 0;
+let incrementalAgentReasoningEffort = '';
+let incrementalAgentMaxTokens = 0;
 try {
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_input, init) => {
     incrementalAgentRequestCount += 1;
+    const request = JSON.parse(String(init?.body || '{}'));
+    incrementalAgentReasoningEffort = request.reasoning_effort;
+    incrementalAgentMaxTokens = request.max_completion_tokens;
     const patch = {
       summary: '在保留旧按钮的同时加入一个新的创意区域。',
       implementation_plan: '在页面结尾添加独立创意区域及局部样式，不修改现有按钮和事件。',
@@ -212,6 +217,8 @@ try {
     creatorMessage: '加入一个新的创意区域',
   });
   assert.equal(incrementalAgentRequestCount, 1, 'a valid incremental change should use one GPT request');
+  assert.equal(incrementalAgentReasoningEffort, 'medium', 'long incremental patches should avoid high reasoning gateway timeouts');
+  assert.equal(incrementalAgentMaxTokens, 6144);
   assert.match(fastIncrementalResult.code, /id="fastIdea"/);
   assert.match(fastIncrementalResult.steps.join('\n'), /本地增量实现检查/);
 } finally {

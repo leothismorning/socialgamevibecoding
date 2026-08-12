@@ -6,6 +6,7 @@ import {
 import {
   generateWithSuiXiangGPT,
   isSuiXiangTransientUpstreamError,
+  suiXiangAttemptTimeoutMs,
   suiXiangReasoningEffort,
   suiXiangReasoningRetrySequence,
 } from '../server/suixiang.js';
@@ -16,6 +17,9 @@ assert.equal(suiXiangReasoningEffort({ SUIXIANG_REASONING_EFFORT: 'invalid' }), 
 assert.deepEqual(suiXiangReasoningRetrySequence('high'), ['high', 'medium']);
 assert.deepEqual(suiXiangReasoningRetrySequence('medium'), ['medium', 'low']);
 assert.deepEqual(suiXiangReasoningRetrySequence('low'), ['low', 'none']);
+assert.equal(suiXiangAttemptTimeoutMs({}), 90_000);
+assert.equal(suiXiangAttemptTimeoutMs({ SUIXIANG_ATTEMPT_TIMEOUT_MS: '60000' }), 60_000);
+assert.equal(suiXiangAttemptTimeoutMs({ SUIXIANG_ATTEMPT_TIMEOUT_MS: '999999' }), 150_000);
 
 const originalFetch = globalThis.fetch;
 const originalReasoningEffort = process.env.SUIXIANG_REASONING_EFFORT;
@@ -67,6 +71,37 @@ try {
     requestedEfforts,
     ['high', 'medium'],
     'a gateway timeout must stop after one fallback request',
+  );
+
+  requestedEfforts.length = 0;
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body || '{}'));
+    requestedEfforts.push(request.reasoning_effort);
+    if (requestedEfforts.length === 1) {
+      const connectionTimeout = new TypeError('fetch failed', {
+        cause: Object.assign(new Error('headers timeout'), { code: 'UND_ERR_HEADERS_TIMEOUT' }),
+      });
+      throw connectionTimeout;
+    }
+    return new Response(JSON.stringify({
+      model: 'gpt-5.5',
+      choices: [{ message: { content: JSON.stringify({ text: 'network recovered', code: '' }) } }],
+      usage: null,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const networkRecovered = await generateWithSuiXiangGPT(
+    'test network timeout retry',
+    undefined,
+    { apiKey: 'test-key', reasoningEffort: 'medium' },
+  );
+  assert.equal(networkRecovered.text, 'network recovered');
+  assert.deepEqual(
+    requestedEfforts,
+    ['medium', 'low'],
+    'a connection-layer timeout must also lower reasoning effort',
   );
 } finally {
   globalThis.fetch = originalFetch;

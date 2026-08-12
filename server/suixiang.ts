@@ -13,6 +13,7 @@ type SuiXiangOptions = {
   maxTokens?: number;
   signal?: AbortSignal;
   apiKey?: string;
+  reasoningEffort?: SuiXiangReasoningEffort;
 };
 
 export type SuiXiangReasoningEffort = 'none' | 'low' | 'medium' | 'high';
@@ -78,10 +79,19 @@ function isRetryableNetworkError(error: unknown) {
   const err = error as any;
   const code = String(err?.cause?.code || err?.code || '').toUpperCase();
   const message = String(err?.cause?.message || err?.message || '').toLowerCase();
-  return RETRYABLE_NETWORK_CODES.has(code)
+  return err?.name === 'TimeoutError'
+    || RETRYABLE_NETWORK_CODES.has(code)
     || message.includes('socket disconnected')
     || message.includes('before secure tls connection')
+    || message.includes('operation was aborted due to timeout')
     || message.includes('fetch failed');
+}
+
+export function suiXiangAttemptTimeoutMs(environment: NodeJS.ProcessEnv = process.env) {
+  const configured = Number(environment.SUIXIANG_ATTEMPT_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 15_000
+    ? Math.min(configured, 150_000)
+    : 90_000;
 }
 
 export async function generateWithSuiXiangGPT(
@@ -93,8 +103,9 @@ export async function generateWithSuiXiangGPT(
   const apiKey = options.apiKey || process.env.SUIXIANG_API_KEY;
   const baseUrl = (process.env.SUIXIANG_BASE_URL || 'https://sui-xiang.com').replace(/\/+$/, '');
   const endpoint = `${baseUrl}/v1/chat/completions`;
-  const initialReasoningEffort = suiXiangReasoningEffort();
+  const initialReasoningEffort = options.reasoningEffort || suiXiangReasoningEffort();
   const timeoutRetryEfforts = suiXiangReasoningRetrySequence(initialReasoningEffort);
+  const attemptTimeoutMs = suiXiangAttemptTimeoutMs();
 
   if (!apiKey) {
     throw new Error('SUIXIANG_API_KEY is not configured on the server.');
@@ -112,6 +123,7 @@ export async function generateWithSuiXiangGPT(
       model,
       promptLength: prompt.length,
       reasoningEffort: initialReasoningEffort,
+      attemptTimeoutMs,
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -125,7 +137,9 @@ export async function generateWithSuiXiangGPT(
     try {
       upstream = await fetch(endpoint, {
         method: 'POST',
-        signal: options.signal,
+        signal: options.signal
+          ? AbortSignal.any([options.signal, AbortSignal.timeout(attemptTimeoutMs)])
+          : AbortSignal.timeout(attemptTimeoutMs),
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
@@ -152,6 +166,7 @@ export async function generateWithSuiXiangGPT(
       const canRetry = isRetryableNetworkError(error) && attempt < totalAttempts;
       if (canRetry) {
         const retryInMs = NETWORK_RETRY_DELAYS_MS[attempt - 1];
+        const nextReasoningEffort = timeoutRetryEfforts[attempt];
         addDebugLog({
           kind: 'ai',
           phase: 'info',
@@ -164,9 +179,11 @@ export async function generateWithSuiXiangGPT(
             totalAttempts,
             retryInMs,
             reasoningEffort,
+            nextReasoningEffort,
             ...detail,
           },
         });
+        reasoningEffort = nextReasoningEffort;
         await new Promise((resolve) => setTimeout(resolve, retryInMs));
         continue;
       }
