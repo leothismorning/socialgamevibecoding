@@ -342,6 +342,11 @@
 .async-control-continue-note { flex: 0 0 auto; padding: 8px 10px; color: #66748a; border: 1px solid #dbe2ec; border-radius: 9px; background: #f7f9fc; font-size: 14px; font-weight: 850; }
 .async-delete-app-control { flex: 0 0 auto; display: grid; justify-items: end; gap: 5px; }
 .async-delete-app-control > small { color: #a1364f; font-size: 14px; font-weight: 850; white-space: nowrap; }
+.async-delete-app-control > .async-rollback-note { max-width: 300px; color: #75653f; text-align: right; white-space: normal; }
+.async-rollback-community-v1 { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; color: #775d19; border: 1px solid #e2cc8c; border-radius: 10px; background: #fff9e7; font-size: 14px; font-weight: 900; cursor: pointer; }
+.async-rollback-community-v1:hover { color: #fff; border-color: #9d7921; background: #9d7921; }
+.async-rollback-community-v1:disabled { cursor: not-allowed; opacity: .55; }
+.async-rollback-community-v1 svg { width: 15px; }
 .async-delete-initial-app { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: 0 0 auto; padding: 0 12px; color: #a1364f; border: 1px solid #e6bac6; border-radius: 10px; background: #fff6f8; font-size: 14px; font-weight: 900; cursor: pointer; }
 .async-delete-initial-app:hover { color: #fff; border-color: #b93d59; background: #b93d59; }
 .async-delete-initial-app:disabled { cursor: not-allowed; opacity: .55; }

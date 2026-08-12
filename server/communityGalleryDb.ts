@@ -3636,6 +3636,181 @@ export function publishCommunityVersion(clientId: string, appId: string) {
   return getCommunityGalleryState(clientId);
 }
 
+export function rollbackFirstCommunityVersion(clientId: string, appId: string) {
+  const { viewer, app } = ownedApp(clientId, appId);
+  const currentStudy = requireOpenStudy(Number(app.is_test));
+  const completedIterations = communityIterationCount(app.id);
+  if (completedIterations !== 1 || !app.community_version_id) {
+    throw new Error('只有已经发布社区版本 1、且尚未发布社区版本 2 的应用可以回退。');
+  }
+  const publishedVersion = db.prepare(`
+    SELECT * FROM vg_async_versions
+    WHERE study_id = ? AND app_id = ? AND id = ? AND kind = 'community' AND version_number = 2
+  `).get(currentStudy.id, app.id, Number(app.community_version_id)) as any;
+  if (!publishedVersion) throw new Error('社区版本 1 不存在，无法回退。');
+  const runningTaskCount = Number((db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM vg_async_generation_jobs
+        WHERE study_id = ? AND app_id = ? AND status = 'running') +
+      (SELECT COUNT(*) FROM vg_async_creator_operations
+        WHERE study_id = ? AND app_id = ? AND status = 'running') AS count
+  `).get(
+    currentStudy.id, app.id,
+    currentStudy.id, app.id,
+  ) as { count?: number } | undefined)?.count || 0);
+  if (runningTaskCount > 0) throw new Error('该应用仍有开发任务正在运行，任务结束前不能回退。');
+
+  const secondRoundSynthesisIds = (db.prepare(`
+    SELECT id FROM vg_async_syntheses
+    WHERE study_id = ? AND target_app_id = ?
+      AND (target_version_id = ? OR layer = 2)
+  `).all(currentStudy.id, app.id, publishedVersion.id) as Array<{ id: number }>)
+    .map((row) => Number(row.id));
+  const synthesisPlaceholders = secondRoundSynthesisIds.map(() => '?').join(',');
+  const secondRoundCommentIds = (db.prepare(`
+    SELECT id FROM vg_async_comments
+    WHERE study_id = ? AND app_id = ? AND (
+      version_id = ?
+      ${secondRoundSynthesisIds.length
+        ? `OR (target_type = 'synthesis' AND CAST(target_id AS INTEGER) IN (${synthesisPlaceholders}))`
+        : ''}
+    )
+  `).all(
+    currentStudy.id,
+    app.id,
+    publishedVersion.id,
+    ...secondRoundSynthesisIds,
+  ) as Array<{ id: number }>).map((row) => Number(row.id));
+  const secondRoundJobIds = (db.prepare(`
+    SELECT id FROM vg_async_generation_jobs
+    WHERE study_id = ? AND app_id = ? AND iteration_number = 2
+  `).all(currentStudy.id, app.id) as Array<{ id: number }>).map((row) => Number(row.id));
+  const timestamp = now();
+  const deleteByIds = (table: string, column: string, ids: number[]) => {
+    if (!ids.length) return;
+    db.prepare(`DELETE FROM ${table} WHERE study_id = ? AND ${column} IN (${ids.map(() => '?').join(',')})`)
+      .run(currentStudy.id, ...ids);
+  };
+
+  const transaction = db.transaction(() => {
+    deleteByIds('vg_async_comment_likes', 'comment_id', secondRoundCommentIds);
+    deleteByIds('vg_async_synthesis_likes', 'synthesis_id', secondRoundSynthesisIds);
+    if (secondRoundCommentIds.length || secondRoundSynthesisIds.length) {
+      const conditions: string[] = [];
+      const values: Array<string | number> = [currentStudy.id];
+      if (secondRoundCommentIds.length) {
+        conditions.push(`(source_type = 'comment' AND source_id IN (${secondRoundCommentIds.map(() => '?').join(',')}))`);
+        values.push(...secondRoundCommentIds);
+      }
+      if (secondRoundSynthesisIds.length) {
+        conditions.push(`(source_type = 'synthesis' AND source_id IN (${secondRoundSynthesisIds.map(() => '?').join(',')}))`);
+        values.push(...secondRoundSynthesisIds);
+      }
+      db.prepare(`DELETE FROM vg_async_basket_items WHERE study_id = ? AND (${conditions.join(' OR ')})`)
+        .run(...values);
+    }
+    if (secondRoundCommentIds.length || secondRoundSynthesisIds.length) {
+      const conditions: string[] = [];
+      const values: number[] = [];
+      if (secondRoundSynthesisIds.length) {
+        conditions.push(`synthesis_id IN (${synthesisPlaceholders})`);
+        values.push(...secondRoundSynthesisIds);
+        conditions.push(`(source_type = 'synthesis' AND source_id IN (${synthesisPlaceholders}))`);
+        values.push(...secondRoundSynthesisIds);
+      }
+      if (secondRoundCommentIds.length) {
+        conditions.push(`(source_type = 'comment' AND source_id IN (${secondRoundCommentIds.map(() => '?').join(',')}))`);
+        values.push(...secondRoundCommentIds);
+      }
+      db.prepare(`
+        DELETE FROM vg_async_synthesis_sources
+        WHERE study_id = ? AND (${conditions.join(' OR ')})
+      `).run(currentStudy.id, ...values);
+    }
+    deleteByIds('vg_async_comments', 'id', secondRoundCommentIds);
+    deleteByIds('vg_async_syntheses', 'id', secondRoundSynthesisIds);
+    deleteByIds('vg_async_generation_events', 'job_id', secondRoundJobIds);
+    db.prepare(`DELETE FROM vg_async_generation_jobs
+      WHERE study_id = ? AND app_id = ? AND iteration_number = 2`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_stage_selections
+      WHERE study_id = ? AND app_id = ? AND iteration_number = 2`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_wildcards
+      WHERE study_id = ? AND app_id = ? AND iteration_number = 2`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_contributors
+      WHERE study_id = ? AND app_id = ? AND iteration_number = 2`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_notifications
+      WHERE study_id = ? AND app_id = ? AND version_number = 2`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_synthesis_votes
+      WHERE study_id = ? AND target_app_id = ? AND layer = 2`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_development_messages
+      WHERE study_id = ? AND app_id = ? AND phase = 'community' AND iteration_number = 2`)
+      .run(currentStudy.id, app.id);
+    db.prepare(`DELETE FROM vg_async_creator_revisions
+      WHERE study_id = ? AND app_id = ? AND version_id = ?`)
+      .run(currentStudy.id, app.id, publishedVersion.id);
+    db.prepare(`DELETE FROM vg_async_version_likes
+      WHERE study_id = ? AND app_id = ? AND version_id = ?`)
+      .run(currentStudy.id, app.id, publishedVersion.id);
+    db.prepare(`
+      INSERT INTO vg_async_drafts
+        (study_id, app_id, kind, code, summary, prompt, synthesis_id,
+         selected_source_type, selected_source_id, iteration_number,
+         base_version_id, selection_reason, updated_at)
+      VALUES (?, ?, 'community', ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+      ON CONFLICT(study_id, app_id) DO UPDATE SET
+        kind = 'community', code = excluded.code, summary = excluded.summary,
+        prompt = excluded.prompt, synthesis_id = excluded.synthesis_id,
+        selected_source_type = excluded.selected_source_type,
+        selected_source_id = excluded.selected_source_id,
+        iteration_number = 1, base_version_id = excluded.base_version_id,
+        selection_reason = excluded.selection_reason, updated_at = excluded.updated_at
+    `).run(
+      currentStudy.id,
+      app.id,
+      publishedVersion.code,
+      publishedVersion.summary || '',
+      publishedVersion.prompt || '',
+      publishedVersion.synthesis_id || null,
+      publishedVersion.selected_source_type || null,
+      publishedVersion.selected_source_id || null,
+      publishedVersion.base_version_id || app.initial_version_id,
+      publishedVersion.selection_reason || '',
+      timestamp,
+    );
+    db.prepare(`DELETE FROM vg_async_versions WHERE study_id = ? AND app_id = ? AND id = ?`)
+      .run(currentStudy.id, app.id, publishedVersion.id);
+    db.prepare(`
+      UPDATE vg_async_apps
+      SET community_version_id = NULL, selected_synthesis_id = ?,
+        selected_source_type = ?, selected_source_id = ?,
+        flow_stage = 'development_1', community_published_at = NULL, updated_at = ?
+      WHERE study_id = ? AND id = ?
+    `).run(
+      publishedVersion.synthesis_id || null,
+      publishedVersion.selected_source_type || null,
+      publishedVersion.selected_source_id || null,
+      timestamp,
+      currentStudy.id,
+      app.id,
+    );
+  });
+  transaction();
+  recordEvent(viewer.code, 'rollback_community_version_1', 'app', app.id, {
+    rolledBackVersionId: Number(publishedVersion.id),
+    restoredPublishedVersionId: Number(app.initial_version_id),
+    restoredAsDraft: true,
+    removedSecondRoundComments: secondRoundCommentIds.length,
+    removedSecondRoundSyntheses: secondRoundSynthesisIds.length,
+  });
+  return getCommunityGalleryState(clientId);
+}
+
 function ensureAssignments() {
   const currentStudy = study();
   const insert = db.prepare(`

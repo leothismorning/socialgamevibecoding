@@ -31,6 +31,7 @@ import {
   publishCommunityVersion,
   publishInitialVersion,
   publishProjectDraft,
+  rollbackFirstCommunityVersion,
   recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
   clearCommunityTestData,
@@ -690,6 +691,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
           ? req.body.testCreatorCodes.map(String)
           : [],
       ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/apps/:appId/rollback-community-v1', (req, res) => {
+    try {
+      res.json(rollbackFirstCommunityVersion(clientIdFrom(req), String(req.params.appId)));
     } catch (error) {
       sendError(res, error);
     }

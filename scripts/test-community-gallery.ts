@@ -311,6 +311,61 @@ state = gallery.createSynthesis({
 currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(Number(currentTestApp.current_round_comment_count), 1);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 1);
+const secondRoundSynthesis = state.syntheses.find(
+  (synthesis: any) => synthesis.title === 'Second round synthesis',
+);
+assert.ok(secondRoundSynthesis);
+state = gallery.toggleCommunityCommentLike(client(1), secondRoundComment.id);
+state = gallery.voteForSynthesis(client(1), secondRoundSynthesis.id);
+state = gallery.toggleCreativeBasket(client(1), 'comment', secondRoundComment.id);
+assert.throws(
+  () => gallery.rollbackFirstCommunityVersion(client(2), testApp.id),
+  /自己的应用|只能操作|只有该应用的创作者/,
+  'only the App creator may roll back the published first community version',
+);
+state = gallery.rollbackFirstCommunityVersion(client(1), testApp.id);
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(currentTestApp.flow_stage, 'development_1');
+assert.equal(currentTestApp.community_version_id, null);
+assert.equal(Number(currentTestApp.community_version_count), 0);
+assert.equal(currentTestApp.draft_kind, 'community');
+assert.equal(Number(currentTestApp.draft_iteration_number), 1);
+assert.match(String(currentTestApp.draft_code), /Test App One V1/);
+assert.equal(state.versions.some((version: any) => version.id === firstCommunityVersion.id), false);
+assert.equal(state.comments.some((comment: any) => comment.id === secondRoundComment.id), false);
+assert.equal(state.syntheses.some((synthesis: any) => synthesis.id === secondRoundSynthesis.id), false);
+assert.ok(state.comments.some((comment: any) => comment.id === firstRoundComment.id));
+assert.ok(state.syntheses.some((synthesis: any) => synthesis.title === 'First round synthesis'));
+assert.equal(state.basket.some((item: any) => (
+  item.source_type === 'comment' && Number(item.source_id) === Number(secondRoundComment.id)
+)), false);
+assert.equal(Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_comment_likes WHERE comment_id = ?
+`).get(secondRoundComment.id) as { count: number }).count), 0);
+assert.equal(Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_synthesis_likes WHERE synthesis_id = ?
+`).get(secondRoundSynthesis.id) as { count: number }).count), 0);
+
+state = gallery.publishCommunityVersion(client(1), testApp.id);
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(currentTestApp.flow_stage, 'round_2');
+assert.equal(Number(currentTestApp.community_version_count), 1);
+state = gallery.saveCommunityComment({
+  clientId: client(2),
+  appId: testApp.id,
+  content: 'A recreated second-round comment.',
+});
+const recreatedSecondRoundComment = state.comments.find(
+  (comment: any) => comment.content === 'A recreated second-round comment.',
+);
+assert.ok(recreatedSecondRoundComment);
+state = gallery.createSynthesis({
+  clientId: client(2),
+  targetAppId: testApp.id,
+  title: 'Recreated second round synthesis',
+  content: 'A recreated second-round combined direction.',
+  sources: [{ type: 'comment', id: recreatedSecondRoundComment.id }],
+});
 startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 2, true, [testApp.id]);
 gallery.completeCommunityGeneration(startedDevelopment.jobIds[0], html('Test App One V2'), 'Second community version');
 state = gallery.publishCommunityVersion(client(1), testApp.id);
@@ -318,6 +373,11 @@ currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'completed');
 assert.equal(Number(currentTestApp.current_round_comment_count), 0);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 0);
+assert.throws(
+  () => gallery.rollbackFirstCommunityVersion(client(1), testApp.id),
+  /尚未发布社区版本 2|只有已经发布社区版本 1/,
+  'the destructive rollback is unavailable after V2 has already been published',
+);
 assert.throws(() => gallery.saveCommunityComment({
   clientId: client(4),
   appId: regularApp.id,

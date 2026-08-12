@@ -26,6 +26,7 @@ import {
   Plus,
   RefreshCw,
   Reply,
+  RotateCcw,
   Send,
   ShoppingBasket,
   Sparkles,
@@ -352,6 +353,8 @@ function PublishedCreatorStudio({
     + Number(ownApp.feedback_reply_count || 0)
     + Number(ownApp.feedback_synthesis_count || 0);
   const deleteBlockedByFeedback = feedbackCount > 0;
+  const canRollbackCommunityV1 = Number(ownApp.community_version_count || 0) === 1
+    && Boolean(ownApp.community_version_id);
   const progressSteps = [
     ['plan', '理解需求'],
     ['structure', '搭建页面'],
@@ -424,6 +427,24 @@ function PublishedCreatorStudio({
           </p>
         </div>
         <aside className={`async-delete-app-control${deleteBlockedByFeedback ? ' is-blocked' : ''}`}>
+          {canRollbackCommunityV1 && (
+            <button
+              type="button"
+              className="async-rollback-community-v1"
+              disabled={Boolean(busy)}
+              title="撤回社区版本 1，恢复初始版本并清除第二轮讨论"
+              onClick={() => {
+                const confirmed = window.confirm(
+                  `确认将“${ownApp.title}”回退到初始版本吗？\n\n社区版本 1 会转为仅你可见的待发布草稿，第二轮评论、点赞和综合评论将被清除。`,
+                );
+                if (!confirmed) return;
+                void action(
+                  'rollback-community-v1',
+                  () => communityGalleryApi.rollbackCommunityV1(clientId, ownApp.id),
+                );
+              }}
+            ><RotateCcw /> {busy === 'rollback-community-v1' ? '正在回退…' : '回退到初始版本'}</button>
+          )}
           <button
             type="button"
             className="async-delete-initial-app"
@@ -437,6 +458,9 @@ function PublishedCreatorStudio({
           ><Trash2 /> 删除这个 App</button>
           {deleteBlockedByFeedback && (
             <small id="delete-app-feedback-note">作品已有评论，不能删除</small>
+          )}
+          {canRollbackCommunityV1 && (
+            <small className="async-rollback-note">回退会清除第二轮讨论，V1 将保留为待发布草稿</small>
           )}
         </aside>
       </section>

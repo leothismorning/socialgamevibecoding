@@ -155,6 +155,11 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
+  rollbackCommunityV1: (clientId: string, appId: string) =>
+    request(`/api/community-gallery/apps/${appId}/rollback-community-v1`, {
+      method: 'POST',
+      body: body({ clientId }),
+    }),
   readNotifications: (clientId: string) =>
     request('/api/community-gallery/notifications/read', {
       method: 'POST',
