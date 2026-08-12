@@ -229,6 +229,51 @@ assert.throws(
   /根节点 id|未隔离|全局页面样式/,
   'the additive fallback must reject unscoped modules that could change the old App',
 );
+const targetedDraft = parseAgentPatchDraft(JSON.stringify({
+  summary: '将原按钮升级为新的交互按钮。',
+  scope: {
+    mode: 'targeted',
+    target_ids: ['oldButton'],
+    removable_ids: ['oldButton'],
+    target_functions: [],
+    target_anchors: [],
+    rationale: '评论明确要求替换原按钮及其事件绑定。',
+  },
+  operations: [
+    {
+      type: 'replace',
+      search: '<button id="oldButton" class="old-button">旧功能</button>',
+      content: '<button id="upgradedButton" class="old-button">升级后的功能</button>',
+      reason: '替换评论明确涉及的旧按钮',
+    },
+    {
+      type: 'replace',
+      search: "document.getElementById('oldButton').addEventListener('click', () => {});",
+      content: "document.getElementById('upgradedButton').addEventListener('click', () => {});",
+      reason: '同步升级目标按钮的事件绑定',
+    },
+  ],
+}));
+const targetedCandidate = applyAgentPatch(incrementalBase, targetedDraft);
+validateCompleteAgentHtml(targetedCandidate);
+const targetedPreservation = validateAgentPreservation(incrementalBase, targetedCandidate, targetedDraft);
+assert.deepEqual(targetedPreservation.authorizedRemovedIds, ['oldButton']);
+assert.deepEqual(targetedPreservation.unexpectedMissingIds, []);
+assert.deepEqual(targetedPreservation.addedIds, ['upgradedButton']);
+assert.match(targetedCandidate, /id="existingApp"/);
+assert.throws(
+  () => applyAgentPatch(incrementalBase, {
+    ...targetedDraft,
+    operations: [{
+      type: 'replace',
+      search: '<main id="existingApp">',
+      content: '<main id="unrelatedReplacement">',
+      reason: '试图修改没有授权的区域',
+    }],
+  }),
+  /不在已授权的目标区域/,
+  'targeted development may substantially change authorized components but must reject unrelated replacements',
+);
 assert.match(
   applyAgentPatch(incrementalBase, {
     summary: '保留 JavaScript 替换字符串',

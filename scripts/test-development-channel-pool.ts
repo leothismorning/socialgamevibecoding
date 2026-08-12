@@ -98,4 +98,19 @@ assert.equal(fallbackLease.provider, 'gpt5');
 primaryLease.release();
 fallbackLease.release();
 
-console.log('DeepSeek-first, Sui-Xiang-GPT-fallback, FIFO development channel tests passed');
+const evolutionPool = new DevelopmentChannelPool(
+  ['gpt-evolution-one', 'gpt-evolution-two'],
+  ['deepseek-spare'],
+);
+const firstEvolution = await evolutionPool.acquire(undefined, ['gpt5']);
+const secondEvolution = await evolutionPool.acquire(undefined, ['gpt5']);
+assert.equal(firstEvolution.provider, 'gpt5');
+assert.equal(secondEvolution.provider, 'gpt5');
+const queuedEvolution = evolutionPool.acquire(undefined, ['gpt5']);
+firstEvolution.release();
+const thirdEvolution = await queuedEvolution;
+assert.equal(thirdEvolution.provider, 'gpt5');
+secondEvolution.release();
+thirdEvolution.release();
+
+console.log('DeepSeek-first initial creation, GPT-only evolution, and FIFO development channel tests passed');

@@ -15,6 +15,11 @@ type SuiXiangOptions = {
   apiKey?: string;
 };
 
+export function suiXiangReasoningEffort(environment: NodeJS.ProcessEnv = process.env) {
+  const configured = String(environment.SUIXIANG_REASONING_EFFORT || 'high').trim().toLowerCase();
+  return ['none', 'low', 'medium', 'high'].includes(configured) ? configured : 'high';
+}
+
 export const SUIXIANG_GPT_MODEL = 'gpt-5.5';
 
 const RETRYABLE_NETWORK_CODES = new Set([
@@ -47,6 +52,7 @@ export async function generateWithSuiXiangGPT(
   const apiKey = options.apiKey || process.env.SUIXIANG_API_KEY;
   const baseUrl = (process.env.SUIXIANG_BASE_URL || 'https://sui-xiang.com').replace(/\/+$/, '');
   const endpoint = `${baseUrl}/v1/chat/completions`;
+  const reasoningEffort = suiXiangReasoningEffort();
 
   if (!apiKey) {
     throw new Error('SUIXIANG_API_KEY is not configured on the server.');
@@ -63,6 +69,7 @@ export async function generateWithSuiXiangGPT(
       endpoint,
       model,
       promptLength: prompt.length,
+      reasoningEffort,
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -90,6 +97,7 @@ export async function generateWithSuiXiangGPT(
             { role: 'user', content: prompt },
           ],
           response_format: { type: 'json_object' },
+          reasoning_effort: reasoningEffort,
           max_completion_tokens: options.maxTokens || 8192,
         }),
       });

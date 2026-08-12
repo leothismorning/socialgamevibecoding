@@ -3,6 +3,11 @@ import {
   configuredSuiXiangKeys,
   SuiXiangKeyPool,
 } from '../server/suixiangKeyPool.js';
+import { suiXiangReasoningEffort } from '../server/suixiang.js';
+
+assert.equal(suiXiangReasoningEffort({}), 'high');
+assert.equal(suiXiangReasoningEffort({ SUIXIANG_REASONING_EFFORT: 'medium' }), 'medium');
+assert.equal(suiXiangReasoningEffort({ SUIXIANG_REASONING_EFFORT: 'invalid' }), 'high');
 
 assert.deepEqual(configuredSuiXiangKeys({
   SUIXIANG_API_KEY: 'primary',

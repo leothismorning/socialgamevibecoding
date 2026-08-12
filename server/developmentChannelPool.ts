@@ -1,3 +1,5 @@
+import { configuredSuiXiangKeys } from './suixiangKeyPool.js';
+
 export type DevelopmentChannelProvider = 'gpt5' | 'deepseek';
 
 export type DevelopmentChannelStats = {
@@ -153,7 +155,7 @@ let sharedPool: DevelopmentChannelPool | null = null;
 let sharedSignature = '';
 
 export function getDevelopmentChannelPool() {
-  const gptKeys = uniqueKeys([process.env.SUIXIANG_API_KEY]);
+  const gptKeys = configuredSuiXiangKeys();
   const deepSeekKeys = configuredDeepSeekFallbackKeys();
   const signature = `${gptKeys.join('\u0000')}\u0001${deepSeekKeys.join('\u0000')}`;
   if (!sharedPool || signature !== sharedSignature) {

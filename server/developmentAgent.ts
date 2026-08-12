@@ -53,6 +53,16 @@ export type AgentPatchOperation = {
 export type AgentPatchDraft = {
   summary: string;
   operations: AgentPatchOperation[];
+  scope?: AgentModificationScope;
+};
+
+export type AgentModificationScope = {
+  mode: 'additive' | 'targeted';
+  targetIds: string[];
+  removableIds: string[];
+  targetFunctions: string[];
+  targetAnchors: string[];
+  rationale: string;
 };
 
 export type AgentAdditiveModuleDraft = {
@@ -63,9 +73,12 @@ export type AgentAdditiveModuleDraft = {
 };
 
 export class EmptyAgentPatchError extends Error {
-  constructor() {
+  readonly draft: AgentPatchDraft;
+
+  constructor(draft: AgentPatchDraft) {
     super('增量开发没有生成任何修改。');
     this.name = 'EmptyAgentPatchError';
+    this.draft = draft;
   }
 }
 
@@ -73,12 +86,16 @@ export type AgentPreservationInspection = {
   baselineIds: string[];
   candidateIds: string[];
   missingIds: string[];
+  authorizedRemovedIds: string[];
+  unexpectedMissingIds: string[];
   addedIds: string[];
   baselineControls: Record<string, number>;
   candidateControls: Record<string, number>;
   reducedControls: string[];
+  authorizedControlReductions: Record<string, number>;
   baselineEventBindings: number;
   candidateEventBindings: number;
+  authorizedEventReduction: number;
   retainedIdCoverage: number;
   lengthRatio: number;
 };
@@ -336,6 +353,24 @@ function extractJsonObject(value: string) {
   return text.slice(start, end + 1);
 }
 
+function parseAgentModificationScope(value: any): AgentModificationScope | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const stringList = (candidate: unknown, max: number) => unique(
+    (Array.isArray(candidate) ? candidate : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean),
+  ).slice(0, max);
+  const mode = value.mode === 'targeted' ? 'targeted' : 'additive';
+  return {
+    mode,
+    targetIds: stringList(value.target_ids ?? value.targetIds, 12),
+    removableIds: stringList(value.removable_ids ?? value.removableIds, 12),
+    targetFunctions: stringList(value.target_functions ?? value.targetFunctions, 12),
+    targetAnchors: stringList(value.target_anchors ?? value.targetAnchors, 8),
+    rationale: String(value.rationale || '').trim(),
+  };
+}
+
 export function parseAgentPatchDraft(value: string): AgentPatchDraft {
   let parsed: any;
   try {
@@ -347,8 +382,13 @@ export function parseAgentPatchDraft(value: string): AgentPatchDraft {
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.operations)) {
     throw new Error('增量开发补丁缺少 operations 数组。');
   }
+  const scope = parseAgentModificationScope(parsed.scope);
   if (parsed.operations.length === 0) {
-    throw new EmptyAgentPatchError();
+    throw new EmptyAgentPatchError({
+      summary: String(parsed.summary || '').trim() || '增量开发没有生成任何修改。',
+      operations: [],
+      scope,
+    });
   }
   if (parsed.operations.length > 24) {
     throw new Error('增量开发一次返回了过多修改，已停止以避免整页重写。');
@@ -370,6 +410,7 @@ export function parseAgentPatchDraft(value: string): AgentPatchDraft {
   return {
     summary: String(parsed.summary || '').trim() || '已按照入选评论增量更新应用。',
     operations,
+    ...(scope ? { scope } : {}),
   };
 }
 
@@ -446,6 +487,14 @@ ${module.javascript}
 function additiveModuleAsPatch(module: AgentAdditiveModuleDraft): AgentPatchDraft {
   return {
     summary: module.summary,
+    scope: {
+      mode: 'additive',
+      targetIds: [],
+      removableIds: [],
+      targetFunctions: [],
+      targetAnchors: [],
+      rationale: '独立增加新模块，不修改上一版本。',
+    },
     operations: [{
       type: 'insert_before',
       search: '</body>',
@@ -463,15 +512,24 @@ function additiveModuleAsPatch(module: AgentAdditiveModuleDraft): AgentPatchDraf
 
 export function applyAgentPatch(baseCode: string, draft: AgentPatchDraft) {
   if (!baseCode.trim()) throw new Error('增量开发缺少上一已发布版本。');
+  const scope = validateAgentModificationScope(baseCode, draft.scope);
   let code = baseCode;
   let totalSearchLength = 0;
   draft.operations.forEach((operation, index) => {
+    const authorizedTargetChange = isAgentPatchOperationAuthorized(operation, scope);
     totalSearchLength += operation.search.length;
-    if (operation.search.length > 6000) {
+    if (operation.search.length > (authorizedTargetChange ? 12_000 : 6000)) {
       throw new Error(`第 ${index + 1} 个增量修改范围过大，已停止以避免重写原有功能。`);
+    }
+    if (operation.type === 'replace' && scope?.mode === 'additive') {
+      throw new Error(`第 ${index + 1} 个修改声明为新增模式，却试图替换旧代码。`);
+    }
+    if (operation.type === 'replace' && scope?.mode === 'targeted' && !authorizedTargetChange) {
+      throw new Error(`第 ${index + 1} 个修改不在已授权的目标区域内。`);
     }
     if (
       operation.type === 'replace'
+      && !authorizedTargetChange
       && operation.search.length >= 200
       && operation.content.length < operation.search.length * 0.75
     ) {
@@ -490,7 +548,10 @@ export function applyAgentPatch(baseCode: string, draft: AgentPatchDraft) {
         : `${operation.search}${operation.content}`;
     code = code.replace(operation.search, () => replacement);
   });
-  if (totalSearchLength > Math.max(8000, baseCode.length * 0.4)) {
+  const maximumTouchedCode = scope?.mode === 'targeted'
+    ? Math.max(16_000, baseCode.length * 0.65)
+    : Math.max(8000, baseCode.length * 0.4);
+  if (totalSearchLength > maximumTouchedCode) {
     throw new Error('本次增量修改触及的旧代码过多，已停止以避免整页重写。');
   }
   if (code === baseCode) throw new Error('增量开发没有改变上一版本。');
@@ -511,6 +572,63 @@ function extractDocumentIds(code: string) {
   );
 }
 
+export function validateAgentModificationScope(
+  baseCode: string,
+  scope?: AgentModificationScope,
+) {
+  if (!scope) return undefined;
+  const baselineIds = new Set(extractDocumentIds(baseCode));
+  const missingTargetIds = scope.targetIds.filter((id) => !baselineIds.has(id));
+  if (missingTargetIds.length > 0) {
+    throw new Error(`授权修改范围引用了不存在的旧组件：${missingTargetIds.join(', ')}。`);
+  }
+  const invalidRemovals = scope.removableIds.filter(
+    (id) => !baselineIds.has(id) || !scope.targetIds.includes(id),
+  );
+  if (invalidRemovals.length > 0) {
+    throw new Error(`允许删除的组件没有包含在授权目标中：${invalidRemovals.join(', ')}。`);
+  }
+  const missingFunctions = scope.targetFunctions.filter((name) => !baseCode.includes(name));
+  if (missingFunctions.length > 0) {
+    throw new Error(`授权修改范围引用了不存在的旧函数：${missingFunctions.join(', ')}。`);
+  }
+  scope.targetAnchors.forEach((anchor, index) => {
+    if (anchor.length < 20 || anchor.length > 1200) {
+      throw new Error(`第 ${index + 1} 个授权代码锚点长度无效。`);
+    }
+    const occurrences = baseCode.split(anchor).length - 1;
+    if (occurrences !== 1) {
+      throw new Error(`第 ${index + 1} 个授权代码锚点出现 ${occurrences} 次，无法唯一定位。`);
+    }
+  });
+  if (
+    scope.mode === 'targeted'
+    && scope.targetIds.length === 0
+    && scope.targetFunctions.length === 0
+    && scope.targetAnchors.length === 0
+  ) {
+    throw new Error('目标修改模式没有声明任何可修改区域。');
+  }
+  return scope;
+}
+
+function isAgentPatchOperationAuthorized(
+  operation: AgentPatchOperation,
+  scope?: AgentModificationScope,
+) {
+  if (operation.type !== 'replace' || scope?.mode !== 'targeted') return false;
+  const search = operation.search;
+  const targetsId = scope.targetIds.some((id) => (
+    new RegExp(`\\bid=["']${escapeRegExp(id)}["']`, 'i').test(search)
+    || search.includes(`getElementById('${id}')`)
+    || search.includes(`getElementById("${id}")`)
+    || search.includes(`#${id}`)
+  ));
+  const targetsFunction = scope.targetFunctions.some((name) => search.includes(name));
+  const targetsAnchor = scope.targetAnchors.some((anchor) => search.includes(anchor));
+  return targetsId || targetsFunction || targetsAnchor;
+}
+
 function countTag(code: string, tagName: string) {
   return (markupWithoutCode(code).match(new RegExp(`<${tagName}\\b`, 'gi')) || []).length;
 }
@@ -523,31 +641,59 @@ function countEventBindings(code: string) {
 export function inspectAgentPreservation(
   baseCode: string,
   candidateCode: string,
+  draft?: AgentPatchDraft,
 ): AgentPreservationInspection {
   const baselineIds = extractDocumentIds(baseCode);
   const candidateIds = extractDocumentIds(candidateCode);
   const candidateIdSet = new Set(candidateIds);
   const baselineIdSet = new Set(baselineIds);
   const missingIds = baselineIds.filter((id) => !candidateIdSet.has(id));
+  const scope = validateAgentModificationScope(baseCode, draft?.scope);
+  const authorizedReplacements = (draft?.operations || []).filter(
+    (operation) => isAgentPatchOperationAuthorized(operation, scope),
+  );
+  const authorizedRemovedIds = missingIds.filter((id) => (
+    Boolean(scope?.removableIds.includes(id))
+    && authorizedReplacements.some((operation) => operation.search.includes(id))
+  ));
+  const unexpectedMissingIds = missingIds.filter((id) => !authorizedRemovedIds.includes(id));
   const addedIds = candidateIds.filter((id) => !baselineIdSet.has(id));
   const baselineControls: Record<string, number> = {};
   const candidateControls: Record<string, number> = {};
+  const authorizedControlReductions: Record<string, number> = {};
   const reducedControls: string[] = [];
   ['button', 'input', 'select', 'textarea', 'form', 'canvas', 'nav'].forEach((tagName) => {
     baselineControls[tagName] = countTag(baseCode, tagName);
     candidateControls[tagName] = countTag(candidateCode, tagName);
-    if (candidateControls[tagName] < baselineControls[tagName]) reducedControls.push(tagName);
+    authorizedControlReductions[tagName] = authorizedReplacements.reduce(
+      (total, operation) => total + Math.max(0, countTag(operation.search, tagName) - countTag(operation.content, tagName)),
+      0,
+    );
+    if (candidateControls[tagName] < baselineControls[tagName] - authorizedControlReductions[tagName]) {
+      reducedControls.push(tagName);
+    }
   });
+  const authorizedEventReduction = authorizedReplacements.reduce(
+    (total, operation) => total + Math.max(
+      0,
+      countEventBindings(operation.search) - countEventBindings(operation.content),
+    ),
+    0,
+  );
   return {
     baselineIds,
     candidateIds,
     missingIds,
+    authorizedRemovedIds,
+    unexpectedMissingIds,
     addedIds,
     baselineControls,
     candidateControls,
     reducedControls,
+    authorizedControlReductions,
     baselineEventBindings: countEventBindings(baseCode),
     candidateEventBindings: countEventBindings(candidateCode),
+    authorizedEventReduction,
     retainedIdCoverage: baselineIds.length === 0
       ? 1
       : (baselineIds.length - missingIds.length) / baselineIds.length,
@@ -558,11 +704,12 @@ export function inspectAgentPreservation(
 export function validateAgentPreservation(
   baseCode: string,
   candidateCode: string,
+  draft?: AgentPatchDraft,
 ) {
-  const inspection = inspectAgentPreservation(baseCode, candidateCode);
-  if (inspection.missingIds.length > 0) {
+  const inspection = inspectAgentPreservation(baseCode, candidateCode, draft);
+  if (inspection.unexpectedMissingIds.length > 0) {
     throw new Error(
-      `旧功能保留检查失败：以下原有组件消失了：${inspection.missingIds.slice(0, 12).join(', ')}。`,
+      `旧功能保留检查失败：以下非目标组件消失了：${inspection.unexpectedMissingIds.slice(0, 12).join(', ')}。`,
     );
   }
   if (inspection.reducedControls.length > 0) {
@@ -570,12 +717,16 @@ export function validateAgentPreservation(
       `旧功能保留检查失败：以下交互组件数量减少：${inspection.reducedControls.join(', ')}。`,
     );
   }
-  if (inspection.candidateEventBindings < inspection.baselineEventBindings) {
+  if (
+    inspection.candidateEventBindings
+    < inspection.baselineEventBindings - inspection.authorizedEventReduction
+  ) {
     throw new Error(
       `旧功能保留检查失败：事件绑定从 ${inspection.baselineEventBindings} 个减少到 ${inspection.candidateEventBindings} 个。`,
     );
   }
-  if (inspection.lengthRatio < 0.9) {
+  const minimumLengthRatio = draft?.scope?.mode === 'targeted' ? 0.75 : 0.9;
+  if (inspection.lengthRatio < minimumLengthRatio) {
     throw new Error(
       `旧功能保留检查失败：候选版本仅为上一版本的 ${Math.round(inspection.lengthRatio * 100)}%，疑似发生整页删减。`,
     );
@@ -1075,7 +1226,8 @@ ${JSON.stringify(draft, null, 2)}
 
 Deterministic preservation results:
 - Existing ids retained: ${preservation.baselineIds.length - preservation.missingIds.length}/${preservation.baselineIds.length}
-- Missing existing ids: ${preservation.missingIds.join(', ') || 'none'}
+- Explicitly authorized removed ids: ${preservation.authorizedRemovedIds.join(', ') || 'none'}
+- Unexpected missing existing ids: ${preservation.unexpectedMissingIds.join(', ') || 'none'}
 - Added ids: ${preservation.addedIds.join(', ') || 'none'}
 - Reduced control types: ${preservation.reducedControls.join(', ') || 'none'}
 - Event bindings: ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}
@@ -1085,6 +1237,7 @@ Judge only these blocking questions:
 1. Do the actual HTML/CSS/JavaScript changes implement the requested idea, rather than merely mentioning it in text?
 2. If the idea needs interaction, do the patch operations include the required interface, visible states, and executable event logic?
 3. Are the changes scoped and additive, without redesigning or replacing unrelated existing functionality?
+   Targeted replacement or removal inside the declared scope is allowed and should not be rejected merely because it changes old code.
 4. Do all newly referenced ids and JavaScript-applied state classes have matching HTML/CSS in the operations or clearly target preserved existing elements?
 
 Reply exactly "PASS: concise reason" when the patch is safe to preview. Otherwise reply "FAIL: concrete blocking reason".`,
@@ -1195,7 +1348,7 @@ ${input.fusionPlan || 'No fusion plan supplied.'}
 Complete canonical HTML (nothing is omitted):
 ${baseCode}
 
-The existing document is immutable except for the smallest exact edits required by the request. Prefer adding a new, namespaced HTML/CSS/JavaScript component alongside the old implementation. Preserve every existing section, id, control, event, function, style, text, image, navigation path, and behavior. Do not rewrite the page, body, stylesheet, or main script. Do not touch platform performance-guard code or #agentToast. Identify exact safe insertion or small replacement locations. Use the Creator's language and keep the plan under 900 characters.`,
+The existing document is protected outside the parts explicitly involved in the request. When the idea changes an existing feature, interaction, layout region, or visual component, identify the exact existing ids, functions, CSS rules, or unique code anchors that must be authorized for meaningful modification. Within those targets, plan a complete integrated improvement rather than attaching a disconnected card. Preserve every unrelated section, id, control, event, function, style, text, image, navigation path, and behavior. Do not rewrite the page, body, head, whole stylesheet, or whole main script. Do not touch platform performance-guard code or #agentToast. Use the Creator's language and keep the plan under 900 characters.`,
     2048,
     input.signal,
     input.apiKey,
@@ -1260,6 +1413,14 @@ ${baseCode}
 The text artifact inside the required outer response must contain one JSON object with this exact schema:
 {
   "summary": "one concise public sentence describing the implemented change",
+  "scope": {
+    "mode": "additive | targeted",
+    "target_ids": ["existing DOM ids that may be changed"],
+    "removable_ids": ["target ids the request explicitly requires removing"],
+    "target_functions": ["exact existing function names or unique function signatures"],
+    "target_anchors": ["20-1200 character exact unique substrings from existing HTML/CSS/JS"],
+    "rationale": "why these targets are necessary and why other code is unrelated"
+  },
   "operations": [
     {
       "type": "replace | insert_before | insert_after",
@@ -1271,11 +1432,15 @@ The text artifact inside the required outer response must contain one JSON objec
 }
 
 Safety contract:
-- Make the smallest additive change that implements the selected idea. Do not return a full HTML document.
+- Implement the selected idea completely and integrate it into the existing experience. Do not reduce a substantive request to a disconnected card, note, badge, or cosmetic text change.
+- Use mode "targeted" whenever the request changes an existing feature, interaction, game mechanic, layout region, or visual component. Use "additive" only for a genuinely independent new feature.
+- In targeted mode, replacements and explicit removals are allowed inside the declared scope. Every replace operation must contain a declared target id, function, or exact target anchor.
+- target_ids and target_functions must already exist in the canonical HTML. removable_ids must be a subset of target_ids and may include only elements the request clearly requires removing or replacing.
+- target_anchors must be exact, unique, verbatim canonical substrings. Use them to authorize CSS rules, anonymous event logic, or markup without a useful id.
+- Outside the declared scope, preserve all existing ids, controls, functions, listeners, content, navigation, images, styles, and behaviors byte-for-byte.
+- Do not return a full HTML document, whole body, whole head, whole stylesheet, or whole main script.
 - Every search string must occur exactly once in the canonical HTML and should contain enough neighboring text to be unique.
-- Prefer inserting a namespaced component plus separate scoped <style> and <script> blocks before </body> instead of replacing existing body/CSS/JavaScript.
-- A replace operation may edit a small targeted fragment but may not delete a feature or replace a whole section, stylesheet, script, body, head, or document.
-- Preserve all existing ids, controls, functions, listeners, content, navigation, images, styles, and behaviors, even when implementing the new idea.
+- Preserve a target id when practical so existing references remain valid. If the target is explicitly replaced, list its id in removable_ids and implement a working replacement.
 - Do not touch scripts marked data-vibecoding-performance-guard, #agentToast, or the existing fallback machinery.
 - New controls must have working JavaScript. New runtime classes must have visibly distinct CSS. Use unique prefixed ids/classes to avoid collisions.
 - Do not use Tailwind, external frameworks, inline onclick, @import, or placeholder-only behavior.
@@ -1289,6 +1454,10 @@ Safety contract:
         candidateCode = applyAgentPatch(baseCode, patchDraft);
       } catch (error) {
         if (!(error instanceof EmptyAgentPatchError)) throw error;
+        if (error.draft.scope?.mode === 'targeted') {
+          patchDraft = error.draft;
+          throw new Error('AI 已识别需要修改现有功能，但没有生成目标区域代码修改；必须针对已授权区域重新开发。');
+        }
         progress({
           step: 'structure',
           order: 2,
@@ -1309,7 +1478,7 @@ Safety contract:
         usedAdditiveFallback = true;
       }
       validateCompleteAgentHtml(candidateCode);
-      preservation = validateAgentPreservation(baseCode, candidateCode);
+      preservation = validateAgentPreservation(baseCode, candidateCode, patchDraft);
       audit = await runAgentPatchAudit(input, plan, patchDraft, preservation);
       if (!/^PASS\s*:/i.test(audit.trim())) {
         throw new Error(`增量实现检查未通过：${audit.replace(/^FAIL\s*:\s*/i, '').slice(0, 900)}`);
@@ -1370,7 +1539,7 @@ Safety contract:
   });
   progress({
     step: 'validation', order: 7, status: 'completed', title: '新旧功能保留检查已经通过',
-    detail: `保留 ${preservation.baselineIds.length}/${preservation.baselineIds.length} 个原有组件；${audit.replace(/^PASS\s*:\s*/i, '')}`,
+    detail: `非目标组件全部保留${preservation.authorizedRemovedIds.length ? `；按评论授权替换 ${preservation.authorizedRemovedIds.length} 个目标组件` : ''}；${audit.replace(/^PASS\s*:\s*/i, '')}`,
   });
 
   addDebugLog({
@@ -1402,7 +1571,7 @@ Safety contract:
         ? '已应用 1 个安全增量模块。'
         : `已应用 ${patchDraft.operations.length} 个精确补丁。`,
       ...(usedAdditiveFallback ? ['精确补丁为空后，系统已自动切换为安全增量模块。'] : []),
-      `旧功能保留检查：保留 ${preservation.baselineIds.length}/${preservation.baselineIds.length} 个原有组件，事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}。`,
+      `旧功能保留检查：非目标组件无缺失，授权替换 ${preservation.authorizedRemovedIds.length} 个目标组件，事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}。`,
       `增量实现检查：${audit}`,
     ],
   };

@@ -116,10 +116,10 @@ function acquiredKeyProgress(
     status: 'completed',
     title: usingDeepSeek
       ? '已获得 DeepSeek 通道，正在开始开发'
-      : 'DeepSeek 通道繁忙，已自动切换随想 GPT',
+      : '已获得随想 GPT 深度开发通道',
     detail: usingDeepSeek
       ? '本轮将由 DeepSeek V4 Flash 完成，并保留在开发进度记录中。'
-      : '三个 DeepSeek 通道当前均在使用，本轮将由随想 GPT 完成。',
+      : '本轮将由随想 GPT-5.5 高推理模式完成。',
   };
 }
 
@@ -128,6 +128,9 @@ async function runQueuedDevelopmentAgent(
   recordQueueProgress: (progress: DevelopmentAgentProgress) => void,
 ) {
   if (input.provider !== 'gpt5') return runDevelopmentAgent(input);
+  const providerOrder: DevelopmentChannelProvider[] = input.mode === 'round-candidate'
+    ? ['gpt5']
+    : ['deepseek', 'gpt5'];
   try {
     return await withDevelopmentChannel(
       (lease) => runDevelopmentAgent({
@@ -136,6 +139,7 @@ async function runQueuedDevelopmentAgent(
         apiKey: lease.apiKey,
       }),
       {
+        providerOrder,
         onQueued: (snapshot) => recordQueueProgress(queuedKeyProgress(snapshot)),
         onAcquired: (snapshot) => recordQueueProgress(acquiredKeyProgress(snapshot)),
       },
