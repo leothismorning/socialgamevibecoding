@@ -72,6 +72,15 @@ assert.equal(
   true,
   'a local DeepSeek timeout must be surfaced as infrastructure failure instead of invalid generated code',
 );
+const recoverableDeepSeekError = Object.assign(new Error('DeepSeek 输出达到长度上限，返回内容被截断。'), {
+  code: 'DEEPSEEK_RECOVERABLE_RESPONSE_ERROR',
+  finishReason: 'length',
+});
+assert.equal(
+  isAgentGenerationInfrastructureError(recoverableDeepSeekError),
+  true,
+  'truncated DeepSeek output must not be reported as invalid generated code',
+);
 assert.equal(
   isAgentGenerationInfrastructureError(new Error("The development agent generated invalid JavaScript: Unexpected token ')'")),
   false,
@@ -232,9 +241,61 @@ try {
   assert.equal(incrementalAgentRequestCount, 1, 'a valid incremental change should use one DeepSeek request');
   assert.equal(incrementalAgentThinkingMode, 'enabled');
   assert.equal(incrementalAgentReasoningEffort, 'medium');
-  assert.ok(incrementalAgentMaxTokens >= 8192 && incrementalAgentMaxTokens < 16_384);
+  assert.equal(incrementalAgentMaxTokens, 16_384, 'the first incremental response needs enough room for a complete patch');
   assert.match(fastIncrementalResult.code, /id="fastIdea"/);
   assert.match(fastIncrementalResult.steps.join('\n'), /基础代码有效性检查/);
+} finally {
+  globalThis.fetch = originalAgentFetch;
+}
+
+let lengthRecoveryRequestCount = 0;
+const lengthRecoveryTokenLimits: number[] = [];
+let compactRecoveryPrompt = '';
+try {
+  globalThis.fetch = async (_input, init) => {
+    lengthRecoveryRequestCount += 1;
+    const request = JSON.parse(String(init?.body || '{}'));
+    lengthRecoveryTokenLimits.push(Number(request.max_tokens));
+    compactRecoveryPrompt = String(request.messages?.at(-1)?.content || '');
+    if (lengthRecoveryRequestCount === 1) {
+      return new Response(JSON.stringify({
+        model: 'deepseek-v4-pro',
+        choices: [{
+          finish_reason: 'length',
+          message: { content: '{"text":"truncated', reasoning_content: 'long reasoning' },
+        }],
+        usage: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    const patch = {
+      summary: '使用精简补丁加入创意区域。',
+      operations: [{
+        type: 'insert_before',
+        search: '</body>',
+        content: '<section id="compactIdea" class="compact-idea">精简创意</section><style>.compact-idea{padding:12px;color:#123}</style>',
+        reason: '精简实现。',
+      }],
+    };
+    return new Response(JSON.stringify({
+      model: 'deepseek-v4-pro',
+      choices: [{
+        finish_reason: 'stop',
+        message: { content: JSON.stringify({ text: JSON.stringify(patch), code: '' }) },
+      }],
+      usage: null,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const recoveredIncrementalResult = await runDevelopmentAgent({
+    provider: 'deepseek-pro',
+    mode: 'round-candidate',
+    experimentTitle: 'Compact recovery test',
+    currentCode: incrementalBase,
+    creatorMessage: '加入一个新的创意区域',
+  });
+  assert.equal(lengthRecoveryRequestCount, 2, 'a truncated patch should trigger one compact agent-level recovery');
+  assert.deepEqual(lengthRecoveryTokenLimits, [16_384, 24_576]);
+  assert.match(compactRecoveryPrompt, /no more than 8 operations/i);
+  assert.match(recoveredIncrementalResult.code, /id="compactIdea"/);
 } finally {
   globalThis.fetch = originalAgentFetch;
 }

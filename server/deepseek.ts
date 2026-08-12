@@ -23,10 +23,24 @@ const MEDIUM_REASONING_MIN_TOKENS = 8192;
 
 export class DeepSeekRecoverableResponseError extends Error {
   readonly code = 'DEEPSEEK_RECOVERABLE_RESPONSE_ERROR';
+
+  constructor(
+    message: string,
+    readonly finishReason = 'unknown',
+    readonly contentLength = 0,
+  ) {
+    super(message);
+    this.name = 'DeepSeekRecoverableResponseError';
+  }
 }
 
 export function isDeepSeekRecoverableResponseError(error: unknown) {
   return (error as { code?: unknown } | null)?.code === 'DEEPSEEK_RECOVERABLE_RESPONSE_ERROR';
+}
+
+export function isDeepSeekOutputLengthError(error: unknown) {
+  return isDeepSeekRecoverableResponseError(error)
+    && (error as { finishReason?: unknown }).finishReason === 'length';
 }
 
 export async function generateWithDeepSeek(
@@ -151,6 +165,29 @@ export async function generateWithDeepSeek(
 
     const hasJsonObject = Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed);
     if (!content.trim() || parseError || !hasJsonObject) {
+      if (finishReason === 'length') {
+        addDebugLog({
+          kind: 'ai',
+          phase: 'info',
+          title: 'DeepSeek output reached the token limit; delegating compact recovery',
+          durationMs: Math.round(performance.now() - startedAt),
+          detail: {
+            endpoint,
+            model: selectedModel,
+            attempt,
+            status: upstream.status,
+            finishReason,
+            contentLength: content.length,
+            reasoningLength: String(choice?.message?.reasoning_content || '').length,
+            usage: data?.usage || null,
+          },
+        });
+        throw new DeepSeekRecoverableResponseError(
+          'DeepSeek 输出达到长度上限，返回内容被截断。',
+          finishReason,
+          content.length,
+        );
+      }
       const retryInMs = RESPONSE_RETRY_DELAYS_MS[attempt - 1];
       const canRetry = attempt < totalAttempts;
       addDebugLog({
@@ -183,6 +220,8 @@ export async function generateWithDeepSeek(
       }
       throw new DeepSeekRecoverableResponseError(
         `DeepSeek returned unusable content after ${totalAttempts} attempts (finish_reason=${finishReason}).`,
+        finishReason,
+        content.length,
       );
     }
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   generateWithDeepSeek,
+  isDeepSeekOutputLengthError,
   isDeepSeekRecoverableResponseError,
 } from '../server/deepseek.js';
 
@@ -55,9 +56,9 @@ try {
     () => generateWithDeepSeek('Return another artifact.', 'deepseek-v4-flash', {
       apiKey: 'test-key',
     }),
-    (error) => isDeepSeekRecoverableResponseError(error),
+    (error) => isDeepSeekRecoverableResponseError(error) && isDeepSeekOutputLengthError(error),
   );
-  assert.equal(calls, 3);
+  assert.equal(calls, 1, 'a truncated response must not repeat the same oversized request three times');
 } finally {
   globalThis.fetch = originalFetch;
 }

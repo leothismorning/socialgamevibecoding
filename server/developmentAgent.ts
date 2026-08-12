@@ -3,6 +3,10 @@ import {
   isSuiXiangTransientUpstreamError,
   type SuiXiangReasoningEffort,
 } from './suixiang.js';
+import {
+  isDeepSeekOutputLengthError,
+  isDeepSeekRecoverableResponseError,
+} from './deepseek.js';
 import { addDebugLog } from './debugLog.js';
 import { ensureStandalonePerformanceGuard } from './previewPerformance.js';
 import { lookup } from 'node:dns/promises';
@@ -360,7 +364,8 @@ function truncate(value: string, max = 6000) {
 
 export function isAgentGenerationInfrastructureError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || '');
-  return /(?:AI 当前生成步骤|DeepSeek Pro 思考请求)超过 \d+ 分钟未响应/.test(message)
+  return isDeepSeekRecoverableResponseError(error)
+    || /(?:AI 当前生成步骤|DeepSeek Pro 思考请求)超过 \d+ 分钟未响应/.test(message)
     || message.includes('DeepSeek network request failed')
     || /DeepSeek request failed with HTTP (408|425|429|5\d\d)/i.test(message);
 }
@@ -1202,6 +1207,7 @@ async function runIncrementalDevelopmentAgentPipeline(
   let patchDraft: AgentPatchDraft | null = null;
   let audit = '';
   let plan = '';
+  let previousFailureWasOutputLength = false;
 
   for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
     const attemptNumber = attempt + 1;
@@ -1232,11 +1238,11 @@ ${ideaList(input.selectedIdeas)}
 Fusion plan:
 ${input.fusionPlan || 'No fusion plan supplied.'}
 
-${attemptFailures.length ? `The previous patch was rejected. Correct this exact problem while starting again from the untouched canonical HTML:
+${attemptFailures.length ? `The previous response was rejected. Correct this exact problem while starting again from the untouched canonical HTML:
 ${attemptFailures.at(-1)}
 
-Complete previous rejected patch artifact:
-${previousRejectedArtifact || 'The previous response could not be recovered.'}
+${previousFailureWasOutputLength ? `The previous response was cut off by the output limit. Do not recreate a large patch. Use no more than 8 operations, use short unique search anchors, and return only the directly changed snippets.` : `Complete previous rejected patch artifact:
+${previousRejectedArtifact || 'The previous response could not be recovered.'}`}
 
 Return a corrected patch. Do not repeat the invalid JavaScript or any other rejected operation.
 ` : ''}
@@ -1262,12 +1268,13 @@ Safety contract:
 - operations must never be empty. If the feature is genuinely independent, return insert operations that add its complete HTML, scoped CSS, and JavaScript in this same patch response.
 - Preserve all previous features, interactions, content, navigation, images, styles, and behaviors unless the selected idea explicitly requires changing them. Inspect the existing implementation carefully and integrate the new idea without unintentionally removing working functionality.
 - Every search string must occur exactly once in the canonical HTML and should contain enough neighboring text to be unique.
+- Keep the response compact: prefer 3-8 focused operations, short unique search strings, short reasons, and only the changed HTML/CSS/JavaScript snippets. Never repeat the complete document, stylesheet, or script as patch content unless the requested feature genuinely requires replacing that entire artifact.
 - Preserve existing ids and function names when practical so their references continue to work.
 - Do not touch scripts marked data-vibecoding-performance-guard, #agentToast, or the existing fallback machinery.
 - New controls must have working JavaScript. New runtime classes must have visibly distinct CSS. Use unique prefixed ids/classes to avoid collisions.
 - Do not use Tailwind, external frameworks, inline onclick, @import, or placeholder-only behavior.
 - Escape the patch JSON correctly. Put only that serialized patch JSON in the outer response's text field, keep the outer code field empty, and do not add Markdown fences or explanation.`,
-        6144,
+        attempt === 0 ? 16_384 : 24_576,
         input.signal,
         input.apiKey,
         'medium',
@@ -1294,12 +1301,21 @@ Safety contract:
     } catch (error) {
       // Provider/network failures are not invalid code. Surface the retryable
       // infrastructure error instead of mislabelling it as a code failure.
-      if (isSuiXiangTransientUpstreamError(error) || isAgentGenerationInfrastructureError(error)) throw error;
-      const failure = error instanceof Error ? error.message : String(error);
+      const outputReachedLengthLimit = isDeepSeekOutputLengthError(error);
+      if (!outputReachedLengthLimit
+        && (isSuiXiangTransientUpstreamError(error) || isAgentGenerationInfrastructureError(error))) {
+        throw error;
+      }
+      const failure = outputReachedLengthLimit
+        ? 'DeepSeek 输出达到长度上限，返回的补丁 JSON 被截断。'
+        : error instanceof Error ? error.message : String(error);
       attemptFailures.push(failure);
-      previousRejectedArtifact = patchDraft
-        ? JSON.stringify(patchDraft, null, 2)
-        : patchResponse;
+      previousFailureWasOutputLength = outputReachedLengthLimit;
+      previousRejectedArtifact = outputReachedLengthLimit
+        ? ''
+        : patchDraft
+          ? JSON.stringify(patchDraft, null, 2)
+          : patchResponse;
       addDebugLog({
         kind: 'ai',
         phase: 'info',
@@ -1307,6 +1323,11 @@ Safety contract:
         detail: { provider: input.provider, mode: input.mode, failure },
       });
       if (attempt >= maxRepairAttempts) {
+        if (outputReachedLengthLimit) {
+          throw new Error(
+            'DeepSeek Pro 连续生成了超过输出上限的补丁，本轮未修改上一版本。请将本轮开发要求拆成两个更小的功能后重试。',
+          );
+        }
         throw new Error(
           `本轮生成代码未通过基础有效性检查。上一已发布版本保持不变。最后原因：${failure.slice(0, 900)}`,
         );
@@ -1315,8 +1336,12 @@ Safety contract:
         step: 'validation',
         order: 7,
         status: 'warning',
-        title: `代码有效性检查发现问题，正在从上一版本重新生成（${attemptNumber}/${maxRepairAttempts}）`,
-        detail: failure,
+        title: outputReachedLengthLimit
+          ? `DeepSeek 输出过长，正在精简补丁并重新生成（${attemptNumber}/${maxRepairAttempts}）`
+          : `代码有效性检查发现问题，正在从上一版本重新生成（${attemptNumber}/${maxRepairAttempts}）`,
+        detail: outputReachedLengthLimit
+          ? '上一次返回内容被截断；这次会减少补丁数量、缩短定位内容并提高输出空间。'
+          : failure,
       });
     }
   }
