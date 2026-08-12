@@ -1,4 +1,5 @@
 import { addDebugLog, errorDetail } from './debugLog.js';
+import { isTextOnlyAIRequest, normalizeAITextArtifact } from './aiResponse.js';
 
 type SuiXiangResult = {
   text: string;
@@ -181,7 +182,7 @@ export async function generateWithSuiXiangGPT(
   }
 
   const result = {
-    text: parsed.text || 'Generation complete.',
+    text: normalizeAITextArtifact(parsed, isTextOnlyAIRequest(options.systemPrompt)),
     code: parsed.code || '',
     model: data.model || model,
     usage: data.usage || null,

@@ -1,4 +1,5 @@
 import { addDebugLog, errorDetail } from './debugLog.js';
+import { isTextOnlyAIRequest, normalizeAITextArtifact } from './aiResponse.js';
 
 type DeepSeekResult = {
   text: string;
@@ -178,7 +179,7 @@ export async function generateWithDeepSeek(
     }
 
     const result = {
-      text: parsed.text || 'Generation complete.',
+      text: normalizeAITextArtifact(parsed, isTextOnlyAIRequest(options.systemPrompt)),
       code: parsed.code || '',
       model: data.model || selectedModel,
       usage: data.usage || null,

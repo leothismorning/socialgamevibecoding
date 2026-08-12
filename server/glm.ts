@@ -1,4 +1,5 @@
 import { addDebugLog, errorDetail } from './debugLog.js';
+import { normalizeAITextArtifact } from './aiResponse.js';
 
 export type GLMResult = {
   text: string;
@@ -256,7 +257,9 @@ Include all CSS and JavaScript in the same document.`;
     parsed.content,
     parsed.result,
   );
-  const normalizedText = pickString(parsed.text, parsed.summary, parsed.explanation, parsed.message) || 'Generation complete.';
+  const normalizedText = textOnlyRequest
+    ? normalizeAITextArtifact(parsed, true)
+    : pickString(parsed.text, parsed.summary, parsed.explanation, parsed.message) || 'Generation complete.';
 
   if (!normalizedCode && !options.systemPrompt?.includes('"code" set to an empty string')) {
     addDebugLog({

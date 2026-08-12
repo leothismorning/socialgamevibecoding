@@ -1,4 +1,5 @@
 import { addDebugLog, errorDetail } from './debugLog.js';
+import { isTextOnlyAIRequest, normalizeAITextArtifact } from './aiResponse.js';
 
 export type GeminiResult = {
   text: string;
@@ -135,7 +136,7 @@ export async function generateWithGemini(
   }
 
   const result = {
-    text: parsed.text || 'Generation complete.',
+    text: normalizeAITextArtifact(parsed, isTextOnlyAIRequest(options.systemPrompt)),
     code: parsed.code || '',
     model: data?.modelVersion || selectedModel,
     usage: data?.usageMetadata || null,

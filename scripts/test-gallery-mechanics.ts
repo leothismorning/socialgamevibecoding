@@ -57,6 +57,7 @@ const {
   validateAgentPreservation,
 } = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
+const { normalizeAITextArtifact } = await import('../server/aiResponse.js');
 
 assert.equal(getAIProvider(), 'gpt5', 'the former DeepSeek default should migrate to GPT-5.5');
 assert.equal(
@@ -163,6 +164,30 @@ const incrementalDraft = parseAgentPatchDraft(JSON.stringify({
     reason: '加入入选评论要求的新内容',
   }],
 }));
+const directPatchResponse = {
+  summary: '模型直接返回补丁对象。',
+  operations: [{
+    type: 'insert_before',
+    search: '</body>',
+    content: '<p id="directPatch">直接补丁</p>',
+    reason: '测试模型没有使用外层 text 字段时仍可恢复',
+  }],
+};
+assert.deepEqual(
+  parseAgentPatchDraft(normalizeAITextArtifact(directPatchResponse, true)),
+  directPatchResponse,
+  'a text-only AI response that directly returns the patch object must not collapse to a generic completion message',
+);
+assert.equal(
+  normalizeAITextArtifact({ text: directPatchResponse, code: '' }, true),
+  JSON.stringify(directPatchResponse),
+  'a structured value placed in the text field must be serialized for the patch parser',
+);
+assert.equal(
+  normalizeAITextArtifact({ summary: '普通完整页面生成', code: '<html></html>' }, false),
+  'Generation complete.',
+  'normal HTML generations must keep the existing fallback instead of exposing their whole response as text',
+);
 const incrementalCandidate = applyAgentPatch(incrementalBase, incrementalDraft);
 assert.match(incrementalCandidate, /id="oldButton"/);
 assert.match(incrementalCandidate, /id="newIdea"/);
