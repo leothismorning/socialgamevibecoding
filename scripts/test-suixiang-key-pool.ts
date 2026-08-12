@@ -5,6 +5,7 @@ import {
 } from '../server/suixiangKeyPool.js';
 import {
   generateWithSuiXiangGPT,
+  isSuiXiangTransientUpstreamError,
   suiXiangReasoningEffort,
   suiXiangReasoningRetrySequence,
 } from '../server/suixiang.js';
@@ -12,9 +13,9 @@ import {
 assert.equal(suiXiangReasoningEffort({}), 'high');
 assert.equal(suiXiangReasoningEffort({ SUIXIANG_REASONING_EFFORT: 'medium' }), 'medium');
 assert.equal(suiXiangReasoningEffort({ SUIXIANG_REASONING_EFFORT: 'invalid' }), 'high');
-assert.deepEqual(suiXiangReasoningRetrySequence('high'), ['high', 'medium', 'low']);
-assert.deepEqual(suiXiangReasoningRetrySequence('medium'), ['medium', 'low', 'none']);
-assert.deepEqual(suiXiangReasoningRetrySequence('low'), ['low', 'none', 'none']);
+assert.deepEqual(suiXiangReasoningRetrySequence('high'), ['high', 'medium']);
+assert.deepEqual(suiXiangReasoningRetrySequence('medium'), ['medium', 'low']);
+assert.deepEqual(suiXiangReasoningRetrySequence('low'), ['low', 'none']);
 
 const originalFetch = globalThis.fetch;
 const originalReasoningEffort = process.env.SUIXIANG_REASONING_EFFORT;
@@ -43,6 +44,30 @@ try {
   const recovered = await generateWithSuiXiangGPT('test retry', undefined, { apiKey: 'test-key' });
   assert.equal(recovered.text, 'recovered');
   assert.deepEqual(requestedEfforts, ['high', 'medium']);
+
+  requestedEfforts.length = 0;
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body || '{}'));
+    requestedEfforts.push(request.reasoning_effort);
+    return new Response(JSON.stringify({ error: { message: 'gateway timeout' } }), {
+      status: 504,
+      statusText: 'Gateway Timeout',
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  await assert.rejects(
+    () => generateWithSuiXiangGPT('test bounded retry', undefined, { apiKey: 'test-key' }),
+    (error) => {
+      assert.equal(isSuiXiangTransientUpstreamError(error), true);
+      if (isSuiXiangTransientUpstreamError(error)) assert.equal(error.attempts, 2);
+      return true;
+    },
+  );
+  assert.deepEqual(
+    requestedEfforts,
+    ['high', 'medium'],
+    'a gateway timeout must stop after one fallback request',
+  );
 } finally {
   globalThis.fetch = originalFetch;
   if (originalReasoningEffort === undefined) delete process.env.SUIXIANG_REASONING_EFFORT;

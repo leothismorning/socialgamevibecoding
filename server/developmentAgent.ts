@@ -53,6 +53,7 @@ export type AgentPatchOperation = {
 
 export type AgentPatchDraft = {
   summary: string;
+  implementationPlan?: string;
   operations: AgentPatchOperation[];
   scope?: AgentModificationScope;
 };
@@ -104,6 +105,7 @@ export type AgentPreservationInspection = {
 const DEFAULT_AGENT_STEP_TIMEOUT_MS = 6 * 60 * 1000;
 const DEFAULT_AGENT_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_AGENT_REPAIR_ATTEMPTS = 2;
+const DEFAULT_INCREMENTAL_REPAIR_ATTEMPTS = 1;
 
 function positiveTimeoutFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -117,6 +119,13 @@ function timeoutMinutes(milliseconds: number) {
 function repairAttemptsFromEnv() {
   const value = Number(process.env.AI_AGENT_REPAIR_ATTEMPTS);
   return Number.isInteger(value) && value >= 0 ? Math.min(value, 3) : DEFAULT_AGENT_REPAIR_ATTEMPTS;
+}
+
+export function incrementalRepairAttemptsFromEnv(environment: NodeJS.ProcessEnv = process.env) {
+  const value = Number(environment.AI_AGENT_INCREMENTAL_REPAIR_ATTEMPTS);
+  return Number.isInteger(value) && value >= 0
+    ? Math.min(value, 1)
+    : DEFAULT_INCREMENTAL_REPAIR_ATTEMPTS;
 }
 
 async function withAbortTimeout<T>(
@@ -387,6 +396,7 @@ export function parseAgentPatchDraft(value: string): AgentPatchDraft {
   if (parsed.operations.length === 0) {
     throw new EmptyAgentPatchError({
       summary: String(parsed.summary || '').trim() || '增量开发没有生成任何修改。',
+      implementationPlan: String(parsed.implementation_plan || parsed.implementationPlan || '').trim() || undefined,
       operations: [],
       scope,
     });
@@ -410,6 +420,9 @@ export function parseAgentPatchDraft(value: string): AgentPatchDraft {
   });
   return {
     summary: String(parsed.summary || '').trim() || '已按照入选评论增量更新应用。',
+    ...(String(parsed.implementation_plan || parsed.implementationPlan || '').trim()
+      ? { implementationPlan: String(parsed.implementation_plan || parsed.implementationPlan).trim() }
+      : {}),
     operations,
     ...(scope ? { scope } : {}),
   };
@@ -483,32 +496,6 @@ ${module.javascript}
 `;
   const code = `${baseCode.slice(0, closingBody.index)}${moduleMarkup}${baseCode.slice(closingBody.index)}`;
   return ensureStandalonePerformanceGuard(code);
-}
-
-function additiveModuleAsPatch(module: AgentAdditiveModuleDraft): AgentPatchDraft {
-  return {
-    summary: module.summary,
-    scope: {
-      mode: 'additive',
-      targetIds: [],
-      removableIds: [],
-      targetFunctions: [],
-      targetAnchors: [],
-      rationale: '独立增加新模块，不修改上一版本。',
-    },
-    operations: [{
-      type: 'insert_before',
-      search: '</body>',
-      content: [
-        module.html,
-        `<style data-vibecoding-incremental-module>\n${module.css}\n</style>`,
-        module.javascript
-          ? `<script data-vibecoding-incremental-module>\n${module.javascript}\n</script>`
-          : '',
-      ].filter(Boolean).join('\n'),
-      reason: '精确补丁为空后，将入选创意作为独立增量模块安全加入上一版本。',
-    }],
-  };
 }
 
 export function applyAgentPatch(baseCode: string, draft: AgentPatchDraft) {
@@ -1202,107 +1189,26 @@ Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwi
   );
 }
 
-async function runAgentPatchAudit(
-  input: DevelopmentAgentInput,
-  plan: string,
+function buildLocalAgentPatchAudit(
   draft: AgentPatchDraft,
   preservation: AgentPreservationInspection,
 ) {
-  return runAgentTextStep(
-    input.provider,
-    'incremental change gate',
-    `Act as a strict integration gate for an incremental change to an existing web App.
-
-Requested change:
-${input.creatorMessage || input.creatorPrompt || input.brief || 'No change request supplied.'}
-
-Selected participant ideas:
-${ideaList(input.selectedIdeas)}
-
-Approved implementation plan:
-${plan}
-
-Exact patch operations (complete, not excerpts):
-${JSON.stringify(draft, null, 2)}
-
-Deterministic preservation results:
-- Existing ids retained: ${preservation.baselineIds.length - preservation.missingIds.length}/${preservation.baselineIds.length}
-- Explicitly authorized removed ids: ${preservation.authorizedRemovedIds.join(', ') || 'none'}
-- Unexpected missing existing ids: ${preservation.unexpectedMissingIds.join(', ') || 'none'}
-- Added ids: ${preservation.addedIds.join(', ') || 'none'}
-- Reduced control types: ${preservation.reducedControls.join(', ') || 'none'}
-- Event bindings: ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}
-- Candidate/base size: ${Math.round(preservation.lengthRatio * 100)}%
-
-Judge only these blocking questions:
-1. Do the actual HTML/CSS/JavaScript changes implement the requested idea, rather than merely mentioning it in text?
-2. If the idea needs interaction, do the patch operations include the required interface, visible states, and executable event logic?
-3. Are the changes scoped and additive, without redesigning or replacing unrelated existing functionality?
-   Targeted replacement or removal inside the declared scope is allowed and should not be rejected merely because it changes old code.
-4. Do all newly referenced ids and JavaScript-applied state classes have matching HTML/CSS in the operations or clearly target preserved existing elements?
-
-Reply exactly "PASS: concise reason" when the patch is safe to preview. Otherwise reply "FAIL: concrete blocking reason".`,
-    2048,
-    input.signal,
-    input.apiKey,
+  const changedCharacters = draft.operations.reduce(
+    (total, operation) => total + operation.content.length,
+    0,
   );
-}
-
-async function runAgentAdditiveModuleFallback(
-  input: DevelopmentAgentInput,
-  plan: string,
-  baseCode: string,
-  emptyPatchResponse: string,
-  previousFailure = '',
-) {
-  return runAgentTextStep(
-    input.provider,
-    'safe additive module fallback',
-    `The exact patch generator returned no operations. Implement the requested idea as one independent additive module instead.
-
-Requested change:
-${input.creatorMessage || input.creatorPrompt || input.brief || 'No change request supplied.'}
-
-Selected participant ideas:
-${ideaList(input.selectedIdeas)}
-
-Fusion plan:
-${input.fusionPlan || 'No fusion plan supplied.'}
-
-Approved implementation plan:
-${plan}
-
-Empty patch response:
-${emptyPatchResponse || '{"operations":[]}'}
-
-${previousFailure ? `A previous attempt was rejected for this reason. The new module must correct it:\n${previousFailure}\n` : ''}
-
-Complete canonical HTML for visual and behavioral context (nothing is omitted):
-${baseCode}
-
-The platform will insert your module immediately before the canonical document's closing </body>. It will not replace any old code.
-The text artifact inside the required outer response must contain one JSON object with this exact schema:
-{
-  "summary": "one concise public sentence describing the actual implementation",
-  "html": "visible BODY INNER HTML for the new module only",
-  "css": "complete scoped CSS for the new module only",
-  "javascript": "JavaScript for the new module only, or an empty string when no interaction is required"
-}
-
-Mandatory requirements:
-- The module must visibly and concretely implement the requested idea. Returning empty HTML/CSS or only explanatory text is forbidden.
-- Match the canonical App's language, palette, typography, spacing, and visual style.
-- Use one unique root id prefixed with "community-evolution-" and prefix every new id and class with "community-evolution-".
-- Scope every CSS selector under the unique root id except keyframes. Do not restyle body, html, *, :root, or any existing selector.
-- Do not modify, hide, remove, rename, query, clone, or replace existing elements. The old App remains untouched.
-- If the idea needs interaction, include visible controls, distinct CSS states, and complete event logic bound only inside the new root.
-- Do not use full-page tags, style/script tags inside fields, inline event handlers, Tailwind, external frameworks, @import, remote scripts, or placeholder-only controls.
-- JavaScript must parse as a classic browser script. Bind after DOMContentLoaded or safely detect the current ready state.
-- Put only the serialized module JSON in the outer response's text field, keep the outer code field empty, and return no Markdown fences or explanation.`,
-    8192,
-    input.signal,
-    input.apiKey,
-  );
+  if (changedCharacters === 0) {
+    throw new Error('本地增量检查失败：补丁没有产生可见或可执行的实现内容。');
+  }
+  if (preservation.unexpectedMissingIds.length > 0 || preservation.reducedControls.length > 0) {
+    throw new Error('本地增量检查失败：检测到未授权的旧功能删减。');
+  }
+  return [
+    'PASS: 本地确定性检查通过',
+    `非目标组件无缺失`,
+    `事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}`,
+    `补丁操作 ${draft.operations.length} 个`,
+  ].join('；');
 }
 
 async function runIncrementalDevelopmentAgentPipeline(
@@ -1329,51 +1235,26 @@ async function runIncrementalDevelopmentAgentPipeline(
     step: 'plan',
     order: 1,
     status: 'running',
-    title: 'AI 正在制定增量修改计划',
-    detail: '正在读取完整的上一版本，并定位入选评论需要改动的位置。',
+    title: 'AI 正在分析并实现入选创意',
+    detail: '一次读取上一版本，同时完成修改定位、实施计划和代码补丁。',
   });
-  const plan = await runAgentTextStep(
-    input.provider,
-    'incremental implementation plan',
-    `Create a compact, implementation-ready plan for adding one selected idea to an existing self-contained HTML App.
 
-Requested change:
-${requestedChange}
-
-Selected participant ideas:
-${ideaList(input.selectedIdeas)}
-
-Fusion plan:
-${input.fusionPlan || 'No fusion plan supplied.'}
-
-Complete canonical HTML (nothing is omitted):
-${baseCode}
-
-The existing document is protected outside the parts explicitly involved in the request. When the idea changes an existing feature, interaction, layout region, or visual component, identify the exact existing ids, functions, CSS rules, or unique code anchors that must be authorized for meaningful modification. Within those targets, plan a complete integrated improvement rather than attaching a disconnected card. Preserve every unrelated section, id, control, event, function, style, text, image, navigation path, and behavior. Do not rewrite the page, body, head, whole stylesheet, or whole main script. Do not touch platform performance-guard code or #agentToast. Use the Creator's language and keep the plan under 900 characters.`,
-    2048,
-    input.signal,
-    input.apiKey,
-  );
-  progress({ step: 'plan', order: 1, status: 'completed', title: '增量修改计划已经完成', detail: plan });
-
-  const maxRepairAttempts = repairAttemptsFromEnv();
+  const maxRepairAttempts = incrementalRepairAttemptsFromEnv();
   const attemptFailures: string[] = [];
   let previousRejectedArtifact = '';
   let candidateCode = '';
   let patchDraft: AgentPatchDraft | null = null;
   let preservation: AgentPreservationInspection | null = null;
   let audit = '';
-  let usedAdditiveFallback = false;
+  let plan = '';
 
   for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
     const attemptNumber = attempt + 1;
     let patchResponse = '';
-    let fallbackResponse = '';
     patchDraft = null;
     candidateCode = '';
     preservation = null;
     audit = '';
-    usedAdditiveFallback = false;
     progress({
       step: 'structure',
       order: 2,
@@ -1386,7 +1267,7 @@ The existing document is protected outside the parts explicitly involved in the 
       patchResponse = await runAgentTextStep(
         input.provider,
         `incremental patch attempt ${attemptNumber}`,
-        `Produce exact, minimal patch operations for the canonical HTML below.
+        `Analyze the requested change and immediately produce exact, minimal patch operations for the canonical HTML below. Do the implementation planning and patch generation in this single response.
 
 Requested change:
 ${requestedChange}
@@ -1396,9 +1277,6 @@ ${ideaList(input.selectedIdeas)}
 
 Fusion plan:
 ${input.fusionPlan || 'No fusion plan supplied.'}
-
-Implementation plan:
-${plan}
 
 ${attemptFailures.length ? `The previous patch was rejected. Correct this exact problem while starting again from the untouched canonical HTML:
 ${attemptFailures.at(-1)}
@@ -1414,6 +1292,7 @@ ${baseCode}
 The text artifact inside the required outer response must contain one JSON object with this exact schema:
 {
   "summary": "one concise public sentence describing the implemented change",
+  "implementation_plan": "a compact explanation of what existing targets will change and how the idea will work; maximum 700 characters",
   "scope": {
     "mode": "additive | targeted",
     "target_ids": ["existing DOM ids that may be changed"],
@@ -1434,6 +1313,7 @@ The text artifact inside the required outer response must contain one JSON objec
 
 Safety contract:
 - Implement the selected idea completely and integrate it into the existing experience. Do not reduce a substantive request to a disconnected card, note, badge, or cosmetic text change.
+- operations must never be empty. If the feature is genuinely independent, return insert operations that add its complete HTML, scoped CSS, and JavaScript in this same patch response.
 - Use mode "targeted" whenever the request changes an existing feature, interaction, game mechanic, layout region, or visual component. Use "additive" only for a genuinely independent new feature.
 - In targeted mode, replacements and explicit removals are allowed inside the declared scope. Every replace operation must contain a declared target id, function, or exact target anchor.
 - target_ids and target_functions must already exist in the canonical HTML. removable_ids must be a subset of target_ids and may include only elements the request clearly requires removing or replacing.
@@ -1455,35 +1335,20 @@ Safety contract:
         candidateCode = applyAgentPatch(baseCode, patchDraft);
       } catch (error) {
         if (!(error instanceof EmptyAgentPatchError)) throw error;
-        if (error.draft.scope?.mode === 'targeted') {
-          patchDraft = error.draft;
-          throw new Error('AI 已识别需要修改现有功能，但没有生成目标区域代码修改；必须针对已授权区域重新开发。');
-        }
-        progress({
-          step: 'structure',
-          order: 2,
-          status: 'warning',
-          title: '精确补丁为空，正在切换安全增量模式',
-          detail: '系统将把入选创意作为独立模块加入旧页面，原有代码保持不变。',
-        });
-        fallbackResponse = await runAgentAdditiveModuleFallback(
-          input,
-          plan,
-          baseCode,
-          patchResponse,
-          attemptFailures.at(-1) || '',
-        );
-        const additiveModule = parseAgentAdditiveModule(fallbackResponse);
-        patchDraft = additiveModuleAsPatch(additiveModule);
-        candidateCode = applyAgentAdditiveModule(baseCode, additiveModule);
-        usedAdditiveFallback = true;
+        patchDraft = error.draft;
+        throw new Error('AI 返回了空补丁；必须在同一次响应中生成完整的 HTML、CSS 或 JavaScript 修改。');
       }
       validateCompleteAgentHtml(candidateCode);
       preservation = validateAgentPreservation(baseCode, candidateCode, patchDraft);
-      audit = await runAgentPatchAudit(input, plan, patchDraft, preservation);
-      if (!/^PASS\s*:/i.test(audit.trim())) {
-        throw new Error(`增量实现检查未通过：${audit.replace(/^FAIL\s*:\s*/i, '').slice(0, 900)}`);
-      }
+      audit = buildLocalAgentPatchAudit(patchDraft, preservation);
+      plan = patchDraft.implementationPlan || patchDraft.scope?.rationale || patchDraft.summary;
+      progress({
+        step: 'plan',
+        order: 1,
+        status: 'completed',
+        title: '修改计划和代码补丁已经完成',
+        detail: plan,
+      });
       break;
     } catch (error) {
       // Provider/network failures are not unsafe patches. Let the job surface the
@@ -1491,9 +1356,9 @@ Safety contract:
       if (isSuiXiangTransientUpstreamError(error)) throw error;
       const failure = error instanceof Error ? error.message : String(error);
       attemptFailures.push(failure);
-      previousRejectedArtifact = fallbackResponse || (patchDraft
+      previousRejectedArtifact = patchDraft
         ? JSON.stringify(patchDraft, null, 2)
-        : patchResponse);
+        : patchResponse;
       addDebugLog({
         kind: 'ai',
         phase: 'info',
@@ -1515,15 +1380,13 @@ Safety contract:
     }
   }
 
-  if (!patchDraft || !candidateCode || !preservation || !/^PASS\s*:/i.test(audit.trim())) {
+  if (!patchDraft || !candidateCode || !preservation || !audit) {
     throw new Error('增量开发没有生成可安全预览的版本，上一已发布版本保持不变。');
   }
 
   progress({
     step: 'structure', order: 2, status: 'completed', title: '页面增量修改已经完成',
-    detail: usedAdditiveFallback
-      ? '精确补丁为空后，已安全加入独立增量模块，未重写原页面。'
-      : `已安全应用 ${patchDraft.operations.length} 个精确修改，未重写原页面。`,
+    detail: `已安全应用 ${patchDraft.operations.length} 个精确修改，未重写原页面。`,
   });
   progress({
     step: 'images', order: 3, status: 'completed', title: '原有图片已经保留',
@@ -1557,7 +1420,8 @@ Safety contract:
       baseLength: baseCode.length,
       candidateLength: candidateCode.length,
       operationCount: patchDraft.operations.length,
-      usedAdditiveFallback,
+      aiRequestCount: attemptFailures.length + 1,
+      validationMode: 'local-deterministic',
       preservation,
       audit,
       rejectedAttempts: attemptFailures,
@@ -1571,12 +1435,9 @@ Safety contract:
     usage: null,
     steps: [
       `增量修改计划：\n${plan}`,
-      usedAdditiveFallback
-        ? '已应用 1 个安全增量模块。'
-        : `已应用 ${patchDraft.operations.length} 个精确补丁。`,
-      ...(usedAdditiveFallback ? ['精确补丁为空后，系统已自动切换为安全增量模块。'] : []),
+      `已应用 ${patchDraft.operations.length} 个精确补丁。`,
       `旧功能保留检查：非目标组件无缺失，授权替换 ${preservation.authorizedRemovedIds.length} 个目标组件，事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}。`,
-      `增量实现检查：${audit}`,
+      `本地增量实现检查：${audit}`,
     ],
   };
 }

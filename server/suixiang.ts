@@ -54,7 +54,7 @@ export function suiXiangReasoningRetrySequence(
 ) {
   const levels: SuiXiangReasoningEffort[] = ['none', 'low', 'medium', 'high'];
   const initialIndex = levels.indexOf(initial);
-  return Array.from({ length: 3 }, (_, attempt) => (
+  return Array.from({ length: 2 }, (_, attempt) => (
     levels[Math.max(0, initialIndex - attempt)]
   ));
 }
@@ -70,7 +70,7 @@ const RETRYABLE_NETWORK_CODES = new Set([
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_SOCKET',
 ]);
-const NETWORK_RETRY_DELAYS_MS = [500, 1200];
+const NETWORK_RETRY_DELAYS_MS = [650];
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504, 524]);
 const REASONING_TIMEOUT_HTTP_STATUSES = new Set([408, 504, 524]);
 

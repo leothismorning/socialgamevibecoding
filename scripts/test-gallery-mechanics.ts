@@ -58,6 +58,8 @@ const {
   validateCompleteAgentHtml,
   parseAgentAdditiveModule,
   applyAgentAdditiveModule,
+  incrementalRepairAttemptsFromEnv,
+  runDevelopmentAgent,
   EmptyAgentPatchError,
 } = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
@@ -154,11 +156,67 @@ assert.equal(
   '.hero { color: #fff; background: linear-gradient(#123, #456); }\n\n.missing-state { outline: 2px solid #f5c542; }',
   'CSS repair additions must preserve the complete original visual stylesheet',
 );
+assert.equal(incrementalRepairAttemptsFromEnv({}), 1);
+assert.equal(incrementalRepairAttemptsFromEnv({ AI_AGENT_INCREMENTAL_REPAIR_ATTEMPTS: '0' }), 0);
+assert.equal(
+  incrementalRepairAttemptsFromEnv({ AI_AGENT_INCREMENTAL_REPAIR_ATTEMPTS: '8' }),
+  1,
+  'incremental development must never exceed one corrective GPT request',
+);
 
 const incrementalBase = `<!doctype html><html><head><style>.old-button{color:blue}</style></head><body>
 <main id="existingApp"><button id="oldButton" class="old-button">旧功能</button></main>
 <script>document.getElementById('oldButton').addEventListener('click', () => {});</script>
 </body></html>`;
+const originalAgentFetch = globalThis.fetch;
+let incrementalAgentRequestCount = 0;
+try {
+  globalThis.fetch = async () => {
+    incrementalAgentRequestCount += 1;
+    const patch = {
+      summary: '在保留旧按钮的同时加入一个新的创意区域。',
+      implementation_plan: '在页面结尾添加独立创意区域及局部样式，不修改现有按钮和事件。',
+      scope: {
+        mode: 'additive',
+        target_ids: [],
+        removable_ids: [],
+        target_functions: [],
+        target_anchors: [],
+        rationale: '新创意可以作为独立区域加入。',
+      },
+      operations: [{
+        type: 'insert_before',
+        search: '</body>',
+        content: '<section id="fastIdea" class="fast-idea">新创意</section><style>.fast-idea{padding:12px;color:#123}</style>',
+        reason: '实现入选创意。',
+      }],
+    };
+    return new Response(JSON.stringify({
+      model: 'gpt-5.5',
+      choices: [{
+        message: {
+          content: JSON.stringify({ text: JSON.stringify(patch), code: '' }),
+        },
+      }],
+      usage: null,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const fastIncrementalResult = await runDevelopmentAgent({
+    provider: 'gpt5',
+    mode: 'round-candidate',
+    experimentTitle: 'Fast incremental test',
+    currentCode: incrementalBase,
+    creatorMessage: '加入一个新的创意区域',
+  });
+  assert.equal(incrementalAgentRequestCount, 1, 'a valid incremental change should use one GPT request');
+  assert.match(fastIncrementalResult.code, /id="fastIdea"/);
+  assert.match(fastIncrementalResult.steps.join('\n'), /本地增量实现检查/);
+} finally {
+  globalThis.fetch = originalAgentFetch;
+}
 const incrementalDraft = parseAgentPatchDraft(JSON.stringify({
   summary: '新增创意卡片，同时保留旧功能。',
   operations: [{
