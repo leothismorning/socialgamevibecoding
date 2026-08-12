@@ -175,6 +175,11 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, notificationIds }),
     }),
+  replayNotificationCelebrations: (clientId: string) =>
+    request('/api/community-gallery/notifications/replay-celebrations', {
+      method: 'POST',
+      body: body({ clientId }),
+    }),
   startStudy: (clientId: string, isTest: boolean) =>
     request('/api/community-gallery/study/start', {
       method: 'POST',
@@ -210,7 +215,7 @@ export const communityGalleryApi = {
     method: 'POST',
     body: body({ clientId, testCreatorCodes }),
   }),
-  setHomeFeedOrder: (clientId: string, order: 'asc' | 'desc') =>
+  setHomeFeedOrder: (clientId: string, order: 'asc' | 'desc' | 'random') =>
     request('/api/community-gallery/study/home-feed-order', {
       method: 'POST',
       body: body({ clientId, order }),

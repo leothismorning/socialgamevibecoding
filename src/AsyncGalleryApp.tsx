@@ -29,6 +29,7 @@ import {
   RotateCcw,
   Send,
   ShoppingBasket,
+  Shuffle,
   Sparkles,
   Trash2,
   Upload,
@@ -121,6 +122,16 @@ function safeDownloadName(value: string, fallback: string) {
     .replace(/[. ]+$/g, '')
     .slice(0, 80);
   return cleaned || fallback;
+}
+
+function stableShuffleValue(seed: string, value: string) {
+  let hash = 2166136261;
+  const input = `${seed}:${value}`;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -324,11 +335,13 @@ function PublishedCreatorStudio({
   clientId,
   action,
   busy,
+  openOwnApp,
 }: {
   state: CommunityGalleryState;
   clientId: string;
   action: (label: string, task: () => Promise<CommunityGalleryState>) => Promise<void>;
   busy: string;
+  openOwnApp: (appId: string) => void;
 }) {
   const ownApp = state.apps.find((app) => app.creator_code === state.viewer?.code);
   const latestVersion = state.versions
@@ -426,6 +439,15 @@ function PublishedCreatorStudio({
             下一轮开发只能由主持人锁定本轮点赞并完成抽取后启动；生成草稿后，你可以继续修改并决定是否发布。
           </p>
         </div>
+        <button
+          type="button"
+          className="async-open-own-app"
+          onClick={() => openOwnApp(ownApp.id)}
+        >
+          <Eye />
+          <span><strong>打开我的 App</strong><small>查看作品、版本和评论</small></span>
+          <ArrowRight />
+        </button>
         <aside className={`async-delete-app-control${deleteBlockedByFeedback ? ' is-blocked' : ''}`}>
           {canRollbackCommunityV1 && (
             <button
@@ -609,11 +631,13 @@ function InitialCreatorStudio({
   clientId,
   action,
   busy,
+  openOwnApp,
 }: {
   state: CommunityGalleryState;
   clientId: string;
   action: (label: string, task: () => Promise<CommunityGalleryState>) => Promise<void>;
   busy: string;
+  openOwnApp: (appId: string) => void;
 }) {
   const ownApp = state.apps.find((app) => app.creator_code === state.viewer?.code);
   const [title, setTitle] = useState('');
@@ -716,6 +740,7 @@ function InitialCreatorStudio({
         clientId={clientId}
         action={action}
         busy={busy}
+        openOwnApp={openOwnApp}
       />
     );
   }
@@ -4173,6 +4198,22 @@ function HostPanel({
       <header>
         <div><span className="async-eyebrow">主持人 · 异步研究</span><h2>研究控制与完成进度</h2><p>主持人锁定本轮点赞后，系统会按点赞数加权随机抽取每个应用的开发来源，并立即启动开发任务。</p></div>
         <div className="async-host-actions">
+          <button
+            type="button"
+            className="async-host-replay-notifications"
+            disabled={Boolean(busy)}
+            title="让已经弹出过的创意入选消息在参与者下次上线时再弹出一次"
+            onClick={() => {
+              if (!window.confirm(
+                '确认重播所有已经弹出过的创意入选消息吗？\n\n参与者下次上线或重新打开平台时，这些消息会再次弹出一次。',
+              )) return;
+              void action('replay-notification-celebrations', async () => {
+                const next = await communityGalleryApi.replayNotificationCelebrations(clientId);
+                window.alert('已设置完成。参与者下次上线时，之前的创意入选消息会重新弹出一次。');
+                return next;
+              });
+            }}
+          ><Bell /> {busy === 'replay-notification-celebrations' ? '正在设置…' : '重播入选消息'}</button>
           <a href={`/api/community-gallery/export?clientId=${encodeURIComponent(clientId)}`}><Download /> 导出研究数据</a>
         </div>
       </header>
@@ -4717,6 +4758,13 @@ export default function AsyncGalleryApp() {
     [state?.apps],
   );
   const homePublishedApps = useMemo(() => {
+    if (state?.study.home_feed_order === 'random') {
+      const seed = state.study.home_feed_shuffle_seed || state.study.id;
+      return [...publishedApps].sort((left, right) => (
+        stableShuffleValue(seed, left.id) - stableShuffleValue(seed, right.id)
+        || left.creator_code.localeCompare(right.creator_code, undefined, { numeric: true })
+      ));
+    }
     const direction = state?.study.home_feed_order === 'desc' ? -1 : 1;
     return [...publishedApps].sort((left, right) => {
       const timeComparison = String(left.published_at || '').localeCompare(
@@ -4729,7 +4777,7 @@ export default function AsyncGalleryApp() {
         { numeric: true },
       ) * direction;
     });
-  }, [publishedApps, state?.study.home_feed_order]);
+  }, [publishedApps, state?.study.home_feed_order, state?.study.home_feed_shuffle_seed, state?.study.id]);
   const secondRoundPublishedApps = useMemo(
     () => homePublishedApps.filter((app) => (
       Number(app.community_version_count || 0) >= 1 || Boolean(app.community_version_id)
@@ -4836,7 +4884,13 @@ export default function AsyncGalleryApp() {
         {!state.viewer && <IdentityGate busy={busy} join={(account, password) => void action('join', () => communityGalleryApi.join(clientId, account, password))} />}
 
         {state.viewer?.role === 'creator' && state.study.status !== 'closed' && (
-          <InitialCreatorStudio state={state} clientId={clientId} action={action} busy={busy} />
+          <InitialCreatorStudio
+            state={state}
+            clientId={clientId}
+            action={action}
+            busy={busy}
+            openOwnApp={navigateToApp}
+          />
         )}
 
         {state.viewer?.role === 'host' && !selectedApp && (
@@ -4863,24 +4917,40 @@ export default function AsyncGalleryApp() {
                   : '先体验指定应用，也可以自由探索其他作品。普通讨论保持自然，综合创意由用户主动创建。'}</p>
               </div>
               {state.viewer.role === 'host' ? (
-                <button
-                  type="button"
-                  className={`async-home-order-button${state.study.home_feed_order === 'desc' ? ' is-active' : ''}`}
-                  aria-pressed={state.study.home_feed_order === 'desc'}
-                  disabled={Boolean(busy)}
-                  title={state.study.home_feed_order === 'desc'
-                    ? '当前所有账号的首页均按发布时间倒序；点击恢复时间正序'
-                    : '让所有账号的首页按发布时间倒序显示'}
-                  onClick={() => void action('set-home-feed-order', () => (
-                    communityGalleryApi.setHomeFeedOrder(
-                      clientId,
-                      state.study.home_feed_order === 'desc' ? 'asc' : 'desc',
-                    )
-                  ))}
-                >
-                  <ArrowUpDown />
-                  {state.study.home_feed_order === 'desc' ? '恢复时间正序' : '按时间倒序'}
-                </button>
+                <div className="async-home-order-actions">
+                  <button
+                    type="button"
+                    className={`async-home-order-button${state.study.home_feed_order === 'desc' ? ' is-active' : ''}`}
+                    aria-pressed={state.study.home_feed_order === 'desc'}
+                    disabled={Boolean(busy)}
+                    title={state.study.home_feed_order === 'asc'
+                      ? '让所有账号的首页按发布时间倒序显示'
+                      : '恢复所有账号首页的发布时间正序'}
+                    onClick={() => void action('set-home-feed-order', () => (
+                      communityGalleryApi.setHomeFeedOrder(
+                        clientId,
+                        state.study.home_feed_order === 'asc' ? 'desc' : 'asc',
+                      )
+                    ))}
+                  >
+                    <ArrowUpDown />
+                    {state.study.home_feed_order === 'asc' ? '按时间倒序' : '恢复时间正序'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`async-home-order-button${state.study.home_feed_order === 'random' ? ' is-active' : ''}`}
+                    aria-pressed={state.study.home_feed_order === 'random'}
+                    disabled={Boolean(busy)}
+                    title="为所有账号生成并保存一套新的随机作品顺序"
+                    onClick={() => void action(
+                      'randomize-home-feed',
+                      () => communityGalleryApi.setHomeFeedOrder(clientId, 'random'),
+                    )}
+                  >
+                    <Shuffle />
+                    {state.study.home_feed_order === 'random' ? '重新随机排列' : '随机排列'}
+                  </button>
+                </div>
               ) : ownApp?.initial_version_id ? (
                 <span className="async-own-app-note"><CheckCircle2 /> 你的初始应用已发布</span>
               ) : null}

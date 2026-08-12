@@ -64,6 +64,14 @@ assert.throws(
 state = gallery.setCommunityHomeFeedOrder(hostClient, 'desc');
 assert.equal(state.study.home_feed_order, 'desc');
 assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_order, 'desc');
+state = gallery.setCommunityHomeFeedOrder(hostClient, 'random');
+const firstShuffleSeed = state.study.home_feed_shuffle_seed;
+assert.equal(state.study.home_feed_order, 'random');
+assert.ok(firstShuffleSeed);
+assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_shuffle_seed, firstShuffleSeed);
+state = gallery.setCommunityHomeFeedOrder(hostClient, 'random');
+assert.equal(state.study.home_feed_order, 'random');
+assert.notEqual(state.study.home_feed_shuffle_seed, firstShuffleSeed);
 state = gallery.setCommunityHomeFeedOrder(hostClient, 'asc');
 assert.equal(state.study.home_feed_order, 'asc');
 assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'asc');
@@ -261,6 +269,27 @@ const uploadDevelopment = gallery.enterCommunityDevelopmentStage(
   [secondTestApp.id],
 );
 assert.equal(uploadDevelopment.jobIds.length, 1);
+const selectedIdeaNotification = gallery.getCommunityGalleryState(client(1)).notifications.find(
+  (notification: any) => notification.app_id === secondTestApp.id,
+);
+assert.ok(selectedIdeaNotification);
+gallery.markCommunityNotificationsRead(client(1));
+gallery.markCommunityNotificationsCelebrated(client(1), [selectedIdeaNotification.id]);
+let replayedNotification = db.prepare(`
+  SELECT read_at, celebrated_at FROM vg_async_notifications WHERE id = ?
+`).get(selectedIdeaNotification.id) as { read_at?: string; celebrated_at?: string };
+assert.ok(replayedNotification.read_at);
+assert.ok(replayedNotification.celebrated_at);
+assert.throws(
+  () => gallery.replayCelebratedContributionNotifications(client(1)),
+  /主持人|身份/,
+);
+gallery.replayCelebratedContributionNotifications(hostClient);
+replayedNotification = db.prepare(`
+  SELECT read_at, celebrated_at FROM vg_async_notifications WHERE id = ?
+`).get(selectedIdeaNotification.id) as { read_at?: string; celebrated_at?: string };
+assert.ok(replayedNotification.read_at, 'replaying a popup must not turn the message back into unread');
+assert.equal(replayedNotification.celebrated_at, null);
 assert.throws(
   () => gallery.uploadAndPublishFirstCommunityVersion(
     client(1),

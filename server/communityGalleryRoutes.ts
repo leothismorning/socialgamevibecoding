@@ -31,6 +31,7 @@ import {
   publishCommunityVersion,
   publishInitialVersion,
   publishProjectDraft,
+  replayCelebratedContributionNotifications,
   rollbackFirstCommunityVersion,
   recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
@@ -638,6 +639,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
+  app.post('/api/community-gallery/notifications/replay-celebrations', (req, res) => {
+    try {
+      res.json(replayCelebratedContributionNotifications(clientIdFrom(req)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.post('/api/community-gallery/jobs/:jobId/retry', (req, res) => {
     try {
       const clientId = clientIdFrom(req);
@@ -722,7 +731,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
     try {
       res.json(setCommunityHomeFeedOrder(
         clientIdFrom(req),
-        String(req.body?.order || '') as 'asc' | 'desc',
+        String(req.body?.order || '') as 'asc' | 'desc' | 'random',
       ));
     } catch (error) {
       sendError(res, error);

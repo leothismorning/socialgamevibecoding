@@ -890,11 +890,22 @@ function homeFeedOrderKey(studyId: string) {
   return `home_feed_order_v1:${studyId}`;
 }
 
-function homeFeedOrder(studyId: string): 'asc' | 'desc' {
+function homeFeedShuffleSeedKey(studyId: string) {
+  return `home_feed_shuffle_seed_v1:${studyId}`;
+}
+
+function homeFeedOrder(studyId: string): 'asc' | 'desc' | 'random' {
   const setting = db.prepare(`
     SELECT value FROM vg_async_settings WHERE key = ?
   `).get(homeFeedOrderKey(studyId)) as { value?: string } | undefined;
-  return setting?.value === 'desc' ? 'desc' : 'asc';
+  return setting?.value === 'desc' || setting?.value === 'random' ? setting.value : 'asc';
+}
+
+function homeFeedShuffleSeed(studyId: string) {
+  const setting = db.prepare(`
+    SELECT value FROM vg_async_settings WHERE key = ?
+  `).get(homeFeedShuffleSeedKey(studyId)) as { value?: string } | undefined;
+  return setting?.value || '';
 }
 
 function testRolesConfigured(studyId: string) {
@@ -968,16 +979,30 @@ export function setCommunityTestCreators(
   return getCommunityGalleryState(clientId);
 }
 
-export function setCommunityHomeFeedOrder(clientId: string, order: 'asc' | 'desc') {
+export function setCommunityHomeFeedOrder(clientId: string, order: 'asc' | 'desc' | 'random') {
   const viewer = requireViewer(clientId, 'host');
-  if (order !== 'asc' && order !== 'desc') throw new Error('首页排序方式无效。');
+  if (order !== 'asc' && order !== 'desc' && order !== 'random') {
+    throw new Error('首页排序方式无效。');
+  }
   const currentStudy = study();
-  db.prepare(`
-    INSERT INTO vg_async_settings (key, value, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run(homeFeedOrderKey(currentStudy.id), order, now());
-  recordEvent(viewer.code, 'set_home_feed_order', 'study', currentStudy.id, { order });
+  const timestamp = now();
+  const shuffleSeed = order === 'random' ? randomUUID() : homeFeedShuffleSeed(currentStudy.id);
+  const upsert = db.prepare(`
+      INSERT INTO vg_async_settings (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
+  const transaction = db.transaction(() => {
+    upsert.run(homeFeedOrderKey(currentStudy.id), order, timestamp);
+    if (order === 'random') {
+      upsert.run(homeFeedShuffleSeedKey(currentStudy.id), shuffleSeed, timestamp);
+    }
+  });
+  transaction();
+  recordEvent(viewer.code, 'set_home_feed_order', 'study', currentStudy.id, {
+    order,
+    shuffleSeed: order === 'random' ? shuffleSeed : null,
+  });
   return getCommunityGalleryState(clientId);
 }
 
@@ -2053,6 +2078,27 @@ export function markCommunityNotificationsCelebrated(clientId: string, notificat
       notificationIds: validIds,
     });
   }
+  return getCommunityGalleryState(clientId);
+}
+
+export function replayCelebratedContributionNotifications(clientId: string) {
+  const viewer = requireViewer(clientId, 'host');
+  const currentStudy = study();
+  const replayableCount = Number((db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM vg_async_notifications
+    WHERE study_id = ? AND type = 'contribution_selected' AND celebrated_at IS NOT NULL
+  `).get(currentStudy.id) as { count?: number } | undefined)?.count || 0);
+  if (replayableCount > 0) {
+    db.prepare(`
+      UPDATE vg_async_notifications
+      SET celebrated_at = NULL
+      WHERE study_id = ? AND type = 'contribution_selected' AND celebrated_at IS NOT NULL
+    `).run(currentStudy.id);
+  }
+  recordEvent(viewer.code, 'replay_contribution_notifications', 'study', currentStudy.id, {
+    notificationCount: replayableCount,
+  });
   return getCommunityGalleryState(clientId);
 }
 
@@ -4935,6 +4981,7 @@ export function getCommunityGalleryState(clientId = '') {
       ...currentStudy,
       ...viewerWorkspace,
       home_feed_order: homeFeedOrder(currentStudy.id),
+      home_feed_shuffle_seed: homeFeedShuffleSeed(currentStudy.id),
       test_roles_configured: regularWorkspace.status !== 'setup' || testWorkspace.status !== 'setup'
         || testRolesConfigured(currentStudy.id),
     },
