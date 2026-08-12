@@ -1534,6 +1534,7 @@ type PositionedIdeaFlowNode = IdeaFlowNode & {
 
 const FLOW_NODE_WIDTH = 292;
 const FLOW_NODE_HEIGHT = 142;
+const FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT = 36;
 const FLOW_COLUMN_GAP = 96;
 const FLOW_ROW_GAP = 24;
 const FLOW_START_X = 38;
@@ -2249,6 +2250,9 @@ function IdeaFlowBoard({
     const expandable = isLongContent(comment.content);
     const expanded = expandable && expandedKeySet.has(key);
     const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id)) ? 48 : 0;
+    const developmentSelectionExtraHeight = developmentSelectedSourceKeys.has(key)
+      ? FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT
+      : 0;
     return {
       key,
       kind,
@@ -2269,8 +2273,12 @@ function IdeaFlowBoard({
       expandable,
       width: kind === 'reply' ? FLOW_NODE_WIDTH - 18 : FLOW_NODE_WIDTH,
       height: kind === 'reply'
-        ? (expanded ? 190 : expandable ? 146 : 112) + wildcardExtraHeight
-        : (expanded ? 224 : expandable ? 178 : FLOW_NODE_HEIGHT) + wildcardExtraHeight,
+        ? (expanded ? 190 : expandable ? 146 : 112)
+          + wildcardExtraHeight
+          + developmentSelectionExtraHeight
+        : (expanded ? 224 : expandable ? 178 : FLOW_NODE_HEIGHT)
+          + wildcardExtraHeight
+          + developmentSelectionExtraHeight,
       indent: kind === 'reply' ? 18 : 0,
       comment,
     };
@@ -2378,7 +2386,10 @@ function IdeaFlowBoard({
         inBasket: basketKeys.has(sourceKey(source.source_type, Number(source.source_id))),
         expandable: sourceExpandable,
         width: FLOW_NODE_WIDTH,
-        height: sourceExpanded ? 274 : sourceExpandable ? 218 : 186,
+        height: (sourceExpanded ? 274 : sourceExpandable ? 218 : 186)
+          + (developmentSelectedSourceKeys.has(
+            sourceKey(source.source_type, Number(source.source_id)),
+          ) ? FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT : 0),
         indent: 0,
         comment: sourceComment,
         synthesis: sourceSynthesis,
@@ -2432,11 +2443,15 @@ function IdeaFlowBoard({
       inBasket: Boolean(synthesis.viewer_in_basket),
       expandable: isLongContent(synthesis.content),
       width: FLOW_NODE_WIDTH,
-      height: baseHeight + (discussionComments.length
-        ? 38
-          + Math.min(2, discussionComments.length) * 12
-          + (discussionComments.length > 2 ? 12 : 0)
-        : 0),
+      height: baseHeight
+        + (discussionComments.length
+          ? 38
+            + Math.min(2, discussionComments.length) * 12
+            + (discussionComments.length > 2 ? 12 : 0)
+          : 0)
+        + (developmentSelectedSourceKeys.has(key)
+          ? FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT
+          : 0),
       indent: 0,
       synthesis,
       discussionComments,
