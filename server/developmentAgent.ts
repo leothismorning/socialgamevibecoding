@@ -503,29 +503,8 @@ ${module.javascript}
 
 export function applyAgentPatch(baseCode: string, draft: AgentPatchDraft) {
   if (!baseCode.trim()) throw new Error('增量开发缺少上一已发布版本。');
-  const scope = validateAgentModificationScope(baseCode, draft.scope);
   let code = baseCode;
-  let totalSearchLength = 0;
   draft.operations.forEach((operation, index) => {
-    const authorizedTargetChange = isAgentPatchOperationAuthorized(operation, scope);
-    totalSearchLength += operation.search.length;
-    if (operation.search.length > (authorizedTargetChange ? 12_000 : 6000)) {
-      throw new Error(`第 ${index + 1} 个增量修改范围过大，已停止以避免重写原有功能。`);
-    }
-    if (operation.type === 'replace' && scope?.mode === 'additive') {
-      throw new Error(`第 ${index + 1} 个修改声明为新增模式，却试图替换旧代码。`);
-    }
-    if (operation.type === 'replace' && scope?.mode === 'targeted' && !authorizedTargetChange) {
-      throw new Error(`第 ${index + 1} 个修改不在已授权的目标区域内。`);
-    }
-    if (
-      operation.type === 'replace'
-      && !authorizedTargetChange
-      && operation.search.length >= 200
-      && operation.content.length < operation.search.length * 0.75
-    ) {
-      throw new Error(`第 ${index + 1} 个增量修改删除了过多旧代码，已停止以保护原有功能。`);
-    }
     const occurrences = code.split(operation.search).length - 1;
     if (occurrences !== 1) {
       throw new Error(
@@ -539,12 +518,6 @@ export function applyAgentPatch(baseCode: string, draft: AgentPatchDraft) {
         : `${operation.search}${operation.content}`;
     code = code.replace(operation.search, () => replacement);
   });
-  const maximumTouchedCode = scope?.mode === 'targeted'
-    ? Math.max(16_000, baseCode.length * 0.65)
-    : Math.max(8000, baseCode.length * 0.4);
-  if (totalSearchLength > maximumTouchedCode) {
-    throw new Error('本次增量修改触及的旧代码过多，已停止以避免整页重写。');
-  }
   if (code === baseCode) throw new Error('增量开发没有改变上一版本。');
   return ensureStandalonePerformanceGuard(code);
 }
@@ -569,55 +542,34 @@ export function validateAgentModificationScope(
 ) {
   if (!scope) return undefined;
   const baselineIds = new Set(extractDocumentIds(baseCode));
-  const missingTargetIds = scope.targetIds.filter((id) => !baselineIds.has(id));
-  if (missingTargetIds.length > 0) {
-    throw new Error(`授权修改范围引用了不存在的旧组件：${missingTargetIds.join(', ')}。`);
-  }
-  const invalidRemovals = scope.removableIds.filter(
-    (id) => !baselineIds.has(id) || !scope.targetIds.includes(id),
-  );
-  if (invalidRemovals.length > 0) {
-    throw new Error(`允许删除的组件没有包含在授权目标中：${invalidRemovals.join(', ')}。`);
-  }
-  const missingFunctions = scope.targetFunctions.filter((name) => !baseCode.includes(name));
-  if (missingFunctions.length > 0) {
-    throw new Error(`授权修改范围引用了不存在的旧函数：${missingFunctions.join(', ')}。`);
-  }
-  scope.targetAnchors.forEach((anchor, index) => {
-    if (anchor.length < 20 || anchor.length > 1200) {
-      throw new Error(`第 ${index + 1} 个授权代码锚点长度无效。`);
-    }
-    const occurrences = baseCode.split(anchor).length - 1;
-    if (occurrences !== 1) {
-      throw new Error(`第 ${index + 1} 个授权代码锚点出现 ${occurrences} 次，无法唯一定位。`);
-    }
-  });
-  if (
-    scope.mode === 'targeted'
-    && scope.targetIds.length === 0
-    && scope.targetFunctions.length === 0
-    && scope.targetAnchors.length === 0
-  ) {
-    throw new Error('目标修改模式没有声明任何可修改区域。');
-  }
-  return scope;
+  const targetIds = scope.targetIds.filter((id) => baselineIds.has(id));
+  const resolvedScope: AgentModificationScope = {
+    ...scope,
+    targetIds,
+    removableIds: scope.removableIds.filter((id) => baselineIds.has(id) && targetIds.includes(id)),
+    targetFunctions: scope.targetFunctions.filter((name) => baseCode.includes(name)),
+    targetAnchors: scope.targetAnchors.filter((anchor) => (
+      anchor.length >= 20
+      && anchor.length <= 1200
+      && baseCode.split(anchor).length - 1 === 1
+    )),
+  };
+  return resolvedScope;
 }
 
 function isAgentPatchOperationAuthorized(
+  baseCode: string,
   operation: AgentPatchOperation,
   scope?: AgentModificationScope,
 ) {
   if (operation.type !== 'replace' || scope?.mode !== 'targeted') return false;
   const search = operation.search;
-  const targetsId = scope.targetIds.some((id) => (
-    new RegExp(`\\bid=["']${escapeRegExp(id)}["']`, 'i').test(search)
-    || search.includes(`getElementById('${id}')`)
-    || search.includes(`getElementById("${id}")`)
-    || search.includes(`#${id}`)
-  ));
-  const targetsFunction = scope.targetFunctions.some((name) => search.includes(name));
-  const targetsAnchor = scope.targetAnchors.some((anchor) => search.includes(anchor));
-  return targetsId || targetsFunction || targetsAnchor;
+  if (search.length > 12_000 || baseCode.split(search).length - 1 !== 1) return false;
+  const trimmed = search.trim();
+  if (/data-vibecoding-performance-guard|\bid=["']agentToast["']/i.test(search)) return false;
+  if (/<!doctype|<html\b|<head\b[\s\S]*<\/head>|<body\b[\s\S]*<\/body>/i.test(trimmed)) return false;
+  if (/^<(style|script)\b[\s\S]*<\/\1>$/i.test(trimmed)) return false;
+  return true;
 }
 
 function countTag(code: string, tagName: string) {
@@ -641,7 +593,7 @@ export function inspectAgentPreservation(
   const missingIds = baselineIds.filter((id) => !candidateIdSet.has(id));
   const scope = validateAgentModificationScope(baseCode, draft?.scope);
   const authorizedReplacements = (draft?.operations || []).filter(
-    (operation) => isAgentPatchOperationAuthorized(operation, scope),
+    (operation) => isAgentPatchOperationAuthorized(baseCode, operation, scope),
   );
   const authorizedRemovedIds = missingIds.filter((id) => (
     Boolean(scope?.removableIds.includes(id))
@@ -1194,10 +1146,7 @@ Reply exactly "PASS: concise reason" when the prototype is safe to show, otherwi
   );
 }
 
-function buildLocalAgentPatchAudit(
-  draft: AgentPatchDraft,
-  preservation: AgentPreservationInspection,
-) {
+function buildLocalAgentPatchAudit(draft: AgentPatchDraft) {
   const changedCharacters = draft.operations.reduce(
     (total, operation) => total + operation.content.length,
     0,
@@ -1205,13 +1154,8 @@ function buildLocalAgentPatchAudit(
   if (changedCharacters === 0) {
     throw new Error('本地增量检查失败：补丁没有产生可见或可执行的实现内容。');
   }
-  if (preservation.unexpectedMissingIds.length > 0 || preservation.reducedControls.length > 0) {
-    throw new Error('本地增量检查失败：检测到未授权的旧功能删减。');
-  }
   return [
-    'PASS: 本地确定性检查通过',
-    `非目标组件无缺失`,
-    `事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}`,
+    'PASS: 基础代码检查通过',
     `补丁操作 ${draft.operations.length} 个`,
   ].join('；');
 }
@@ -1249,7 +1193,6 @@ async function runIncrementalDevelopmentAgentPipeline(
   let previousRejectedArtifact = '';
   let candidateCode = '';
   let patchDraft: AgentPatchDraft | null = null;
-  let preservation: AgentPreservationInspection | null = null;
   let audit = '';
   let plan = '';
 
@@ -1258,7 +1201,6 @@ async function runIncrementalDevelopmentAgentPipeline(
     let patchResponse = '';
     patchDraft = null;
     candidateCode = '';
-    preservation = null;
     audit = '';
     progress({
       step: 'structure',
@@ -1298,14 +1240,6 @@ The text artifact inside the required outer response must contain one JSON objec
 {
   "summary": "one concise public sentence describing the implemented change",
   "implementation_plan": "a compact explanation of what existing targets will change and how the idea will work; maximum 700 characters",
-  "scope": {
-    "mode": "additive | targeted",
-    "target_ids": ["existing DOM ids that may be changed"],
-    "removable_ids": ["target ids the request explicitly requires removing"],
-    "target_functions": ["exact existing function names or unique function signatures"],
-    "target_anchors": ["20-1200 character exact unique substrings from existing HTML/CSS/JS"],
-    "rationale": "why these targets are necessary and why other code is unrelated"
-  },
   "operations": [
     {
       "type": "replace | insert_before | insert_after",
@@ -1319,14 +1253,9 @@ The text artifact inside the required outer response must contain one JSON objec
 Safety contract:
 - Implement the selected idea completely and integrate it into the existing experience. Do not reduce a substantive request to a disconnected card, note, badge, or cosmetic text change.
 - operations must never be empty. If the feature is genuinely independent, return insert operations that add its complete HTML, scoped CSS, and JavaScript in this same patch response.
-- Use mode "targeted" whenever the request changes an existing feature, interaction, game mechanic, layout region, or visual component. Use "additive" only for a genuinely independent new feature.
-- In targeted mode, replacements and explicit removals are allowed inside the declared scope. Every replace operation must contain a declared target id, function, or exact target anchor.
-- target_ids and target_functions must already exist in the canonical HTML. removable_ids must be a subset of target_ids and may include only elements the request clearly requires removing or replacing.
-- target_anchors must be exact, unique, verbatim canonical substrings. Use them to authorize CSS rules, anonymous event logic, or markup without a useful id.
-- Outside the declared scope, preserve all existing ids, controls, functions, listeners, content, navigation, images, styles, and behaviors byte-for-byte.
-- Do not return a full HTML document, whole body, whole head, whole stylesheet, or whole main script.
+- Preserve all previous features, interactions, content, navigation, images, styles, and behaviors unless the selected idea explicitly requires changing them. Inspect the existing implementation carefully and integrate the new idea without unintentionally removing working functionality.
 - Every search string must occur exactly once in the canonical HTML and should contain enough neighboring text to be unique.
-- Preserve a target id when practical so existing references remain valid. If the target is explicitly replaced, list its id in removable_ids and implement a working replacement.
+- Preserve existing ids and function names when practical so their references continue to work.
 - Do not touch scripts marked data-vibecoding-performance-guard, #agentToast, or the existing fallback machinery.
 - New controls must have working JavaScript. New runtime classes must have visibly distinct CSS. Use unique prefixed ids/classes to avoid collisions.
 - Do not use Tailwind, external frameworks, inline onclick, @import, or placeholder-only behavior.
@@ -1345,8 +1274,7 @@ Safety contract:
         throw new Error('AI 返回了空补丁；必须在同一次响应中生成完整的 HTML、CSS 或 JavaScript 修改。');
       }
       validateCompleteAgentHtml(candidateCode);
-      preservation = validateAgentPreservation(baseCode, candidateCode, patchDraft);
-      audit = buildLocalAgentPatchAudit(patchDraft, preservation);
+      audit = buildLocalAgentPatchAudit(patchDraft);
       plan = patchDraft.implementationPlan || patchDraft.scope?.rationale || patchDraft.summary;
       progress({
         step: 'plan',
@@ -1357,8 +1285,8 @@ Safety contract:
       });
       break;
     } catch (error) {
-      // Provider/network failures are not unsafe patches. Let the job surface the
-      // retryable infrastructure error instead of mislabelling it as a rejected edit.
+      // Provider/network failures are not invalid code. Surface the retryable
+      // infrastructure error instead of mislabelling it as a code failure.
       if (isSuiXiangTransientUpstreamError(error)) throw error;
       const failure = error instanceof Error ? error.message : String(error);
       attemptFailures.push(failure);
@@ -1373,46 +1301,46 @@ Safety contract:
       });
       if (attempt >= maxRepairAttempts) {
         throw new Error(
-          `系统已拒绝可能破坏旧功能的版本。上一已发布版本保持不变。最后原因：${failure.slice(0, 900)}`,
+          `本轮生成代码未通过基础有效性检查。上一已发布版本保持不变。最后原因：${failure.slice(0, 900)}`,
         );
       }
       progress({
         step: 'validation',
         order: 7,
         status: 'warning',
-        title: `安全检查发现问题，正在从上一版本重新生成（${attemptNumber}/${maxRepairAttempts}）`,
+        title: `代码有效性检查发现问题，正在从上一版本重新生成（${attemptNumber}/${maxRepairAttempts}）`,
         detail: failure,
       });
     }
   }
 
-  if (!patchDraft || !candidateCode || !preservation || !audit) {
-    throw new Error('增量开发没有生成可安全预览的版本，上一已发布版本保持不变。');
+  if (!patchDraft || !candidateCode || !audit) {
+    throw new Error('增量开发没有生成可预览的有效版本，上一已发布版本保持不变。');
   }
 
   progress({
     step: 'structure', order: 2, status: 'completed', title: '页面增量修改已经完成',
-    detail: `已安全应用 ${patchDraft.operations.length} 个精确修改，未重写原页面。`,
+    detail: `已应用 ${patchDraft.operations.length} 个精确修改。`,
   });
   progress({
-    step: 'images', order: 3, status: 'completed', title: '原有图片已经保留',
-    detail: '沿用上一版本的图片资源，未对无关素材进行替换。',
+    step: 'images', order: 3, status: 'completed', title: '页面资源处理已经完成',
+    detail: '已完成本轮补丁中的页面资源处理。',
   });
   progress({
-    step: 'styles', order: 4, status: 'completed', title: '增量样式已经检查',
-    detail: '新增样式保持局部作用域，原有视觉样式保持不变。',
+    step: 'styles', order: 4, status: 'completed', title: '页面样式生成已经完成',
+    detail: '已完成本轮补丁中的样式修改。',
   });
   progress({
-    step: 'logic', order: 5, status: 'completed', title: '新旧交互已经连接',
-    detail: `原有 ${preservation.baselineEventBindings} 个事件绑定均已保留。`,
+    step: 'logic', order: 5, status: 'completed', title: '交互代码生成已经完成',
+    detail: '生成代码已通过 JavaScript 语法检查。',
   });
   progress({
     step: 'summary', order: 6, status: 'completed', title: '本次修改说明已经完成',
     detail: patchDraft.summary,
   });
   progress({
-    step: 'validation', order: 7, status: 'completed', title: '新旧功能保留检查已经通过',
-    detail: `非目标组件全部保留${preservation.authorizedRemovedIds.length ? `；按评论授权替换 ${preservation.authorizedRemovedIds.length} 个目标组件` : ''}；${audit.replace(/^PASS\s*:\s*/i, '')}`,
+    step: 'validation', order: 7, status: 'completed', title: '基础代码有效性检查已经通过',
+    detail: audit.replace(/^PASS\s*:\s*/i, ''),
   });
 
   addDebugLog({
@@ -1427,8 +1355,7 @@ Safety contract:
       candidateLength: candidateCode.length,
       operationCount: patchDraft.operations.length,
       aiRequestCount: attemptFailures.length + 1,
-      validationMode: 'local-deterministic',
-      preservation,
+      validationMode: 'syntax-and-exact-patch',
       audit,
       rejectedAttempts: attemptFailures,
     },
@@ -1442,8 +1369,7 @@ Safety contract:
     steps: [
       `增量修改计划：\n${plan}`,
       `已应用 ${patchDraft.operations.length} 个精确补丁。`,
-      `旧功能保留检查：非目标组件无缺失，授权替换 ${preservation.authorizedRemovedIds.length} 个目标组件，事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}。`,
-      `本地增量实现检查：${audit}`,
+      `基础代码有效性检查：${audit}`,
     ],
   };
 }

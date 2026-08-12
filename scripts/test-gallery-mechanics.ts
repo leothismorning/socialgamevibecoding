@@ -223,7 +223,7 @@ try {
   assert.equal(incrementalAgentReasoningEffort, 'high');
   assert.ok(incrementalAgentMaxTokens >= 16_384);
   assert.match(fastIncrementalResult.code, /id="fastIdea"/);
-  assert.match(fastIncrementalResult.steps.join('\n'), /本地增量实现检查/);
+  assert.match(fastIncrementalResult.steps.join('\n'), /基础代码有效性检查/);
 } finally {
   globalThis.fetch = originalAgentFetch;
 }
@@ -329,8 +329,49 @@ assert.deepEqual(targetedPreservation.authorizedRemovedIds, ['oldButton']);
 assert.deepEqual(targetedPreservation.unexpectedMissingIds, []);
 assert.deepEqual(targetedPreservation.addedIds, ['upgradedButton']);
 assert.match(targetedCandidate, /id="existingApp"/);
-assert.throws(
-  () => applyAgentPatch(incrementalBase, {
+const driftedAnchorDraft = parseAgentPatchDraft(JSON.stringify({
+  summary: '允许修复格式漂移但语义明确的代码锚点。',
+  scope: {
+    mode: 'targeted',
+    target_ids: [],
+    removable_ids: [],
+    target_functions: [],
+    target_anchors: ["<button id = 'oldButton' class = 'old-button'>旧功能</button>"],
+    rationale: '锚点来自目标按钮，但模型改变了空格和引号格式。',
+  },
+  operations: [{
+    type: 'replace',
+    search: '<button id="oldButton" class="old-button">旧功能</button>',
+    content: '<button id="oldButton" class="old-button">升级功能</button>',
+    reason: '只修改唯一命中的目标按钮',
+  }],
+}));
+const driftedAnchorCandidate = applyAgentPatch(incrementalBase, driftedAnchorDraft);
+assert.match(driftedAnchorCandidate, />升级功能<\/button>/);
+validateAgentPreservation(incrementalBase, driftedAnchorCandidate, driftedAnchorDraft);
+assert.match(
+  applyAgentPatch(incrementalBase, parseAgentPatchDraft(JSON.stringify({
+    summary: '锚点与实际修改区域无关。',
+    scope: {
+      mode: 'targeted',
+      target_ids: [],
+      removable_ids: [],
+      target_functions: [],
+      target_anchors: ["<section class = 'missing-area'>不存在的区域</section>"],
+      rationale: '无效目标',
+    },
+    operations: [{
+      type: 'replace',
+      search: '<main id="existingApp">',
+      content: '<main id="unrelatedReplacement">',
+      reason: '试图借失效锚点修改无关区域',
+    }],
+  }))),
+  /id="unrelatedReplacement"/,
+  'descriptive code anchors must not block an otherwise exact patch',
+);
+assert.match(
+  applyAgentPatch(incrementalBase, {
     ...targetedDraft,
     operations: [{
       type: 'replace',
@@ -339,8 +380,8 @@ assert.throws(
       reason: '试图修改没有授权的区域',
     }],
   }),
-  /不在已授权的目标区域/,
-  'targeted development may substantially change authorized components but must reject unrelated replacements',
+  /id="unrelatedReplacement"/,
+  'scope metadata must not be used to guess which exact code changes represent product functionality',
 );
 assert.match(
   applyAgentPatch(incrementalBase, {
