@@ -15,9 +15,48 @@ type SuiXiangOptions = {
   apiKey?: string;
 };
 
+export type SuiXiangReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+
+export class SuiXiangTransientUpstreamError extends Error {
+  readonly status: number | null;
+  readonly attempts: number;
+  readonly reasoningEfforts: SuiXiangReasoningEffort[];
+
+  constructor(
+    message: string,
+    options: {
+      status?: number | null;
+      attempts: number;
+      reasoningEfforts: SuiXiangReasoningEffort[];
+    },
+  ) {
+    super(message);
+    this.name = 'SuiXiangTransientUpstreamError';
+    this.status = options.status ?? null;
+    this.attempts = options.attempts;
+    this.reasoningEfforts = options.reasoningEfforts;
+  }
+}
+
+export function isSuiXiangTransientUpstreamError(
+  error: unknown,
+): error is SuiXiangTransientUpstreamError {
+  return error instanceof SuiXiangTransientUpstreamError;
+}
+
 export function suiXiangReasoningEffort(environment: NodeJS.ProcessEnv = process.env) {
   const configured = String(environment.SUIXIANG_REASONING_EFFORT || 'high').trim().toLowerCase();
-  return ['none', 'low', 'medium', 'high'].includes(configured) ? configured : 'high';
+  return (['none', 'low', 'medium', 'high'].includes(configured) ? configured : 'high') as SuiXiangReasoningEffort;
+}
+
+export function suiXiangReasoningRetrySequence(
+  initial: SuiXiangReasoningEffort = suiXiangReasoningEffort(),
+) {
+  const levels: SuiXiangReasoningEffort[] = ['none', 'low', 'medium', 'high'];
+  const initialIndex = levels.indexOf(initial);
+  return Array.from({ length: 3 }, (_, attempt) => (
+    levels[Math.max(0, initialIndex - attempt)]
+  ));
 }
 
 export const SUIXIANG_GPT_MODEL = 'gpt-5.5';
@@ -32,6 +71,8 @@ const RETRYABLE_NETWORK_CODES = new Set([
   'UND_ERR_SOCKET',
 ]);
 const NETWORK_RETRY_DELAYS_MS = [500, 1200];
+const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504, 524]);
+const REASONING_TIMEOUT_HTTP_STATUSES = new Set([408, 504, 524]);
 
 function isRetryableNetworkError(error: unknown) {
   const err = error as any;
@@ -52,7 +93,8 @@ export async function generateWithSuiXiangGPT(
   const apiKey = options.apiKey || process.env.SUIXIANG_API_KEY;
   const baseUrl = (process.env.SUIXIANG_BASE_URL || 'https://sui-xiang.com').replace(/\/+$/, '');
   const endpoint = `${baseUrl}/v1/chat/completions`;
-  const reasoningEffort = suiXiangReasoningEffort();
+  const initialReasoningEffort = suiXiangReasoningEffort();
+  const timeoutRetryEfforts = suiXiangReasoningRetrySequence(initialReasoningEffort);
 
   if (!apiKey) {
     throw new Error('SUIXIANG_API_KEY is not configured on the server.');
@@ -69,14 +111,17 @@ export async function generateWithSuiXiangGPT(
       endpoint,
       model,
       promptLength: prompt.length,
-      reasoningEffort,
+      reasoningEffort: initialReasoningEffort,
       hasApiKey: Boolean(apiKey),
     },
   });
 
   let upstream: Response | null = null;
   const totalAttempts = NETWORK_RETRY_DELAYS_MS.length + 1;
+  let reasoningEffort = initialReasoningEffort;
+  const attemptedReasoningEfforts: SuiXiangReasoningEffort[] = [];
   for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    attemptedReasoningEfforts.push(reasoningEffort);
     try {
       upstream = await fetch(endpoint, {
         method: 'POST',
@@ -101,8 +146,8 @@ export async function generateWithSuiXiangGPT(
           max_completion_tokens: options.maxTokens || 8192,
         }),
       });
-      break;
     } catch (error) {
+      if (options.signal?.aborted) throw error;
       const detail = errorDetail(error);
       const canRetry = isRetryableNetworkError(error) && attempt < totalAttempts;
       if (canRetry) {
@@ -112,7 +157,15 @@ export async function generateWithSuiXiangGPT(
           phase: 'info',
           title: 'Sui-Xiang GPT-5.5 connection interrupted; retrying',
           durationMs: Math.round(performance.now() - startedAt),
-          detail: { endpoint, model, attempt, totalAttempts, retryInMs, ...detail },
+          detail: {
+            endpoint,
+            model,
+            attempt,
+            totalAttempts,
+            retryInMs,
+            reasoningEffort,
+            ...detail,
+          },
         });
         await new Promise((resolve) => setTimeout(resolve, retryInMs));
         continue;
@@ -126,15 +179,48 @@ export async function generateWithSuiXiangGPT(
         detail: { endpoint, model, attempt, totalAttempts, ...detail },
       });
       const reason = [detail.causeCode, detail.causeMessage || detail.message].filter(Boolean).join(': ');
-      throw new Error(reason ? `Sui-Xiang GPT-5.5 network request failed after ${attempt} attempt(s): ${reason}` : 'Sui-Xiang GPT-5.5 network request failed.');
+      throw new SuiXiangTransientUpstreamError(
+        reason
+          ? `随想 GPT-5.5 网络连接在自动重试 ${attempt} 次后仍失败：${reason}`
+          : '随想 GPT-5.5 网络连接失败，请稍后重试。',
+        { attempts: attempt, reasoningEfforts: attemptedReasoningEfforts },
+      );
     }
-  }
 
-  if (!upstream) throw new Error('Sui-Xiang GPT-5.5 network request failed without a response.');
+    if (upstream.ok) break;
 
-  const data: any = await upstream.json().catch(() => null);
-  if (!upstream.ok) {
-    const message = data?.error?.message || `Sui-Xiang GPT-5.5 request failed with HTTP ${upstream.status}.`;
+    const errorData: any = await upstream.json().catch(() => null);
+    const status = upstream.status;
+    const canRetry = RETRYABLE_HTTP_STATUSES.has(status) && attempt < totalAttempts;
+    if (canRetry) {
+      const retryInMs = NETWORK_RETRY_DELAYS_MS[attempt - 1];
+      const nextReasoningEffort = REASONING_TIMEOUT_HTTP_STATUSES.has(status)
+        ? timeoutRetryEfforts[attempt]
+        : reasoningEffort;
+      addDebugLog({
+        kind: 'ai',
+        phase: 'info',
+        title: 'Sui-Xiang GPT-5.5 upstream response retrying',
+        durationMs: Math.round(performance.now() - startedAt),
+        detail: {
+          endpoint,
+          model,
+          status,
+          statusText: upstream.statusText,
+          attempt,
+          totalAttempts,
+          retryInMs,
+          reasoningEffort,
+          nextReasoningEffort,
+          upstreamError: errorData?.error || errorData,
+        },
+      });
+      reasoningEffort = nextReasoningEffort;
+      await new Promise((resolve) => setTimeout(resolve, retryInMs));
+      continue;
+    }
+
+    const upstreamMessage = errorData?.error?.message;
     addDebugLog({
       kind: 'ai',
       phase: 'error',
@@ -143,14 +229,33 @@ export async function generateWithSuiXiangGPT(
       detail: {
         endpoint,
         model,
-        status: upstream.status,
+        status,
         statusText: upstream.statusText,
-        upstreamError: data?.error || data,
+        attempt,
+        totalAttempts,
+        reasoningEfforts: attemptedReasoningEfforts,
+        upstreamError: errorData?.error || errorData,
       },
     });
-    throw new Error(message);
+    if (RETRYABLE_HTTP_STATUSES.has(status)) {
+      const effortLabel = attemptedReasoningEfforts.join(' → ');
+      throw new SuiXiangTransientUpstreamError(
+        REASONING_TIMEOUT_HTTP_STATUSES.has(status)
+          ? `随想 GPT-5.5 上游网关超时（HTTP ${status}）。系统已按 ${effortLabel} 推理强度自动重试 ${attempt} 次，但仍未及时返回；请点击“失败后重试”，上一版本不受影响。`
+          : `随想 GPT-5.5 上游服务暂时不可用（HTTP ${status}），系统已自动重试 ${attempt} 次；请稍后点击“失败后重试”。`,
+        {
+          status,
+          attempts: attempt,
+          reasoningEfforts: attemptedReasoningEfforts,
+        },
+      );
+    }
+    throw new Error(upstreamMessage || `Sui-Xiang GPT-5.5 request failed with HTTP ${status}.`);
   }
 
+  if (!upstream) throw new Error('Sui-Xiang GPT-5.5 network request failed without a response.');
+
+  const data: any = await upstream.json().catch(() => null);
   const content = data?.choices?.[0]?.message?.content;
   if (!content) {
     addDebugLog({
@@ -206,6 +311,8 @@ export async function generateWithSuiXiangGPT(
       model: result.model,
       codeLength: result.code.length,
       textLength: result.text.length,
+      attempts: attemptedReasoningEfforts.length,
+      reasoningEfforts: attemptedReasoningEfforts,
       usage: result.usage,
     },
   });

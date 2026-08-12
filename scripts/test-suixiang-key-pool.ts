@@ -3,11 +3,51 @@ import {
   configuredSuiXiangKeys,
   SuiXiangKeyPool,
 } from '../server/suixiangKeyPool.js';
-import { suiXiangReasoningEffort } from '../server/suixiang.js';
+import {
+  generateWithSuiXiangGPT,
+  suiXiangReasoningEffort,
+  suiXiangReasoningRetrySequence,
+} from '../server/suixiang.js';
 
 assert.equal(suiXiangReasoningEffort({}), 'high');
 assert.equal(suiXiangReasoningEffort({ SUIXIANG_REASONING_EFFORT: 'medium' }), 'medium');
 assert.equal(suiXiangReasoningEffort({ SUIXIANG_REASONING_EFFORT: 'invalid' }), 'high');
+assert.deepEqual(suiXiangReasoningRetrySequence('high'), ['high', 'medium', 'low']);
+assert.deepEqual(suiXiangReasoningRetrySequence('medium'), ['medium', 'low', 'none']);
+assert.deepEqual(suiXiangReasoningRetrySequence('low'), ['low', 'none', 'none']);
+
+const originalFetch = globalThis.fetch;
+const originalReasoningEffort = process.env.SUIXIANG_REASONING_EFFORT;
+const requestedEfforts: string[] = [];
+try {
+  process.env.SUIXIANG_REASONING_EFFORT = 'high';
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body || '{}'));
+    requestedEfforts.push(request.reasoning_effort);
+    if (requestedEfforts.length === 1) {
+      return new Response(JSON.stringify({ error: { message: 'gateway timeout' } }), {
+        status: 504,
+        statusText: 'Gateway Timeout',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({
+      model: 'gpt-5.5',
+      choices: [{ message: { content: JSON.stringify({ text: 'recovered', code: '' }) } }],
+      usage: null,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const recovered = await generateWithSuiXiangGPT('test retry', undefined, { apiKey: 'test-key' });
+  assert.equal(recovered.text, 'recovered');
+  assert.deepEqual(requestedEfforts, ['high', 'medium']);
+} finally {
+  globalThis.fetch = originalFetch;
+  if (originalReasoningEffort === undefined) delete process.env.SUIXIANG_REASONING_EFFORT;
+  else process.env.SUIXIANG_REASONING_EFFORT = originalReasoningEffort;
+}
 
 assert.deepEqual(configuredSuiXiangKeys({
   SUIXIANG_API_KEY: 'primary',

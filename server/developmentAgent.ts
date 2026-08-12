@@ -1,4 +1,5 @@
 import { type AIProvider, type AIResult, generateWithAI } from './ai.js';
+import { isSuiXiangTransientUpstreamError } from './suixiang.js';
 import { addDebugLog } from './debugLog.js';
 import { ensureStandalonePerformanceGuard } from './previewPerformance.js';
 import { lookup } from 'node:dns/promises';
@@ -1485,6 +1486,9 @@ Safety contract:
       }
       break;
     } catch (error) {
+      // Provider/network failures are not unsafe patches. Let the job surface the
+      // retryable infrastructure error instead of mislabelling it as a rejected edit.
+      if (isSuiXiangTransientUpstreamError(error)) throw error;
       const failure = error instanceof Error ? error.message : String(error);
       attemptFailures.push(failure);
       previousRejectedArtifact = fallbackResponse || (patchDraft
