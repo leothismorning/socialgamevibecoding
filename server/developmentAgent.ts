@@ -3,6 +3,7 @@ import { addDebugLog } from './debugLog.js';
 import { ensureStandalonePerformanceGuard } from './previewPerformance.js';
 import { lookup } from 'node:dns/promises';
 import net from 'node:net';
+import { Script } from 'node:vm';
 
 type AgentIdea = {
   selection_rank?: number;
@@ -758,11 +759,15 @@ function validateAssembledHtml(
     throw new Error(`The development agent generated duplicate HTML ids: ${duplicateIds.slice(0, 12).join(', ')}.`);
   }
   const scripts = [...code.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1]);
-  try {
-    for (const script of scripts) new Function(script);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`The development agent generated invalid JavaScript: ${message}`);
+  for (const [index, script] of scripts.entries()) {
+    try {
+      new Script(script, { filename: `generated-script-${index + 1}.js` });
+    } catch (error) {
+      const detail = error instanceof Error ? error.stack || error.message : String(error);
+      throw new Error(
+        `The development agent generated invalid JavaScript in script ${index + 1}: ${detail.slice(0, 1600)}`,
+      );
+    }
   }
   if (/cdn\.tailwindcss\.com|tailwind\.min\.css/i.test(code)) {
     throw new Error('The development agent output still depends on Tailwind instead of self-contained CSS.');
@@ -792,6 +797,12 @@ function inspectCompleteHtml(code: string) {
   const artifactInspection = inspectAgentArtifacts(bodyWithoutCode, css);
   const interactionInspection = inspectAgentInteractionStyles(js, css);
   return { body: bodyWithoutCode, css, js, artifactInspection, interactionInspection };
+}
+
+export function validateCompleteAgentHtml(code: string) {
+  const inspection = inspectCompleteHtml(code);
+  validateAssembledHtml(code, inspection.artifactInspection, inspection.interactionInspection);
+  return inspection;
 }
 
 async function runAgentTextStep(
@@ -1034,6 +1045,7 @@ The existing document is immutable except for the smallest exact edits required 
 
   const maxRepairAttempts = repairAttemptsFromEnv();
   const attemptFailures: string[] = [];
+  let previousRejectedArtifact = '';
   let candidateCode = '';
   let patchDraft: AgentPatchDraft | null = null;
   let preservation: AgentPreservationInspection | null = null;
@@ -1041,6 +1053,11 @@ The existing document is immutable except for the smallest exact edits required 
 
   for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
     const attemptNumber = attempt + 1;
+    let patchResponse = '';
+    patchDraft = null;
+    candidateCode = '';
+    preservation = null;
+    audit = '';
     progress({
       step: 'structure',
       order: 2,
@@ -1050,7 +1067,7 @@ The existing document is immutable except for the smallest exact edits required 
     });
 
     try {
-      const patchResponse = await runAgentTextStep(
+      patchResponse = await runAgentTextStep(
         input.provider,
         `incremental patch attempt ${attemptNumber}`,
         `Produce exact, minimal patch operations for the canonical HTML below.
@@ -1067,7 +1084,14 @@ ${input.fusionPlan || 'No fusion plan supplied.'}
 Implementation plan:
 ${plan}
 
-${attemptFailures.length ? `The previous patch was rejected. Correct this exact problem while starting again from the untouched canonical HTML:\n${attemptFailures.at(-1)}\n` : ''}
+${attemptFailures.length ? `The previous patch was rejected. Correct this exact problem while starting again from the untouched canonical HTML:
+${attemptFailures.at(-1)}
+
+Complete previous rejected patch artifact:
+${previousRejectedArtifact || 'The previous response could not be recovered.'}
+
+Return a corrected patch. Do not repeat the invalid JavaScript or any other rejected operation.
+` : ''}
 Complete canonical HTML (nothing is omitted):
 ${baseCode}
 
@@ -1100,12 +1124,7 @@ Safety contract:
       );
       patchDraft = parseAgentPatchDraft(patchResponse);
       candidateCode = applyAgentPatch(baseCode, patchDraft);
-      const completeInspection = inspectCompleteHtml(candidateCode);
-      validateAssembledHtml(
-        candidateCode,
-        completeInspection.artifactInspection,
-        completeInspection.interactionInspection,
-      );
+      validateCompleteAgentHtml(candidateCode);
       preservation = validateAgentPreservation(baseCode, candidateCode);
       audit = await runAgentPatchAudit(input, plan, patchDraft, preservation);
       if (!/^PASS\s*:/i.test(audit.trim())) {
@@ -1115,6 +1134,9 @@ Safety contract:
     } catch (error) {
       const failure = error instanceof Error ? error.message : String(error);
       attemptFailures.push(failure);
+      previousRejectedArtifact = patchDraft
+        ? JSON.stringify(patchDraft, null, 2)
+        : patchResponse;
       addDebugLog({
         kind: 'ai',
         phase: 'info',

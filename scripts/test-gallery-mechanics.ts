@@ -55,6 +55,7 @@ const {
   applyAgentPatch,
   inspectAgentPreservation,
   validateAgentPreservation,
+  validateCompleteAgentHtml,
 } = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
 const { normalizeAITextArtifact } = await import('../server/aiResponse.js');
@@ -225,6 +226,15 @@ assert.throws(
   () => validateAgentPreservation(incrementalBase, destructiveCandidate),
   /oldButton/,
   'a candidate that removes an existing component must be rejected before it can become a draft',
+);
+assert.throws(
+  () => validateCompleteAgentHtml(`<!doctype html><html><head><style>
+    .test-button { color: blue; }
+  </style></head><body><button class="test-button">测试</button><script>
+    document.querySelector('.test-button').addEventListener('click', () => console.log('ok')));
+  </script></body></html>`),
+  /generated-script-1\.js:[\s\S]*Unexpected token '\)'/,
+  'invalid generated JavaScript must report the exact script and source location for the next AI repair attempt',
 );
 
 const migratedSessionsSchema = db.prepare(`
