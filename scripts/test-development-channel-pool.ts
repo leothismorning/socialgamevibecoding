@@ -100,17 +100,17 @@ fallbackLease.release();
 
 const evolutionPool = new DevelopmentChannelPool(
   ['gpt-evolution-one', 'gpt-evolution-two'],
-  ['deepseek-spare'],
+  ['deepseek-evolution-one', 'deepseek-evolution-two'],
 );
-const firstEvolution = await evolutionPool.acquire(undefined, ['gpt5']);
-const secondEvolution = await evolutionPool.acquire(undefined, ['gpt5']);
-assert.equal(firstEvolution.provider, 'gpt5');
-assert.equal(secondEvolution.provider, 'gpt5');
-const queuedEvolution = evolutionPool.acquire(undefined, ['gpt5']);
+const firstEvolution = await evolutionPool.acquire(undefined, ['deepseek']);
+const secondEvolution = await evolutionPool.acquire(undefined, ['deepseek']);
+assert.equal(firstEvolution.provider, 'deepseek');
+assert.equal(secondEvolution.provider, 'deepseek');
+const queuedEvolution = evolutionPool.acquire(undefined, ['deepseek']);
 firstEvolution.release();
 const thirdEvolution = await queuedEvolution;
-assert.equal(thirdEvolution.provider, 'gpt5');
+assert.equal(thirdEvolution.provider, 'deepseek');
 secondEvolution.release();
 thirdEvolution.release();
 
-console.log('DeepSeek-first initial creation, GPT-only evolution, and FIFO development channel tests passed');
+console.log('DeepSeek-only creation and evolution, isolated provider selection, and FIFO development channel tests passed');

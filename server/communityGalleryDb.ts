@@ -4682,7 +4682,7 @@ export function getCommunityGalleryState(clientId = '') {
     notifications,
     developmentMessages,
     participants: participantRows,
-    aiProvider: 'gpt5',
+    aiProvider: 'deepseek-pro',
     counts: {
       creators: CREATOR_COUNT,
       regularApps: Number(publishedCounts.find((row) => Number(row.is_test) === 0)?.count || 0),

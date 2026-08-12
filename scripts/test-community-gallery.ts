@@ -129,7 +129,7 @@ assert.equal(Number((db.prepare(`SELECT COUNT(*) AS count FROM vg_async_drafts W
 
 db.prepare(`INSERT OR REPLACE INTO app_meta (key, value) VALUES ('ai_provider', 'deepseek')`).run();
 const hostState = gallery.getCommunityGalleryState(hostClient);
-assert.equal(hostState.aiProvider, 'gpt5');
+assert.equal(hostState.aiProvider, 'deepseek-pro');
 const testApp = hostState.apps.find((app: any) => app.creator_code === 'C01');
 const secondTestApp = hostState.apps.find((app: any) => app.creator_code === 'C02');
 const regularApp = hostState.apps.find((app: any) => app.creator_code === 'C03');

@@ -40,7 +40,8 @@ try {
   });
   assert.equal(calls, 3);
   assert.equal(recovered.text, 'recovered');
-  assert.ok(requestBodies.every((body) => body.thinking?.type === 'disabled'));
+  assert.ok(requestBodies.every((body) => body.thinking?.type === 'enabled'));
+  assert.ok(requestBodies.every((body) => body.reasoning_effort === 'high'));
   assert.ok(requestBodies.every((body) => body.max_tokens >= 16_384));
   assert.ok(requestBodies.every((body) => body.response_format?.type === 'json_object'));
 
@@ -61,4 +62,4 @@ try {
   globalThis.fetch = originalFetch;
 }
 
-console.log('DeepSeek non-thinking, retry, diagnostics, and fallback signal tests passed');
+console.log('DeepSeek thinking mode, retry, diagnostics, and fallback signal tests passed');

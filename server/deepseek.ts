@@ -55,7 +55,8 @@ export async function generateWithDeepSeek(
       model: selectedModel,
       promptLength: prompt.length,
       maxTokens,
-      thinking: 'disabled',
+      thinking: 'enabled',
+      reasoningEffort: 'high',
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -83,7 +84,8 @@ export async function generateWithDeepSeek(
             { role: 'user', content: prompt },
           ],
           response_format: { type: 'json_object' },
-          thinking: { type: 'disabled' },
+          thinking: { type: 'enabled' },
+          reasoning_effort: 'high',
           max_tokens: maxTokens,
         }),
       });

@@ -68,7 +68,6 @@ import {
   type DevelopmentChannelStats,
   type DevelopmentChannelProvider,
 } from './developmentChannelPool.js';
-import { isDeepSeekRecoverableResponseError } from './deepseek.js';
 
 function sendError(res: Response, error: unknown) {
   const status = Number((error as any)?.status || 400);
@@ -102,24 +101,19 @@ function queuedKeyProgress(snapshot: DevelopmentChannelQueueSnapshot): Developme
     order: 0,
     status: 'pending',
     title: `正在排队等待可用 AI 通道 · 第 ${snapshot.position} 位`,
-    detail: `DeepSeek ${snapshot.deepSeekActive}/${snapshot.deepSeekCapacity}、随想 GPT ${snapshot.gptActive}/${snapshot.gptCapacity} 个通道正在使用。轮到你后会自动开始，无需重复点击。`,
+    detail: `DeepSeek ${snapshot.deepSeekActive}/${snapshot.deepSeekCapacity} 个思考通道正在使用。轮到你后会自动开始，无需重复点击。`,
   };
 }
 
 function acquiredKeyProgress(
   snapshot: DevelopmentChannelStats & { provider: DevelopmentChannelProvider },
 ): DevelopmentAgentProgress {
-  const usingDeepSeek = snapshot.provider === 'deepseek';
   return {
     step: 'queue',
     order: 0,
     status: 'completed',
-    title: usingDeepSeek
-      ? '已获得 DeepSeek 通道，正在开始开发'
-      : '已获得随想 GPT 深度开发通道',
-    detail: usingDeepSeek
-      ? '本轮将由 DeepSeek V4 Flash 完成，并保留在开发进度记录中。'
-      : '本轮将由随想 GPT-5.5 高推理模式完成。',
+    title: '已获得 DeepSeek 思考通道，正在开始开发',
+    detail: '本轮将由 DeepSeek V4 Pro 高思考模式完成，并保留在开发进度记录中。',
   };
 }
 
@@ -127,63 +121,24 @@ async function runQueuedDevelopmentAgent(
   input: DevelopmentAgentInput,
   recordQueueProgress: (progress: DevelopmentAgentProgress) => void,
 ) {
-  if (input.provider !== 'gpt5') return runDevelopmentAgent(input);
-  const providerOrder: DevelopmentChannelProvider[] = input.mode === 'round-candidate'
-    ? ['gpt5']
-    : ['deepseek', 'gpt5'];
-  try {
-    return await withDevelopmentChannel(
-      (lease) => runDevelopmentAgent({
-        ...input,
-        provider: lease.provider,
-        apiKey: lease.apiKey,
-      }),
-      {
-        providerOrder,
-        onQueued: (snapshot) => recordQueueProgress(queuedKeyProgress(snapshot)),
-        onAcquired: (snapshot) => recordQueueProgress(acquiredKeyProgress(snapshot)),
-      },
-    );
-  } catch (error) {
-    if (!isDeepSeekRecoverableResponseError(error)) throw error;
-    recordQueueProgress({
-      step: 'queue',
-      order: 0,
-      status: 'warning',
-      title: 'DeepSeek 连续返回异常，正在自动切换随想 GPT',
-      detail: '系统将自动重新开始本轮开发，无需再次点击重试。',
-    });
-    return withDevelopmentChannel(
-      (lease) => runDevelopmentAgent({
-        ...input,
-        provider: 'gpt5',
-        apiKey: lease.apiKey,
-      }),
-      {
-        providerOrder: ['gpt5'],
-        onQueued: (snapshot) => recordQueueProgress({
-          step: 'queue',
-          order: 0,
-          status: 'pending',
-          title: `正在等待随想 GPT 备用通道 · 第 ${snapshot.position} 位`,
-          detail: 'DeepSeek 已自动重试三次；轮到你后系统会继续开发，无需重复点击。',
-        }),
-        onAcquired: () => recordQueueProgress({
-          step: 'queue',
-          order: 0,
-          status: 'completed',
-          title: '已切换随想 GPT，正在重新开发',
-          detail: 'DeepSeek 的异常已被自动处理，本轮开发正在继续。',
-        }),
-      },
-    );
-  }
+  return withDevelopmentChannel(
+    (lease) => runDevelopmentAgent({
+      ...input,
+      provider: 'deepseek-pro',
+      apiKey: lease.apiKey,
+    }),
+    {
+      providerOrder: ['deepseek'],
+      onQueued: (snapshot) => recordQueueProgress(queuedKeyProgress(snapshot)),
+      onAcquired: (snapshot) => recordQueueProgress(acquiredKeyProgress(snapshot)),
+    },
+  );
 }
 
 async function runCommunityGenerationJob(jobId: number) {
   const input = getCommunityGenerationInput(jobId);
   const result = await runQueuedDevelopmentAgent({
-    provider: 'gpt5',
+    provider: 'deepseek-pro',
     experimentTitle: input.job.app_title,
     roundNumber: Number(input.job.iteration_number || 1),
     brief: input.job.app_brief,
@@ -300,7 +255,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
       startCreatorDevelopmentOperation(clientId, operationId, 'generate');
       operationStarted = true;
       const result = await runQueuedDevelopmentAgent({
-        provider: 'gpt5',
+        provider: 'deepseek-pro',
         experimentTitle: title,
         brief,
         creatorPrompt: prompt,
@@ -370,7 +325,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
       startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
       operationStarted = true;
       const result = await runQueuedDevelopmentAgent({
-        provider: 'gpt5',
+        provider: 'deepseek-pro',
         experimentTitle: context.app.title,
         brief: context.app.brief,
         creatorPrompt: context.app.creator_prompt,
