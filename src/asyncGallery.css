@@ -1321,6 +1321,16 @@
 .async-generation-progress li.is-completed { color: #17754e; }
 .async-generation-progress li.is-running { color: #4e42c6; font-weight: 850; }
 .async-generation-progress li svg { width: 11px; }
+.async-community-v1-upload { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px; border: 1px solid #cfdaf0; border-radius: 14px; background: #f8fbff; }
+.async-community-v1-upload > div { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.async-community-v1-upload > div > svg { width: 25px; flex: 0 0 auto; color: #376bd7; }
+.async-community-v1-upload span { display: grid; gap: 4px; }
+.async-community-v1-upload strong { color: #263d68; font-size: 14px; }
+.async-community-v1-upload small { color: #6f7f98; font-size: 14px; line-height: 1.5; }
+.async-upload-community-v1 { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: 0 0 auto; padding: 0 15px; color: #fff; border: 0; border-radius: 11px; background: linear-gradient(135deg, #2f6df5, #7450e8); font-size: 14px; font-weight: 900; cursor: pointer; box-shadow: 0 8px 20px rgba(62, 91, 204, .2); }
+.async-upload-community-v1:hover { filter: brightness(.96); }
+.async-upload-community-v1:disabled { cursor: not-allowed; opacity: .55; }
+.async-upload-community-v1 svg { width: 16px; }
 .async-community-draft-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(270px, .65fr); gap: 17px; }
 .async-community-draft-preview { height: 570px; overflow: hidden; border: 1px solid #d9e1ec; border-radius: 14px; background: #edf2f7; }
 .async-community-draft-layout > div:last-child { display: grid; align-content: start; gap: 10px; }
@@ -1571,6 +1581,8 @@
 }
 
 @media (max-width: 720px) {
+  .async-community-v1-upload { align-items: stretch; flex-direction: column; }
+  .async-upload-community-v1 { width: 100%; }
   .async-draft-reset-row { align-items: stretch; flex-direction: column; }
   .async-draft-reset-row .async-delete-initial-app { width: 100%; }
   .async-global-header { height: 66px; padding: 0 12px; }

@@ -3415,6 +3415,7 @@ export function recordCommunityGenerationProgress(jobId: number, progress: Devel
 
 export function completeCommunityGeneration(jobId: number, code: string, summary: string) {
   const input = getCommunityGenerationInput(jobId);
+  if (input.job.status !== 'running') return;
   const timestamp = now();
   const transaction = db.transaction(() => {
     db.prepare(`
@@ -3488,6 +3489,7 @@ export function completeCommunityGeneration(jobId: number, code: string, summary
 
 export function failCommunityGeneration(jobId: number, error: unknown) {
   const input = getCommunityGenerationInput(jobId);
+  if (input.job.status !== 'running') return;
   const rawMessage = error instanceof Error ? error.message : String(error);
   const message = rawMessage.includes('请重试')
     ? rawMessage
@@ -3632,6 +3634,106 @@ function publishCommunityVersionForApp(actorCode: string, app: any, automated = 
 
 export function publishCommunityVersion(clientId: string, appId: string) {
   const { viewer, app } = ownedApp(clientId, appId);
+  publishCommunityVersionForApp(viewer.code, app);
+  return getCommunityGalleryState(clientId);
+}
+
+export function uploadAndPublishFirstCommunityVersion(
+  clientId: string,
+  appId: string,
+  code: string,
+  filename = '',
+) {
+  const { viewer, app } = ownedApp(clientId, appId);
+  const currentStudy = requireOpenStudy(Number(app.is_test));
+  if (appFlowStage(app) !== 'development_1' || communityIterationCount(app.id) !== 0) {
+    throw new Error('只有主持人完成第一轮抽取、且社区版本 1 尚未发布时才能上传 HTML。');
+  }
+  if (!app.initial_version_id) throw new Error('初始版本不存在，无法发布社区版本 1。');
+  if (!code.trim() || Buffer.byteLength(code, 'utf8') > 8 * 1024 * 1024) {
+    throw new Error('HTML 文件不能为空且不能超过 8MB。');
+  }
+  if (!/(?:<!doctype\s+html|<html\b)/i.test(code) || !/<\/html\s*>/i.test(code)) {
+    throw new Error('请选择包含完整 html 结构的 HTML 文件。');
+  }
+  const selection = db.prepare(`
+    SELECT * FROM vg_async_stage_selections
+    WHERE study_id = ? AND app_id = ? AND iteration_number = 1
+  `).get(currentStudy.id, app.id) as any;
+  if (!selection?.source_type || !Number(selection.source_id)) {
+    throw new Error('第一轮抽取结果不存在，暂时不能上传本轮版本。');
+  }
+  const latestJob = db.prepare(`
+    SELECT * FROM vg_async_generation_jobs
+    WHERE study_id = ? AND app_id = ? AND iteration_number = 1
+    ORDER BY id DESC LIMIT 1
+  `).get(currentStudy.id, app.id) as any;
+  const sourceType = String(
+    latestJob?.selected_source_type || selection.source_type,
+  ) as CommunitySourceType;
+  const sourceId = Number(latestJob?.selected_source_id || selection.source_id);
+  const selectedSource = sourceRecord(sourceType, sourceId, {
+    includeDeleted: true,
+    revealDeletedContent: true,
+  });
+  if (!selectedSource || selectedSource.app_id !== app.id) {
+    throw new Error('第一轮抽中的开发来源不存在。');
+  }
+  const timestamp = now();
+  const normalizedFilename = filename.trim().slice(0, 180);
+  const summary = normalizedFilename
+    ? `创作者上传 ${normalizedFilename} 完成第一轮开发。`
+    : '创作者上传 HTML 完成第一轮开发。';
+  const prompt = String(latestJob?.creator_instruction || selection.source_content || selectedSource.content || '').trim();
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE vg_async_generation_jobs
+      SET status = 'cancelled', error = '创作者上传 HTML 后直接发布，AI 生成结果已停用。', completed_at = ?
+      WHERE study_id = ? AND app_id = ? AND iteration_number = 1 AND status = 'running'
+    `).run(timestamp, currentStudy.id, app.id);
+    db.prepare(`
+      UPDATE vg_async_generation_events
+      SET status = 'cancelled', title = '作者已上传 HTML，本次 AI 开发停止',
+        detail = '作者上传的 HTML 已作为社区版本 1 发布。', updated_at = ?
+      WHERE study_id = ? AND app_id = ? AND status IN ('pending', 'running', 'warning')
+        AND job_id IN (
+          SELECT id FROM vg_async_generation_jobs
+          WHERE study_id = ? AND app_id = ? AND iteration_number = 1
+        )
+    `).run(timestamp, currentStudy.id, app.id, currentStudy.id, app.id);
+    db.prepare(`
+      INSERT INTO vg_async_drafts
+        (study_id, app_id, kind, code, summary, prompt, synthesis_id,
+         selected_source_type, selected_source_id, iteration_number,
+         base_version_id, selection_reason, updated_at)
+      VALUES (?, ?, 'community', ?, ?, ?, ?, ?, ?, 1, ?, 'creator_html_upload', ?)
+      ON CONFLICT(study_id, app_id) DO UPDATE SET
+        kind = 'community', code = excluded.code, summary = excluded.summary,
+        prompt = excluded.prompt, synthesis_id = excluded.synthesis_id,
+        selected_source_type = excluded.selected_source_type,
+        selected_source_id = excluded.selected_source_id,
+        iteration_number = 1, base_version_id = excluded.base_version_id,
+        selection_reason = excluded.selection_reason, updated_at = excluded.updated_at
+    `).run(
+      currentStudy.id,
+      app.id,
+      code,
+      summary,
+      prompt,
+      sourceType === 'synthesis' ? sourceId : null,
+      sourceType,
+      sourceId,
+      Number(app.initial_version_id),
+      timestamp,
+    );
+  });
+  transaction();
+  recordEvent(viewer.code, 'upload_first_community_version_html', 'app', app.id, {
+    filename: normalizedFilename || null,
+    sourceType,
+    sourceId,
+    replacedGenerationJobId: latestJob?.id ? Number(latestJob.id) : null,
+  });
   publishCommunityVersionForApp(viewer.code, app);
   return getCommunityGalleryState(clientId);
 }

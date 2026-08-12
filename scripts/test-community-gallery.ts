@@ -243,6 +243,69 @@ assert.throws(
   /开始前/,
 );
 
+// After the Host locks the first-round draw, the App owner may replace the AI
+// task with a complete local HTML file. Uploading is also the V1 publish action.
+state = gallery.saveCommunityComment({
+  clientId: client(1),
+  appId: secondTestApp.id,
+  content: 'Use this idea for the uploaded first community version.',
+});
+const uploadSourceComment = state.comments.find(
+  (comment: any) => comment.content === 'Use this idea for the uploaded first community version.',
+);
+assert.ok(uploadSourceComment);
+const uploadDevelopment = gallery.enterCommunityDevelopmentStage(
+  hostClient,
+  1,
+  true,
+  [secondTestApp.id],
+);
+assert.equal(uploadDevelopment.jobIds.length, 1);
+assert.throws(
+  () => gallery.uploadAndPublishFirstCommunityVersion(
+    client(1),
+    secondTestApp.id,
+    html('Unauthorized Uploaded V1'),
+    'unauthorized.html',
+  ),
+  /只有该应用的创作者/,
+);
+const uploadedV1Code = html('Test App Two Uploaded V1');
+state = gallery.uploadAndPublishFirstCommunityVersion(
+  client(2),
+  secondTestApp.id,
+  uploadedV1Code,
+  'test-app-two-v1.html',
+);
+const uploadedV1App = state.apps.find((app: any) => app.id === secondTestApp.id);
+const uploadedV1 = state.versions.find((version: any) => (
+  version.app_id === secondTestApp.id
+  && version.kind === 'community'
+  && Number(version.version_number) === 2
+));
+assert.ok(uploadedV1);
+assert.equal(uploadedV1App.flow_stage, 'round_2');
+assert.equal(Number(uploadedV1App.community_version_count), 1);
+assert.equal(uploadedV1.selection_reason, 'creator_html_upload');
+assert.equal(gallery.getCommunityPreview(client(2), secondTestApp.id, 'community'), uploadedV1Code);
+assert.equal(state.generationJobs.find(
+  (job: any) => Number(job.id) === Number(uploadDevelopment.jobIds[0]),
+)?.status, 'cancelled');
+assert.equal(Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_drafts WHERE app_id = ?
+`).get(secondTestApp.id) as { count: number }).count), 0);
+gallery.completeCommunityGeneration(
+  uploadDevelopment.jobIds[0],
+  html('Late AI result must be ignored'),
+  'Late AI result',
+);
+gallery.failCommunityGeneration(uploadDevelopment.jobIds[0], new Error('late AI failure'));
+assert.equal(
+  gallery.getCommunityPreview(client(2), secondTestApp.id, 'community'),
+  uploadedV1Code,
+  'a late AI result must never overwrite an uploaded and published V1',
+);
+
 state = gallery.saveCommunityComment({
   clientId: client(2),
   appId: testApp.id,
@@ -519,7 +582,7 @@ state = gallery.getCommunityGalleryState(hostClient);
 assert.equal(state.testData.testCreatorCount, 2);
 assert.equal(state.testData.testAppCount, 2);
 assert.ok(state.testData.versionCount >= 2);
-assert.equal(state.testData.commentCount, 2);
+assert.equal(state.testData.commentCount, 3);
 assert.equal(state.testData.hasTestData, true);
 
 state = gallery.closeAsyncCommunityStudy(hostClient, true);

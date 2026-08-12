@@ -181,7 +181,7 @@ export type CommunityGenerationJob = {
   base_version_id: number;
   selection_reason?: string;
   creator_instruction: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   error?: string;
   created_at: string;
   completed_at?: string;

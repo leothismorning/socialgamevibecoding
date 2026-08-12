@@ -51,6 +51,7 @@ import {
   toggleCommunityCommentLike,
   toggleCreativeBasket,
   trackCommunityEvent,
+  uploadAndPublishFirstCommunityVersion,
   updateCommunityComment,
   updateCommunitySynthesis,
   useCommunityWildcard,
@@ -598,6 +599,19 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/apps/:appId/publish-community', (req, res) => {
     try {
       res.json(publishCommunityVersion(clientIdFrom(req), String(req.params.appId)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/apps/:appId/upload-community-v1', (req, res) => {
+    try {
+      res.json(uploadAndPublishFirstCommunityVersion(
+        clientIdFrom(req),
+        String(req.params.appId),
+        String(req.body?.code || ''),
+        String(req.body?.filename || ''),
+      ));
     } catch (error) {
       sendError(res, error);
     }
