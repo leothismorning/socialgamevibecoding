@@ -55,6 +55,20 @@ export type AgentPatchDraft = {
   operations: AgentPatchOperation[];
 };
 
+export type AgentAdditiveModuleDraft = {
+  summary: string;
+  html: string;
+  css: string;
+  javascript: string;
+};
+
+export class EmptyAgentPatchError extends Error {
+  constructor() {
+    super('增量开发没有生成任何修改。');
+    this.name = 'EmptyAgentPatchError';
+  }
+}
+
 export type AgentPreservationInspection = {
   baselineIds: string[];
   candidateIds: string[];
@@ -334,7 +348,7 @@ export function parseAgentPatchDraft(value: string): AgentPatchDraft {
     throw new Error('增量开发补丁缺少 operations 数组。');
   }
   if (parsed.operations.length === 0) {
-    throw new Error('增量开发没有生成任何修改。');
+    throw new EmptyAgentPatchError();
   }
   if (parsed.operations.length > 24) {
     throw new Error('增量开发一次返回了过多修改，已停止以避免整页重写。');
@@ -356,6 +370,94 @@ export function parseAgentPatchDraft(value: string): AgentPatchDraft {
   return {
     summary: String(parsed.summary || '').trim() || '已按照入选评论增量更新应用。',
     operations,
+  };
+}
+
+export function parseAgentAdditiveModule(value: string): AgentAdditiveModuleDraft {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(extractJsonObject(value));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`安全增量模块无法解析：${message}`);
+  }
+  const html = removePlatformOwnedAgentToast(cleanBodyFragment(String(parsed?.html || '')));
+  const css = cleanCss(String(parsed?.css || ''));
+  const javascript = cleanJs(String(parsed?.javascript || parsed?.js || ''));
+  if (!html) throw new Error('安全增量模块没有生成可见界面。');
+  if (!css) throw new Error('安全增量模块没有生成界面样式。');
+  const firstTag = html.match(/^\s*(?:<!--[\s\S]*?-->\s*)*<([a-z][\w:-]*)\b[^>]*>/i)?.[0] || '';
+  const rootId = getTagAttribute(firstTag, 'id');
+  if (!rootId.startsWith('community-evolution-')) {
+    throw new Error('安全增量模块缺少 community-evolution- 前缀的根节点 id。');
+  }
+  const moduleIds = [...html.matchAll(/\bid=["']([^"']+)["']/gi)].map((match) => match[1]);
+  const moduleClasses = extractHtmlClasses(html);
+  const unsafeNames = [...moduleIds, ...moduleClasses]
+    .filter((value) => !value.startsWith('community-evolution-'));
+  if (unsafeNames.length > 0) {
+    throw new Error(`安全增量模块包含未隔离的 id 或 class：${unique(unsafeNames).slice(0, 12).join(', ')}。`);
+  }
+  if (/<\/?(?:html|head|body)\b/i.test(html)) {
+    throw new Error('安全增量模块包含完整页面标签，已拒绝以避免重写原作品。');
+  }
+  if (/@import\b|cdn\.tailwindcss\.com|tailwind\.min\.css/i.test(css)) {
+    throw new Error('安全增量模块使用了不受支持的外部样式。');
+  }
+  if (/<\/?(?:style|script)\b/i.test(html) || /<\/?script\b/i.test(javascript)) {
+    throw new Error('安全增量模块的 HTML、CSS、JavaScript 没有正确分离。');
+  }
+  if (/\son[a-z]+\s*=/i.test(html)) {
+    throw new Error('安全增量模块使用了内联事件，已拒绝以避免不可控交互。');
+  }
+  if (/(?:^|})\s*(?:html|body|:root|\*)\s*(?:,|\{)/im.test(css)) {
+    throw new Error('安全增量模块试图修改全局页面样式。');
+  }
+  return {
+    summary: String(parsed?.summary || '').trim() || '已通过安全增量模块实现入选创意。',
+    html,
+    css,
+    javascript,
+  };
+}
+
+export function applyAgentAdditiveModule(baseCode: string, module: AgentAdditiveModuleDraft) {
+  if (!baseCode.trim()) throw new Error('安全增量模块缺少上一已发布版本。');
+  const closingBodies = [...baseCode.matchAll(/<\/body\s*>/gi)];
+  const closingBody = closingBodies.at(-1);
+  if (!closingBody || closingBody.index == null) {
+    throw new Error('上一已发布版本缺少 </body>，无法安全插入增量模块。');
+  }
+  const moduleMarkup = `
+<!-- VIBECODING_INCREMENTAL_MODULE_START -->
+${module.html}
+<style data-vibecoding-incremental-module>
+${module.css}
+</style>
+${module.javascript ? `<script data-vibecoding-incremental-module>
+${module.javascript}
+</script>` : ''}
+<!-- VIBECODING_INCREMENTAL_MODULE_END -->
+`;
+  const code = `${baseCode.slice(0, closingBody.index)}${moduleMarkup}${baseCode.slice(closingBody.index)}`;
+  return ensureStandalonePerformanceGuard(code);
+}
+
+function additiveModuleAsPatch(module: AgentAdditiveModuleDraft): AgentPatchDraft {
+  return {
+    summary: module.summary,
+    operations: [{
+      type: 'insert_before',
+      search: '</body>',
+      content: [
+        module.html,
+        `<style data-vibecoding-incremental-module>\n${module.css}\n</style>`,
+        module.javascript
+          ? `<script data-vibecoding-incremental-module>\n${module.javascript}\n</script>`
+          : '',
+      ].filter(Boolean).join('\n'),
+      reason: '精确补丁为空后，将入选创意作为独立增量模块安全加入上一版本。',
+    }],
   };
 }
 
@@ -992,6 +1094,63 @@ Reply exactly "PASS: concise reason" when the patch is safe to preview. Otherwis
   );
 }
 
+async function runAgentAdditiveModuleFallback(
+  input: DevelopmentAgentInput,
+  plan: string,
+  baseCode: string,
+  emptyPatchResponse: string,
+  previousFailure = '',
+) {
+  return runAgentTextStep(
+    input.provider,
+    'safe additive module fallback',
+    `The exact patch generator returned no operations. Implement the requested idea as one independent additive module instead.
+
+Requested change:
+${input.creatorMessage || input.creatorPrompt || input.brief || 'No change request supplied.'}
+
+Selected participant ideas:
+${ideaList(input.selectedIdeas)}
+
+Fusion plan:
+${input.fusionPlan || 'No fusion plan supplied.'}
+
+Approved implementation plan:
+${plan}
+
+Empty patch response:
+${emptyPatchResponse || '{"operations":[]}'}
+
+${previousFailure ? `A previous attempt was rejected for this reason. The new module must correct it:\n${previousFailure}\n` : ''}
+
+Complete canonical HTML for visual and behavioral context (nothing is omitted):
+${baseCode}
+
+The platform will insert your module immediately before the canonical document's closing </body>. It will not replace any old code.
+The text artifact inside the required outer response must contain one JSON object with this exact schema:
+{
+  "summary": "one concise public sentence describing the actual implementation",
+  "html": "visible BODY INNER HTML for the new module only",
+  "css": "complete scoped CSS for the new module only",
+  "javascript": "JavaScript for the new module only, or an empty string when no interaction is required"
+}
+
+Mandatory requirements:
+- The module must visibly and concretely implement the requested idea. Returning empty HTML/CSS or only explanatory text is forbidden.
+- Match the canonical App's language, palette, typography, spacing, and visual style.
+- Use one unique root id prefixed with "community-evolution-" and prefix every new id and class with "community-evolution-".
+- Scope every CSS selector under the unique root id except keyframes. Do not restyle body, html, *, :root, or any existing selector.
+- Do not modify, hide, remove, rename, query, clone, or replace existing elements. The old App remains untouched.
+- If the idea needs interaction, include visible controls, distinct CSS states, and complete event logic bound only inside the new root.
+- Do not use full-page tags, style/script tags inside fields, inline event handlers, Tailwind, external frameworks, @import, remote scripts, or placeholder-only controls.
+- JavaScript must parse as a classic browser script. Bind after DOMContentLoaded or safely detect the current ready state.
+- Put only the serialized module JSON in the outer response's text field, keep the outer code field empty, and return no Markdown fences or explanation.`,
+    8192,
+    input.signal,
+    input.apiKey,
+  );
+}
+
 async function runIncrementalDevelopmentAgentPipeline(
   input: DevelopmentAgentInput,
 ): Promise<DevelopmentAgentOutput> {
@@ -1050,14 +1209,17 @@ The existing document is immutable except for the smallest exact edits required 
   let patchDraft: AgentPatchDraft | null = null;
   let preservation: AgentPreservationInspection | null = null;
   let audit = '';
+  let usedAdditiveFallback = false;
 
   for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
     const attemptNumber = attempt + 1;
     let patchResponse = '';
+    let fallbackResponse = '';
     patchDraft = null;
     candidateCode = '';
     preservation = null;
     audit = '';
+    usedAdditiveFallback = false;
     progress({
       step: 'structure',
       order: 2,
@@ -1122,8 +1284,30 @@ Safety contract:
         input.signal,
         input.apiKey,
       );
-      patchDraft = parseAgentPatchDraft(patchResponse);
-      candidateCode = applyAgentPatch(baseCode, patchDraft);
+      try {
+        patchDraft = parseAgentPatchDraft(patchResponse);
+        candidateCode = applyAgentPatch(baseCode, patchDraft);
+      } catch (error) {
+        if (!(error instanceof EmptyAgentPatchError)) throw error;
+        progress({
+          step: 'structure',
+          order: 2,
+          status: 'warning',
+          title: '精确补丁为空，正在切换安全增量模式',
+          detail: '系统将把入选创意作为独立模块加入旧页面，原有代码保持不变。',
+        });
+        fallbackResponse = await runAgentAdditiveModuleFallback(
+          input,
+          plan,
+          baseCode,
+          patchResponse,
+          attemptFailures.at(-1) || '',
+        );
+        const additiveModule = parseAgentAdditiveModule(fallbackResponse);
+        patchDraft = additiveModuleAsPatch(additiveModule);
+        candidateCode = applyAgentAdditiveModule(baseCode, additiveModule);
+        usedAdditiveFallback = true;
+      }
       validateCompleteAgentHtml(candidateCode);
       preservation = validateAgentPreservation(baseCode, candidateCode);
       audit = await runAgentPatchAudit(input, plan, patchDraft, preservation);
@@ -1134,9 +1318,9 @@ Safety contract:
     } catch (error) {
       const failure = error instanceof Error ? error.message : String(error);
       attemptFailures.push(failure);
-      previousRejectedArtifact = patchDraft
+      previousRejectedArtifact = fallbackResponse || (patchDraft
         ? JSON.stringify(patchDraft, null, 2)
-        : patchResponse;
+        : patchResponse);
       addDebugLog({
         kind: 'ai',
         phase: 'info',
@@ -1164,7 +1348,9 @@ Safety contract:
 
   progress({
     step: 'structure', order: 2, status: 'completed', title: '页面增量修改已经完成',
-    detail: `已安全应用 ${patchDraft.operations.length} 个精确修改，未重写原页面。`,
+    detail: usedAdditiveFallback
+      ? '精确补丁为空后，已安全加入独立增量模块，未重写原页面。'
+      : `已安全应用 ${patchDraft.operations.length} 个精确修改，未重写原页面。`,
   });
   progress({
     step: 'images', order: 3, status: 'completed', title: '原有图片已经保留',
@@ -1198,6 +1384,7 @@ Safety contract:
       baseLength: baseCode.length,
       candidateLength: candidateCode.length,
       operationCount: patchDraft.operations.length,
+      usedAdditiveFallback,
       preservation,
       audit,
       rejectedAttempts: attemptFailures,
@@ -1211,7 +1398,10 @@ Safety contract:
     usage: null,
     steps: [
       `增量修改计划：\n${plan}`,
-      `已应用 ${patchDraft.operations.length} 个精确补丁。`,
+      usedAdditiveFallback
+        ? '已应用 1 个安全增量模块。'
+        : `已应用 ${patchDraft.operations.length} 个精确补丁。`,
+      ...(usedAdditiveFallback ? ['精确补丁为空后，系统已自动切换为安全增量模块。'] : []),
       `旧功能保留检查：保留 ${preservation.baselineIds.length}/${preservation.baselineIds.length} 个原有组件，事件绑定 ${preservation.baselineEventBindings} -> ${preservation.candidateEventBindings}。`,
       `增量实现检查：${audit}`,
     ],

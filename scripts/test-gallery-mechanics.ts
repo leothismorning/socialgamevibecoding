@@ -56,6 +56,9 @@ const {
   inspectAgentPreservation,
   validateAgentPreservation,
   validateCompleteAgentHtml,
+  parseAgentAdditiveModule,
+  applyAgentAdditiveModule,
+  EmptyAgentPatchError,
 } = await import('../server/developmentAgent.js');
 const { db, getAIProvider } = await import('../server/studyDb.js');
 const { normalizeAITextArtifact } = await import('../server/aiResponse.js');
@@ -165,6 +168,11 @@ const incrementalDraft = parseAgentPatchDraft(JSON.stringify({
     reason: '加入入选评论要求的新内容',
   }],
 }));
+assert.throws(
+  () => parseAgentPatchDraft(JSON.stringify({ summary: '空补丁', operations: [] })),
+  EmptyAgentPatchError,
+  'an empty exact patch must be distinguishable so the pipeline can switch to its safe additive fallback',
+);
 const directPatchResponse = {
   summary: '模型直接返回补丁对象。',
   operations: [{
@@ -197,6 +205,30 @@ assert.deepEqual(incrementalPreservation.missingIds, []);
 assert.deepEqual(incrementalPreservation.addedIds, ['newIdea']);
 assert.equal(incrementalPreservation.baselineEventBindings, 1);
 assert.equal(incrementalPreservation.candidateEventBindings, 1);
+const additiveModule = parseAgentAdditiveModule(JSON.stringify({
+  summary: '通过安全模块加入新的创意状态。',
+  html: '<section id="community-evolution-status" class="community-evolution-panel"><strong class="community-evolution-title">新创意已加入</strong></section>',
+  css: '#community-evolution-status.community-evolution-panel { padding: 16px; background: #e8f8ee; }\n#community-evolution-status .community-evolution-title { color: #17613b; }',
+  javascript: "document.addEventListener('DOMContentLoaded', () => { document.getElementById('community-evolution-status')?.setAttribute('data-ready', 'true'); });",
+}));
+const additiveCandidate = applyAgentAdditiveModule(incrementalBase, additiveModule);
+assert.match(additiveCandidate, /id="oldButton"/);
+assert.match(additiveCandidate, /id="community-evolution-status"/);
+assert.match(additiveCandidate, /VIBECODING_INCREMENTAL_MODULE_START/);
+validateCompleteAgentHtml(additiveCandidate);
+const additivePreservation = validateAgentPreservation(incrementalBase, additiveCandidate);
+assert.deepEqual(additivePreservation.missingIds, []);
+assert.deepEqual(additivePreservation.addedIds, ['community-evolution-status']);
+assert.throws(
+  () => parseAgentAdditiveModule(JSON.stringify({
+    summary: '不安全模块',
+    html: '<section id="new-panel" class="panel">内容</section>',
+    css: 'body { display: none; } .panel { color: red; }',
+    javascript: '',
+  })),
+  /根节点 id|未隔离|全局页面样式/,
+  'the additive fallback must reject unscoped modules that could change the old App',
+);
 assert.match(
   applyAgentPatch(incrementalBase, {
     summary: '保留 JavaScript 替换字符串',
