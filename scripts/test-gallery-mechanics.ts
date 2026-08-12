@@ -59,6 +59,7 @@ const {
   parseAgentAdditiveModule,
   applyAgentAdditiveModule,
   incrementalRepairAttemptsFromEnv,
+  isAgentGenerationInfrastructureError,
   runDevelopmentAgent,
   EmptyAgentPatchError,
 } = await import('../server/developmentAgent.js');
@@ -66,6 +67,16 @@ const { db, getAIProvider } = await import('../server/studyDb.js');
 const { normalizeAITextArtifact } = await import('../server/aiResponse.js');
 
 assert.equal(getAIProvider(), 'gpt5', 'the former DeepSeek default should migrate to GPT-5.5');
+assert.equal(
+  isAgentGenerationInfrastructureError(new Error('DeepSeek Pro 思考请求超过 6 分钟未响应，本轮开发失败，请重试。')),
+  true,
+  'a local DeepSeek timeout must be surfaced as infrastructure failure instead of invalid generated code',
+);
+assert.equal(
+  isAgentGenerationInfrastructureError(new Error("The development agent generated invalid JavaScript: Unexpected token ')'")),
+  false,
+  'invalid generated code must remain eligible for one corrective regeneration',
+);
 assert.equal(
   (db.prepare(`SELECT value FROM app_meta WHERE key = 'ai_provider_default_gpt55_v1'`).get() as { value: string }).value,
   '1',
@@ -220,8 +231,8 @@ try {
   });
   assert.equal(incrementalAgentRequestCount, 1, 'a valid incremental change should use one DeepSeek request');
   assert.equal(incrementalAgentThinkingMode, 'enabled');
-  assert.equal(incrementalAgentReasoningEffort, 'high');
-  assert.ok(incrementalAgentMaxTokens >= 16_384);
+  assert.equal(incrementalAgentReasoningEffort, 'medium');
+  assert.ok(incrementalAgentMaxTokens >= 8192 && incrementalAgentMaxTokens < 16_384);
   assert.match(fastIncrementalResult.code, /id="fastIdea"/);
   assert.match(fastIncrementalResult.steps.join('\n'), /基础代码有效性检查/);
 } finally {

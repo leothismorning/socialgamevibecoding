@@ -13,11 +13,13 @@ type DeepSeekOptions = {
   maxTokens?: number;
   signal?: AbortSignal;
   apiKey?: string;
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
 };
 
 const ALLOWED_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
 const RESPONSE_RETRY_DELAYS_MS = [500, 1200];
-const MIN_DEEPSEEK_MAX_TOKENS = 16_384;
+const HIGH_REASONING_MIN_TOKENS = 16_384;
+const MEDIUM_REASONING_MIN_TOKENS = 8192;
 
 export class DeepSeekRecoverableResponseError extends Error {
   readonly code = 'DEEPSEEK_RECOVERABLE_RESPONSE_ERROR';
@@ -44,7 +46,11 @@ export async function generateWithDeepSeek(
 
   const selectedModel = ALLOWED_MODELS.has(model) ? model : 'deepseek-v4-flash';
   const endpoint = 'https://api.deepseek.com/chat/completions';
-  const maxTokens = Math.max(options.maxTokens || 8192, MIN_DEEPSEEK_MAX_TOKENS);
+  const reasoningEffort = options.reasoningEffort || 'high';
+  const minimumTokens = reasoningEffort === 'high'
+    ? HIGH_REASONING_MIN_TOKENS
+    : MEDIUM_REASONING_MIN_TOKENS;
+  const maxTokens = Math.max(options.maxTokens || 8192, minimumTokens);
 
   addDebugLog({
     kind: 'ai',
@@ -56,7 +62,7 @@ export async function generateWithDeepSeek(
       promptLength: prompt.length,
       maxTokens,
       thinking: 'enabled',
-      reasoningEffort: 'high',
+      reasoningEffort,
       hasApiKey: Boolean(apiKey),
     },
   });
@@ -85,7 +91,7 @@ export async function generateWithDeepSeek(
           ],
           response_format: { type: 'json_object' },
           thinking: { type: 'enabled' },
-          reasoning_effort: 'high',
+          reasoning_effort: reasoningEffort,
           max_tokens: maxTokens,
         }),
       });

@@ -358,6 +358,13 @@ function truncate(value: string, max = 6000) {
   return value.length <= max ? value : `${value.slice(0, max)}\n\n[truncated: ${value.length - max} characters omitted]`;
 }
 
+export function isAgentGenerationInfrastructureError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /(?:AI 当前生成步骤|DeepSeek Pro 思考请求)超过 \d+ 分钟未响应/.test(message)
+    || message.includes('DeepSeek network request failed')
+    || /DeepSeek request failed with HTTP (408|425|429|5\d\d)/i.test(message);
+}
+
 function extractJsonObject(value: string) {
   const text = stripFence(value);
   const start = text.indexOf('{');
@@ -1024,7 +1031,7 @@ async function runAgentTextStep(
   const result = await withAbortTimeout(
     timeoutMs,
     signal,
-    `AI 当前生成步骤超过 ${timeoutMinutes(timeoutMs)} 分钟未响应，本轮开发失败，请重试。`,
+    `${provider === 'deepseek-pro' ? 'DeepSeek Pro 思考请求' : 'AI 当前生成步骤'}超过 ${timeoutMinutes(timeoutMs)} 分钟未响应，本轮开发失败，请重试。`,
     (stepSignal) => generateWithAI(provider, prompt, {
       systemPrompt: TEXT_ONLY_SYSTEM,
       maxTokens,
@@ -1206,7 +1213,7 @@ async function runIncrementalDevelopmentAgentPipeline(
       step: 'structure',
       order: 2,
       status: 'running',
-      title: attempt === 0 ? 'AI 正在生成精确修改补丁' : `AI 正在重新生成安全补丁（${attemptNumber}/${maxRepairAttempts + 1}）`,
+      title: attempt === 0 ? 'AI 正在生成精确修改补丁' : `AI 正在重新生成有效补丁（${attemptNumber}/${maxRepairAttempts + 1}）`,
       detail: '每个修改必须精确命中上一版本；未命中的内容会保持原样。',
     });
 
@@ -1287,7 +1294,7 @@ Safety contract:
     } catch (error) {
       // Provider/network failures are not invalid code. Surface the retryable
       // infrastructure error instead of mislabelling it as a code failure.
-      if (isSuiXiangTransientUpstreamError(error)) throw error;
+      if (isSuiXiangTransientUpstreamError(error) || isAgentGenerationInfrastructureError(error)) throw error;
       const failure = error instanceof Error ? error.message : String(error);
       attemptFailures.push(failure);
       previousRejectedArtifact = patchDraft
