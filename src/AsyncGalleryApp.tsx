@@ -1534,7 +1534,7 @@ type PositionedIdeaFlowNode = IdeaFlowNode & {
 
 const FLOW_NODE_WIDTH = 292;
 const FLOW_NODE_HEIGHT = 142;
-const FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT = 36;
+const FLOW_STATUS_ROW_HEIGHT = 36;
 const FLOW_COLUMN_GAP = 96;
 const FLOW_ROW_GAP = 24;
 const FLOW_START_X = 38;
@@ -2215,6 +2215,11 @@ function IdeaFlowBoard({
       .filter((source) => developmentBriefIds.has(Number(source.synthesis_id)))
       .map((source) => sourceKey(source.source_type, Number(source.source_id))),
   );
+  const synthesisAdoptedSourceKeys = new Set(
+    targetSources
+      .filter((source) => !developmentBriefIds.has(Number(source.synthesis_id)))
+      .map((source) => sourceKey(source.source_type, Number(source.source_id))),
+  );
   const usedSourceKeys = new Set(
     targetSources.map((source) => sourceKey(source.source_type, Number(source.source_id))),
   );
@@ -2250,9 +2255,10 @@ function IdeaFlowBoard({
     const expandable = isLongContent(comment.content);
     const expanded = expandable && expandedKeySet.has(key);
     const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id)) ? 48 : 0;
-    const developmentSelectionExtraHeight = developmentSelectedSourceKeys.has(key)
-      ? FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT
-      : 0;
+    const statusExtraHeight = (
+      Number(developmentSelectedSourceKeys.has(key))
+      + Number(synthesisAdoptedSourceKeys.has(key))
+    ) * FLOW_STATUS_ROW_HEIGHT;
     return {
       key,
       kind,
@@ -2275,10 +2281,10 @@ function IdeaFlowBoard({
       height: kind === 'reply'
         ? (expanded ? 190 : expandable ? 146 : 112)
           + wildcardExtraHeight
-          + developmentSelectionExtraHeight
+          + statusExtraHeight
         : (expanded ? 224 : expandable ? 178 : FLOW_NODE_HEIGHT)
           + wildcardExtraHeight
-          + developmentSelectionExtraHeight,
+          + statusExtraHeight,
       indent: kind === 'reply' ? 18 : 0,
       comment,
     };
@@ -2352,8 +2358,9 @@ function IdeaFlowBoard({
         ? state.comments.find((item) => Number(item.id) === Number(source.source_id))
         : undefined;
       const sourceExpandable = isLongContent(source.content);
+      const key = sourceKey(source.source_type, Number(source.source_id));
       const sourceExpanded = sourceExpandable
-        && expandedKeySet.has(sourceKey(source.source_type, Number(source.source_id)));
+        && expandedKeySet.has(key);
       const sourceUsedInSecondRound = targetSources.some((targetSource) => {
         if (
           targetSource.source_type !== source.source_type
@@ -2367,7 +2374,7 @@ function IdeaFlowBoard({
       const appearsDuringSecondSelection = selectionLayer === 2
         && basketKeys.has(sourceKey(source.source_type, Number(source.source_id)));
       return {
-        key: sourceKey(source.source_type, Number(source.source_id)),
+        key,
         kind: source.source_type === 'synthesis' ? 'external-synthesis' : 'external-comment',
         column: sourceUsedInSecondRound || appearsDuringSecondSelection || source.version_kind === 'community'
           ? 2
@@ -2382,14 +2389,17 @@ function IdeaFlowBoard({
         createdAt: source.created_at || '',
         sourceType: source.source_type,
         sourceId: Number(source.source_id),
-        used: usedSourceKeys.has(sourceKey(source.source_type, Number(source.source_id))),
-        inBasket: basketKeys.has(sourceKey(source.source_type, Number(source.source_id))),
+        used: usedSourceKeys.has(key),
+        inBasket: basketKeys.has(key),
         expandable: sourceExpandable,
         width: FLOW_NODE_WIDTH,
         height: (sourceExpanded ? 274 : sourceExpandable ? 218 : 186)
-          + (developmentSelectedSourceKeys.has(
-            sourceKey(source.source_type, Number(source.source_id)),
-          ) ? FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT : 0),
+          + (
+            Number(developmentSelectedSourceKeys.has(key))
+            + Number(sourceSynthesis
+              ? Number(sourceSynthesis.source_count || 0) > 0
+              : synthesisAdoptedSourceKeys.has(key))
+          ) * FLOW_STATUS_ROW_HEIGHT,
         indent: 0,
         comment: sourceComment,
         synthesis: sourceSynthesis,
@@ -2449,9 +2459,10 @@ function IdeaFlowBoard({
             + Math.min(2, discussionComments.length) * 12
             + (discussionComments.length > 2 ? 12 : 0)
           : 0)
-        + (developmentSelectedSourceKeys.has(key)
-          ? FLOW_DEVELOPMENT_SELECTION_EXTRA_HEIGHT
-          : 0),
+        + (
+          Number(developmentSelectedSourceKeys.has(key))
+          + Number(Number(synthesis.source_count || 0) > 0)
+        ) * FLOW_STATUS_ROW_HEIGHT,
       indent: 0,
       synthesis,
       discussionComments,
