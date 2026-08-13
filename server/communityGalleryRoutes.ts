@@ -7,6 +7,7 @@ import {
 } from './developmentAgent.js';
 import {
   closeAsyncCommunityStudy,
+  claimCodexCommunityDevelopmentTask,
   controlCommunityAppFlows,
   completeCreatorDevelopmentOperation,
   completeCommunityGeneration,
@@ -21,6 +22,7 @@ import {
   failCommunityGeneration,
   getCommunityGalleryState,
   getCommunityGenerationInput,
+  getCodexCommunityDevelopmentTask,
   getCommunityPreview,
   getPublishedCommunityVersionDownload,
   getCreatorDevelopmentProgress,
@@ -49,6 +51,7 @@ import {
   startCommunityGeneration,
   startNewAsyncCommunityStudy,
   startNewAsyncCommunityWorkspace,
+  submitCodexCommunityDevelopmentResult,
   toggleCommunityAppLike,
   toggleCommunityCommentLike,
   toggleCreativeBasket,
@@ -175,6 +178,35 @@ function runCommunityGenerationInBackground(jobId: number) {
 }
 
 export function registerCommunityGalleryRoutes(app: Express) {
+  app.get('/api/community-gallery/codex-tasks/:taskId', (req, res) => {
+    try {
+      res.json(getCodexCommunityDevelopmentTask(String(req.params.taskId || '')));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/codex-tasks/:taskId/claim', (req, res) => {
+    try {
+      res.json(claimCodexCommunityDevelopmentTask(String(req.params.taskId || '')));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/codex-tasks/:taskId/jobs/:jobId/result', (req, res) => {
+    try {
+      res.json(submitCodexCommunityDevelopmentResult(
+        String(req.params.taskId || ''),
+        Number(req.params.jobId),
+        String(req.body?.code || ''),
+        String(req.body?.summary || ''),
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.get('/api/community-gallery/state', (req, res) => {
     try {
       res.json(getCommunityGalleryState(clientIdFrom(req)));
@@ -681,7 +713,9 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const clientId = clientIdFrom(req);
       const started = retryCommunityGeneration(clientId, Number(req.params.jobId));
       res.json(started.state);
-      runCommunityGenerationInBackground(started.jobId);
+      if (started.executionProvider === 'deepseek-pro') {
+        runCommunityGenerationInBackground(started.jobId);
+      }
     } catch (error) {
       sendError(res, error);
     }
@@ -706,7 +740,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
         Array.isArray(req.body?.appIds) ? req.body.appIds.map(String) : [],
       );
       res.json(started.state);
-      started.jobIds.forEach(runCommunityGenerationInBackground);
+      started.backgroundJobIds.forEach(runCommunityGenerationInBackground);
     } catch (error) {
       sendError(res, error);
     }
@@ -722,14 +756,20 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/study/enter-development', (req, res) => {
     try {
+      const executionProvider = req.body?.executionProvider === 'deepseek-pro'
+        ? 'deepseek-pro'
+        : 'codex';
       const started = enterCommunityDevelopmentStage(
         clientIdFrom(req),
         Number(req.body?.iterationNumber) as 1 | 2,
         Boolean(req.body?.isTest),
         Array.isArray(req.body?.appIds) ? req.body.appIds.map(String) : undefined,
+        executionProvider,
       );
       res.json(started.state);
-      started.jobIds.forEach(runCommunityGenerationInBackground);
+      if (executionProvider === 'deepseek-pro') {
+        started.jobIds.forEach(runCommunityGenerationInBackground);
+      }
     } catch (error) {
       sendError(res, error);
     }

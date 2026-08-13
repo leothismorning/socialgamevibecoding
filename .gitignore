@@ -14,3 +14,4 @@ data/**/*.db-shm
 data/**/*.db-wal
 tmp/
 qa-artifacts/
+.codex-community-tasks/

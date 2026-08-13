@@ -6,6 +6,7 @@ export type CommunityRole = 'host' | 'creator';
 export type CommunityStatus = 'setup' | 'active' | 'closed';
 export type CommunitySourceType = 'comment' | 'synthesis';
 export type CommunityWorkspace = 'regular' | 'test';
+export type CommunityDevelopmentProvider = 'deepseek-pro' | 'codex';
 export type CommunityAppFlowStage =
   | 'waiting_round_1'
   | 'round_1'
@@ -26,6 +27,13 @@ const CREATOR_CODES = Array.from(
   (_, index) => `C${String(index + 1).padStart(2, '0')}`,
 );
 const now = () => new Date().toISOString();
+export const CODEX_COMMUNITY_DEVELOPMENT_PROMPT = `保留原文件，生成新的平台兼容版本。
+修改简单、快速，重点突出评论中的创意和交互。
+必须能直接上传并展示在我的平台中。
+使用单个 HTML，尽量采用原生 HTML/CSS/JS。
+不依赖外部图片、脚本、接口或网络资源。
+保证按钮和交互真实可用。
+不要长时间检查或过度开发，完成后直接提供文件。`;
 const TEST_RESET_CONFIRMATION = '清除测试角色数据';
 const COMMUNITY_STUDY_DATA_TABLES = [
   'vg_async_participants',
@@ -503,6 +511,9 @@ ensureColumn('vg_async_generation_jobs', 'base_version_id', 'INTEGER');
 ensureColumn('vg_async_generation_jobs', 'selection_reason', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('vg_async_generation_jobs', 'selected_source_type', `TEXT NOT NULL DEFAULT 'synthesis'`);
 ensureColumn('vg_async_generation_jobs', 'selected_source_id', 'INTEGER');
+ensureColumn('vg_async_generation_jobs', 'execution_provider', `TEXT NOT NULL DEFAULT 'deepseek-pro'`);
+ensureColumn('vg_async_generation_jobs', 'codex_task_id', 'TEXT');
+ensureColumn('vg_async_generation_jobs', 'codex_claimed_at', 'TEXT');
 ensureColumn('vg_async_studies', 'workflow_stage', `TEXT NOT NULL DEFAULT 'synthesis_1'`);
 ensureColumn('vg_async_syntheses', 'layer', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('vg_async_syntheses', 'withdrawn_at', 'TEXT');
@@ -2352,6 +2363,7 @@ export function enterCommunityDevelopmentStage(
   iterationNumber: 1 | 2,
   isTest: boolean,
   requestedAppIds?: string[],
+  executionProvider: CommunityDevelopmentProvider = 'deepseek-pro',
 ) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = requireOpenStudy(isTest);
@@ -2376,7 +2388,8 @@ export function enterCommunityDevelopmentStage(
   }
   const runningApps = publishedApps.filter((app) => db.prepare(`
     SELECT 1 FROM vg_async_generation_jobs
-    WHERE study_id = ? AND app_id = ? AND status = 'running'
+    WHERE study_id = ? AND app_id = ?
+      AND status IN ('running', 'waiting_codex', 'codex_processing')
   `).get(currentStudy.id, app.id));
   if (runningApps.length) throw new Error(`所选应用中有 ${runningApps.length} 个仍在开发中。`);
 
@@ -2530,6 +2543,7 @@ export function enterCommunityDevelopmentStage(
     ));
   });
   transaction();
+  const codexTaskId = executionProvider === 'codex' ? randomUUID() : null;
   const jobIds = winners.map(({ app, winner, sources }) => createCommunityGenerationJob({
     actorCode: viewer.code,
     app,
@@ -2540,6 +2554,8 @@ export function enterCommunityDevelopmentStage(
     creatorInstruction: sources.map((source) => source.content).filter(Boolean).join('\n\n'),
     selectionReason: 'host_weighted_random_draw',
     automated: true,
+    executionProvider,
+    codexTaskId,
   }));
   recordEvent(viewer.code, `enter_development_${iterationNumber}`, 'study', currentStudy.id, {
     winners: winners.map(({ app, winner, sources }) => ({
@@ -2554,9 +2570,11 @@ export function enterCommunityDevelopmentStage(
     })),
     notificationCount,
     jobIds,
+    executionProvider,
+    codexTaskId,
     workspace: isTest ? 'test' : 'regular',
   });
-  return { jobIds, state: getCommunityGalleryState(clientId) };
+  return { jobIds, codexTaskId, executionProvider, state: getCommunityGalleryState(clientId) };
 }
 
 export function controlCommunityAppFlows(
@@ -2595,7 +2613,8 @@ export function controlCommunityAppFlows(
     if (!nextStage) throw new Error(`${app.creator_code} 当前阶段不能安全回退。`);
     const running = db.prepare(`
       SELECT 1 FROM vg_async_generation_jobs
-      WHERE study_id = ? AND app_id = ? AND status = 'running'
+      WHERE study_id = ? AND app_id = ?
+        AND status IN ('running', 'waiting_codex', 'codex_processing')
     `).get(currentStudy.id, app.id);
     if (running) throw new Error(`${app.creator_code} 正在开发，任务结束前不能回退。`);
     const draft = db.prepare(`
@@ -3284,6 +3303,8 @@ function createCommunityGenerationJob(input: {
   requestedBaseVersionId?: number;
   selectionReason?: string;
   automated?: boolean;
+  executionProvider?: CommunityDevelopmentProvider;
+  codexTaskId?: string | null;
 }) {
   const currentStudy = requireOpenStudy(Number(input.app.is_test));
   if (currentStudy.status !== 'active') {
@@ -3312,7 +3333,8 @@ function createCommunityGenerationJob(input: {
   }
   const running = db.prepare(`
     SELECT 1 FROM vg_async_generation_jobs
-    WHERE study_id = ? AND app_id = ? AND status = 'running'
+    WHERE study_id = ? AND app_id = ?
+      AND status IN ('running', 'waiting_codex', 'codex_processing')
   `).get(study().id, app.id);
   if (running) throw new Error('当前已经有一个社区版本生成任务。');
   let sourceType = input.sourceType;
@@ -3339,14 +3361,19 @@ function createCommunityGenerationJob(input: {
   const developmentPrompt = input.creatorInstruction.trim() || selectedSource.content.trim();
   if (!developmentPrompt) throw new Error('开发提示词不能为空。');
   const timestamp = now();
+  const executionProvider = input.executionProvider || 'deepseek-pro';
+  const initialStatus = executionProvider === 'codex' ? 'waiting_codex' : 'running';
+  if (executionProvider === 'codex' && !input.codexTaskId) {
+    throw new Error('Codex 任务缺少批次编号。');
+  }
   let jobId = 0;
   const transaction = db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO vg_async_generation_jobs
         (study_id, app_id, synthesis_id, selected_source_type, selected_source_id,
          iteration_number, base_version_id, selection_reason, creator_instruction,
-         status, created_at, started_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+         execution_provider, codex_task_id, status, created_at, started_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       study().id,
       app.id,
@@ -3357,6 +3384,9 @@ function createCommunityGenerationJob(input: {
       baseVersionId,
       input.selectionReason?.trim() || '',
       developmentPrompt,
+      executionProvider,
+      input.codexTaskId || null,
+      initialStatus,
       timestamp,
       timestamp,
     );
@@ -3373,6 +3403,8 @@ function createCommunityGenerationJob(input: {
     selectionReason: input.selectionReason?.trim() || '',
     promptSource: input.sources ? 'creator_selected_sources' : 'selected_source',
     automated: Boolean(input.automated),
+    executionProvider,
+    codexTaskId: input.codexTaskId || null,
   });
   return jobId;
 }
@@ -3403,7 +3435,9 @@ export function retryCommunityGeneration(clientId: string, failedJobId: number) 
   `).get(currentStudy.id, failedJobId) as any;
   if (!failedJob) throw new Error('要重新开发的任务不存在。');
   requireOpenStudy(Number(failedJob.is_test));
-  if (failedJob.status === 'running') throw new Error('当前开发任务仍在运行，不能重复启动。');
+  if (['running', 'waiting_codex', 'codex_processing'].includes(failedJob.status)) {
+    throw new Error('当前开发任务仍在运行，不能重复启动。');
+  }
   if (failedJob.app_status !== 'published') {
     throw new Error('只有已发布的应用可以重新开发。');
   }
@@ -3433,13 +3467,19 @@ export function retryCommunityGeneration(clientId: string, failedJobId: number) 
     requestedBaseVersionId: Number(failedJob.base_version_id),
     selectionReason: failedJob.selection_reason || '',
     automated: false,
+    executionProvider: failedJob.execution_provider === 'codex' ? 'codex' : 'deepseek-pro',
+    codexTaskId: failedJob.execution_provider === 'codex' ? randomUUID() : null,
   });
   recordEvent(viewer.code, 'retry_community_generation', 'generation_job', jobId, {
     retryOfJobId: Number(failedJobId),
     appId: failedJob.app_id,
     iterationNumber,
   });
-  return { jobId, state: getCommunityGalleryState(clientId) };
+  return {
+    jobId,
+    executionProvider: failedJob.execution_provider === 'codex' ? 'codex' : 'deepseek-pro',
+    state: getCommunityGalleryState(clientId),
+  };
 }
 
 export function retryLatestCommunityGenerations(clientId: string, appIds: string[]) {
@@ -3461,7 +3501,7 @@ export function retryLatestCommunityGenerations(clientId: string, appIds: string
       WHERE study_id = ? AND app_id = ? AND iteration_number = ?
       ORDER BY id DESC LIMIT 1
     `).get(currentStudy.id, app.id, iterationNumber) as any;
-    if (!latestJob || latestJob.status === 'running') {
+    if (!latestJob || ['running', 'waiting_codex', 'codex_processing'].includes(latestJob.status)) {
       throw new Error(`${app.creator_code} 当前没有可重新启动的开发任务。`);
     }
     const publishedVersion = db.prepare(`
@@ -3471,8 +3511,14 @@ export function retryLatestCommunityGenerations(clientId: string, appIds: string
     if (publishedVersion) throw new Error(`${app.creator_code} 已发布本轮版本，不能重新开发。`);
     return latestJob;
   });
-  const jobIds = jobs.map((job) => retryCommunityGeneration(clientId, Number(job.id)).jobId);
-  return { jobIds, state: getCommunityGalleryState(clientId) };
+  const restarted = jobs.map((job) => retryCommunityGeneration(clientId, Number(job.id)));
+  return {
+    jobIds: restarted.map((item) => item.jobId),
+    backgroundJobIds: restarted
+      .filter((item) => item.executionProvider === 'deepseek-pro')
+      .map((item) => item.jobId),
+    state: getCommunityGalleryState(clientId),
+  };
 }
 
 export function getCommunityGenerationInput(jobId: number) {
@@ -3495,6 +3541,116 @@ export function getCommunityGenerationInput(jobId: number) {
   const synthesis = sourceType === 'synthesis' ? synthesisByIdIncludingDeleted(sourceId) : null;
   const sources = synthesis ? resolveSynthesisSources(sourceId, true) : [selection];
   return { job, selection, synthesis, sources };
+}
+
+function requireCodexTaskId(taskId: string) {
+  const normalized = String(taskId || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)) {
+    throw new Error('Codex 任务编号无效。');
+  }
+  return normalized;
+}
+
+export function getCodexCommunityDevelopmentTask(taskId: string) {
+  const normalizedTaskId = requireCodexTaskId(taskId);
+  const jobs = db.prepare(`
+    SELECT j.id
+    FROM vg_async_generation_jobs j
+    WHERE j.study_id = ? AND j.codex_task_id = ? AND j.execution_provider = 'codex'
+    ORDER BY j.id
+  `).all(study().id, normalizedTaskId) as Array<{ id: number }>;
+  if (!jobs.length) {
+    const error = new Error('Codex 任务不存在，或已不属于当前研究。') as Error & { status?: number };
+    error.status = 404;
+    throw error;
+  }
+  const items = jobs.map(({ id }) => {
+    const input = getCommunityGenerationInput(Number(id));
+    return {
+      jobId: Number(input.job.id),
+      status: input.job.status,
+      appId: input.job.app_id,
+      creatorCode: input.job.creator_code,
+      appTitle: input.job.app_title,
+      appBrief: input.job.app_brief,
+      iterationNumber: Number(input.job.iteration_number),
+      baseVersionId: Number(input.job.base_version_id),
+      baseVersionNumber: Number(input.job.base_version_number),
+      basePrompt: input.job.base_prompt || '',
+      baseCode: input.job.base_code,
+      creatorInstruction: input.job.creator_instruction || input.selection.content,
+      selectedIdeas: input.sources.map((source: any) => ({
+        sourceType: source.source_type,
+        sourceId: Number(source.source_id),
+        authorCode: source.author_code,
+        title: source.title || '',
+        content: source.content,
+        contributionNote: source.contribution_note || '',
+      })),
+      createdAt: input.job.created_at,
+      claimedAt: input.job.codex_claimed_at || null,
+      completedAt: input.job.completed_at || null,
+      error: input.job.error || null,
+      outputFilename: `${input.job.creator_code}-community-v${Number(input.job.iteration_number)}.html`,
+    };
+  });
+  const completedCount = items.filter((item) => item.status === 'completed').length;
+  const failedCount = items.filter((item) => ['failed', 'cancelled'].includes(item.status)).length;
+  const processingCount = items.filter((item) => item.status === 'codex_processing').length;
+  const status = completedCount === items.length
+    ? 'completed'
+    : completedCount + failedCount === items.length
+      ? 'partial'
+      : processingCount > 0
+        ? 'processing'
+        : 'waiting';
+  return {
+    taskId: normalizedTaskId,
+    status,
+    fixedPrompt: CODEX_COMMUNITY_DEVELOPMENT_PROMPT,
+    itemCount: items.length,
+    completedCount,
+    items,
+  };
+}
+
+export function claimCodexCommunityDevelopmentTask(taskId: string) {
+  const task = getCodexCommunityDevelopmentTask(taskId);
+  const timestamp = now();
+  db.prepare(`
+    UPDATE vg_async_generation_jobs
+    SET status = 'codex_processing', codex_claimed_at = COALESCE(codex_claimed_at, ?)
+    WHERE study_id = ? AND codex_task_id = ? AND execution_provider = 'codex'
+      AND status = 'waiting_codex'
+  `).run(timestamp, study().id, task.taskId);
+  return getCodexCommunityDevelopmentTask(task.taskId);
+}
+
+export function submitCodexCommunityDevelopmentResult(
+  taskId: string,
+  jobId: number,
+  code: string,
+  summary = '',
+) {
+  const task = getCodexCommunityDevelopmentTask(taskId);
+  const item = task.items.find((candidate) => Number(candidate.jobId) === Number(jobId));
+  if (!item) throw new Error('该 App 不属于这个 Codex 任务。');
+  if (item.status === 'completed') return getCodexCommunityDevelopmentTask(task.taskId);
+  if (!['waiting_codex', 'codex_processing'].includes(item.status)) {
+    throw new Error('该 App 的 Codex 任务已经停止，不能再回传结果。');
+  }
+  if (!code.trim() || Buffer.byteLength(code, 'utf8') > 8 * 1024 * 1024) {
+    throw new Error('Codex 结果不能为空且不能超过 8MB。');
+  }
+  if (!/(?:<!doctype\s+html|<html\b)/i.test(code) || !/<\/html\s*>/i.test(code)) {
+    throw new Error('Codex 必须回传包含完整 html 结构的单个 HTML 文件。');
+  }
+  completeCommunityGeneration(
+    Number(jobId),
+    code,
+    summary.trim() || 'Codex 已根据本轮入选评论完成平台兼容版本。',
+  );
+  return getCodexCommunityDevelopmentTask(task.taskId);
 }
 
 export function recordCommunityGenerationProgress(jobId: number, progress: DevelopmentAgentProgress) {
@@ -3527,7 +3683,7 @@ export function recordCommunityGenerationProgress(jobId: number, progress: Devel
 
 export function completeCommunityGeneration(jobId: number, code: string, summary: string) {
   const input = getCommunityGenerationInput(jobId);
-  if (input.job.status !== 'running') return;
+  if (!['running', 'waiting_codex', 'codex_processing'].includes(input.job.status)) return;
   const timestamp = now();
   const transaction = db.transaction(() => {
     db.prepare(`
@@ -3815,7 +3971,8 @@ export function uploadAndPublishCommunityVersion(
     db.prepare(`
       UPDATE vg_async_generation_jobs
       SET status = 'cancelled', error = '创作者上传 HTML 后直接发布，AI 生成结果已停用。', completed_at = ?
-      WHERE study_id = ? AND app_id = ? AND iteration_number = ? AND status = 'running'
+      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+        AND status IN ('running', 'waiting_codex', 'codex_processing')
     `).run(timestamp, currentStudy.id, app.id, iterationNumber);
     db.prepare(`
       UPDATE vg_async_generation_events
@@ -3964,7 +4121,8 @@ export function rollbackFirstCommunityVersion(clientId: string, appId: string) {
   const runningTaskCount = Number((db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM vg_async_generation_jobs
-        WHERE study_id = ? AND app_id = ? AND status = 'running') +
+        WHERE study_id = ? AND app_id = ?
+          AND status IN ('running', 'waiting_codex', 'codex_processing')) +
       (SELECT COUNT(*) FROM vg_async_creator_operations
         WHERE study_id = ? AND app_id = ? AND status = 'running') AS count
   `).get(
@@ -4309,7 +4467,8 @@ function communityTestDataPreview(studyId: string) {
   const runningTaskCount = count(`
     SELECT
       (SELECT COUNT(*) FROM vg_async_generation_jobs j JOIN vg_async_apps a ON a.id = j.app_id
-        WHERE j.study_id = ? AND j.status = 'running' AND a.is_test = 1) +
+        WHERE j.study_id = ?
+          AND j.status IN ('running', 'waiting_codex', 'codex_processing') AND a.is_test = 1) +
       (SELECT COUNT(*) FROM vg_async_creator_operations o
         JOIN vg_async_participants p ON p.study_id = o.study_id AND p.code = o.creator_code
         WHERE o.study_id = ? AND o.status = 'running' AND p.is_test = 1) AS count
@@ -4457,7 +4616,8 @@ export function deleteOwnInitialApp(clientId: string, appId: string) {
         (SELECT COUNT(*) FROM vg_async_creator_operations
           WHERE study_id = ? AND app_id = ? AND status = 'running') +
         (SELECT COUNT(*) FROM vg_async_generation_jobs
-          WHERE study_id = ? AND app_id = ? AND status = 'running') AS count
+          WHERE study_id = ? AND app_id = ?
+            AND status IN ('running', 'waiting_codex', 'codex_processing')) AS count
     `).get(
       currentStudy.id, app.id,
       currentStudy.id, app.id,
@@ -4629,7 +4789,9 @@ export function startNewAsyncCommunityWorkspace(clientId: string, isTest: boolea
     throw new Error(`请先结束${isTest ? '测试' : '正式'}流程。`);
   }
   const data = collectCommunityWorkspaceData(currentStudy.id, isTest);
-  const runningJobs = data.generation_jobs.filter((row) => row.status === 'running');
+  const runningJobs = data.generation_jobs.filter((row) => (
+    ['running', 'waiting_codex', 'codex_processing'].includes(row.status)
+  ));
   const runningOperations = data.creator_operations.filter((row) => row.status === 'running');
   if (runningJobs.length || runningOperations.length) {
     throw new Error(`${isTest ? '测试' : '正式'}流程仍有 AI 开发任务运行，暂时不能新建研究。`);
@@ -5066,6 +5228,49 @@ export function getCommunityGalleryState(clientId = '') {
         ORDER BY j.id DESC
       `).all(currentStudy.id, ...appIds) as any[]
     : [];
+  type CodexTaskSummary = {
+    id: string;
+    iteration_number: number;
+    is_test: number;
+    created_at: string;
+    job_count: number;
+    completed_count: number;
+    processing_count: number;
+    waiting_count: number;
+    failed_count: number;
+  };
+  const codexTasks = viewer?.role === 'host'
+    ? Array.from(generationJobs.reduce<Map<string, CodexTaskSummary>>((tasks, job) => {
+        if (job.execution_provider !== 'codex' || !job.codex_task_id) return tasks;
+        const existing = tasks.get(job.codex_task_id) || {
+          id: job.codex_task_id,
+          iteration_number: Number(job.iteration_number),
+          is_test: Number(apps.find((app) => app.id === job.app_id)?.is_test || 0),
+          created_at: job.created_at,
+          job_count: 0,
+          completed_count: 0,
+          processing_count: 0,
+          waiting_count: 0,
+          failed_count: 0,
+        };
+        existing.job_count += 1;
+        if (job.status === 'completed') existing.completed_count += 1;
+        else if (job.status === 'codex_processing') existing.processing_count += 1;
+        else if (job.status === 'waiting_codex') existing.waiting_count += 1;
+        else if (job.status === 'failed' || job.status === 'cancelled') existing.failed_count += 1;
+        tasks.set(job.codex_task_id, existing);
+        return tasks;
+      }, new Map<string, CodexTaskSummary>()).values()).map((task) => ({
+        ...task,
+        status: task.completed_count === task.job_count
+          ? 'completed'
+          : task.completed_count + task.failed_count === task.job_count
+            ? 'partial'
+            : task.processing_count > 0
+              ? 'processing'
+              : 'waiting',
+      }))
+    : [];
   const jobIds = generationJobs.map((job) => job.id);
   const jobPlaceholders = jobIds.map(() => '?').join(',');
   const generationEvents = jobIds.length
@@ -5166,12 +5371,14 @@ export function getCommunityGalleryState(clientId = '') {
     basket,
     assignments,
     generationJobs,
+    codexTasks,
     generationEvents,
     creatorDevelopment,
     notifications,
     developmentMessages,
     participants: participantRows,
     aiProvider: 'deepseek-pro',
+    communityDevelopmentProvider: 'codex',
     counts: {
       creators: CREATOR_COUNT,
       regularApps: Number(publishedCounts.find((row) => Number(row.is_test) === 0)?.count || 0),

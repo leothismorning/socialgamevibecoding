@@ -1499,10 +1499,28 @@
 .async-app-flow-actions button.async-retry-development { color: #fff; border-color: #a83f55; background: #a83f55; }
 .async-app-flow-selection button:disabled, .async-app-flow-actions button:disabled { cursor: not-allowed; opacity: .42; }
 .async-app-flow-selection svg, .async-app-flow-actions svg { width: 12px; height: 12px; }
+.async-codex-task-list { display: grid; gap: 10px; padding: 14px; border-bottom: 1px solid #e4e9f1; background: linear-gradient(120deg, #f7faff, #faf7ff); }
+.async-codex-task-list > header > div { display: flex; align-items: center; gap: 9px; color: #57449a; }
+.async-codex-task-list > header svg { width: 19px; height: 19px; }
+.async-codex-task-list > header span { display: grid; gap: 2px; }
+.async-codex-task-list > header strong { font-size: 14px; }
+.async-codex-task-list > header small { color: #758298; font-size: 14px; }
+.async-codex-task-list > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.async-codex-task-list article { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid #dce3ee; border-radius: 12px; background: #fff; }
+.async-codex-task-list article.is-processing { border-color: #d4c6ef; background: #faf7ff; }
+.async-codex-task-list article.is-completed { border-color: #c8e5d6; background: #f4fbf7; }
+.async-codex-task-list article > div { min-width: 0; display: grid; gap: 4px; }
+.async-codex-task-list article strong { color: #33435b; font-size: 14px; }
+.async-codex-task-list article code { overflow: hidden; color: #6f5aae; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.async-codex-task-list article small { color: #7d899a; font-size: 14px; }
+.async-codex-task-list article button { flex: 0 0 auto; min-height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; color: #fff; border: 0; border-radius: 9px; background: linear-gradient(110deg, #3978ed, #7546df); font-size: 14px; font-weight: 900; cursor: pointer; }
+.async-codex-task-list article button svg { width: 13px; height: 13px; }
 .async-development-summary { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .async-development-summary span { display: flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid #dfe5ee; border-radius: 999px; background: #fff; font-size: 14px; font-weight: 900; white-space: nowrap; }
 .async-development-summary svg { width: 12px; height: 12px; }
 .async-development-summary .is-queued { color: #5d4a9f; border-color: #d9cff3; background: #f7f4ff; }
+.async-development-summary .is-codex-waiting { color: #356592; border-color: #c9dff2; background: #f1f8ff; }
+.async-development-summary .is-codex-processing { color: #6550aa; border-color: #d8ccf3; background: #f7f3ff; }
 .async-development-summary .is-running { color: #8b641f; border-color: #efdfb9; background: #fff9e9; }
 .async-development-summary .is-completed { color: #19714d; border-color: #c9e7d7; background: #edf9f2; }
 .async-development-summary .is-failed { color: #a23f51; border-color: #efccd3; background: #fff2f4; }
@@ -1540,6 +1558,10 @@
 .async-development-state > small { grid-column: 2; grid-row: 1; align-self: center; color: #8d98a7; font-size: 14px; }
 .async-development-state.is-running { border-color: #ead9ae; background: #fffaf0; }
 .async-development-state.is-running > span { color: #956a1e; }
+.async-development-state.is-codex-waiting { border-color: #bfd9ef; background: #f2f8fd; }
+.async-development-state.is-codex-waiting > span { color: #356592; }
+.async-development-state.is-codex-processing { border-color: #d4c6ef; background: #f7f3ff; }
+.async-development-state.is-codex-processing > span { color: #6550aa; }
 .async-development-state.is-completed { border-color: #c9e4d6; background: #f1faf5; }
 .async-development-state.is-completed > span { color: #19714d; }
 .async-development-state.is-failed { border-color: #edc7cf; background: #fff3f5; }
@@ -1597,6 +1619,7 @@
   .async-host-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .async-host-development-board > header { align-items: flex-start; flex-direction: column; }
   .async-app-flow-toolbar { align-items: flex-start; flex-direction: column; }
+  .async-codex-task-list > div { grid-template-columns: 1fr; }
   .async-development-summary { justify-content: flex-start; }
   .async-development-table { overflow-x: auto; }
   .async-development-table-heading,

@@ -181,7 +181,10 @@ export type CommunityGenerationJob = {
   base_version_id: number;
   selection_reason?: string;
   creator_instruction: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  execution_provider?: 'deepseek-pro' | 'codex';
+  codex_task_id?: string;
+  codex_claimed_at?: string;
+  status: 'running' | 'waiting_codex' | 'codex_processing' | 'completed' | 'failed' | 'cancelled';
   error?: string;
   created_at: string;
   completed_at?: string;
@@ -282,6 +285,18 @@ export type CommunityGalleryState = {
     completed_at?: string;
   }>;
   generationJobs: CommunityGenerationJob[];
+  codexTasks: Array<{
+    id: string;
+    iteration_number: 1 | 2;
+    is_test: number;
+    status: 'waiting' | 'processing' | 'completed' | 'partial';
+    job_count: number;
+    completed_count: number;
+    processing_count: number;
+    waiting_count: number;
+    failed_count: number;
+    created_at: string;
+  }>;
   generationEvents: CommunityGenerationEvent[];
   creatorDevelopment: CreatorDevelopmentProgress | null;
   notifications: CommunityNotification[];
@@ -301,6 +316,7 @@ export type CommunityGalleryState = {
     joined: number;
   }>;
   aiProvider: 'deepseek' | 'deepseek-pro' | 'gemini' | 'glm' | 'gpt5';
+  communityDevelopmentProvider: 'codex';
   counts: {
     creators: number;
     regularApps: number;

@@ -1819,7 +1819,8 @@ function LegacyIdeaFlowBoard({
     FLOW_START_Y + maximumRows * (FLOW_NODE_HEIGHT + FLOW_ROW_GAP) + 32,
   );
   const hasRunningGeneration = state.generationJobs.some(
-    (job) => job.app_id === app.id && job.status === 'running',
+    (job) => job.app_id === app.id
+      && ['running', 'waiting_codex', 'codex_processing'].includes(job.status),
   );
   const hasActiveDraft = app.draft_kind === 'community'
     && Number(app.draft_iteration_number || 0) > Number(app.community_version_count || 0)
@@ -2706,7 +2707,8 @@ function IdeaFlowBoard({
   };
 
   const hasRunningGeneration = state.generationJobs.some(
-    (job) => job.app_id === app.id && job.status === 'running',
+    (job) => job.app_id === app.id
+      && ['running', 'waiting_codex', 'codex_processing'].includes(job.status),
   );
   const hasActiveDraft = app.draft_kind === 'community'
     && Number(app.draft_iteration_number || 0) > completedIterations
@@ -3580,7 +3582,9 @@ function CommunityDraftPanel({
   ));
   const communityPromptRounds = communityMessages.filter((message) => message.role === 'creator').length;
   if (app.community_version_count >= 2) return null;
-  if (!hasCommunityDraft && latestJob?.status !== 'running' && !canUploadCommunityVersion) return null;
+  if (!hasCommunityDraft
+    && !['running', 'waiting_codex', 'codex_processing'].includes(latestJob?.status || '')
+    && !canUploadCommunityVersion) return null;
 
   const uploadAndPublishCommunityVersion = async (file: File) => {
     if (file.size > 8 * 1024 * 1024) {
@@ -3627,6 +3631,19 @@ function CommunityDraftPanel({
               </li>
             ))}
           </ol>
+        </div>
+      )}
+      {(latestJob?.status === 'waiting_codex' || latestJob?.status === 'codex_processing') && (
+        <div className="async-generation-progress is-codex">
+          {latestJob.status === 'codex_processing'
+            ? <Code2 />
+            : <Clock3 />}
+          <div>
+            <strong>{latestJob.status === 'codex_processing'
+              ? 'Codex 正在处理本轮作品'
+              : '本轮 Codex 任务已创建'}</strong>
+            <span>Codex 完成后，新 HTML 会出现在这里作为草稿；是否发布仍由你决定。</span>
+          </div>
         </div>
       )}
       {canUploadCommunityVersion && (
@@ -4112,6 +4129,7 @@ function HostPanel({
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([]);
   const [downloadingVersionId, setDownloadingVersionId] = useState<number | null>(null);
   const [creatorSortDirection, setCreatorSortDirection] = useState<'none' | 'asc' | 'desc'>('none');
+  const [copiedCodexTaskId, setCopiedCodexTaskId] = useState('');
 
   useEffect(() => {
     setTestCreators(serverTestCreators);
@@ -4122,6 +4140,7 @@ function HostPanel({
     setResetConfirmation('');
     setSelectedAppIds([]);
     setCreatorSortDirection('none');
+    setCopiedCodexTaskId('');
   }, [state.study.id]);
 
   const toggleTestCreator = (code: string) => {
@@ -4193,6 +4212,18 @@ function HostPanel({
         restartable: true,
       };
     }
+    if (job?.status === 'waiting_codex' || job?.status === 'codex_processing') {
+      return {
+        key: job.status === 'waiting_codex' ? 'codex-waiting' : 'codex-processing',
+        label: job.status === 'waiting_codex' ? '等待 Codex' : 'Codex 处理中',
+        detail: job.status === 'waiting_codex'
+          ? '任务已创建，等待 Codex 拉取原作品和入选评论'
+          : 'Codex 已领取任务，完成后会回传为 Creator 待发布草稿',
+        time: job.codex_claimed_at || job.created_at,
+        jobId: job.id,
+        restartable: false,
+      };
+    }
     if (job?.status === 'running' || activeDraft) {
       const latestEvent = job
         ? state.generationEvents
@@ -4223,6 +4254,8 @@ function HostPanel({
     developmentStatusFor(app, 2),
   ]);
   const activeDevelopmentCounts = {
+    codexWaiting: developmentStatuses.filter((status) => status.key === 'codex-waiting').length,
+    codexProcessing: developmentStatuses.filter((status) => status.key === 'codex-processing').length,
     queued: developmentStatuses.filter((status) => status.key === 'queued').length,
     running: developmentStatuses.filter((status) => status.key === 'running').length,
     completed: developmentStatuses.filter((status) => status.key === 'completed').length,
@@ -4241,6 +4274,9 @@ function HostPanel({
     (job) => job.app_id === app.id
       && (!iterationNumber || Number(job.iteration_number) === iterationNumber),
   );
+  const isActiveDevelopmentJob = (status?: string) => (
+    status === 'running' || status === 'waiting_codex' || status === 'codex_processing'
+  );
   const selectedCan = (target: 'development_1' | 'development_2' | 'rollback' | 'retry') => (
     selectedApps.length > 0 && selectedApps.every((app) => {
       const workspace = app.is_test ? testWorkspace : regularWorkspace;
@@ -4250,11 +4286,11 @@ function HostPanel({
       if (target === 'rollback') {
         return ['development_1', 'development_2'].includes(app.flow_stage)
           && app.draft_kind !== 'community'
-          && latestJobFor(app)?.status !== 'running';
+          && !isActiveDevelopmentJob(latestJobFor(app)?.status);
       }
       const iterationNumber = app.flow_stage === 'development_1' ? 1 : app.flow_stage === 'development_2' ? 2 : null;
       const latestJob = iterationNumber ? latestJobFor(app, iterationNumber) : undefined;
-      return Boolean(iterationNumber && latestJob && latestJob.status !== 'running'
+      return Boolean(iterationNumber && latestJob && !isActiveDevelopmentJob(latestJob.status)
         && Number(app.community_version_count) < iterationNumber);
     })
   );
@@ -4263,7 +4299,13 @@ function HostPanel({
     for (const isTest of [true, false]) {
       const appIds = selectedApps.filter((app) => Boolean(app.is_test) === isTest).map((app) => app.id);
       if (appIds.length) {
-        next = await communityGalleryApi.enterDevelopment(clientId, iterationNumber, isTest, appIds);
+        next = await communityGalleryApi.enterDevelopment(
+          clientId,
+          iterationNumber,
+          isTest,
+          appIds,
+          'codex',
+        );
       }
     }
     return next;
@@ -4300,7 +4342,7 @@ function HostPanel({
     <>
     <section className="async-host-panel">
       <header>
-        <div><span className="async-eyebrow">主持人 · 异步研究</span><h2>研究控制与完成进度</h2><p>主持人锁定本轮点赞后，系统会按点赞数加权随机抽取每个应用的开发来源，并立即启动开发任务。</p></div>
+        <div><span className="async-eyebrow">主持人 · 异步研究</span><h2>研究控制与完成进度</h2><p>主持人锁定本轮点赞后，系统按点赞数加权随机抽取开发来源，并为勾选的 App 创建一批 Codex 开发任务。</p></div>
         <div className="async-host-actions">
           <button
             type="button"
@@ -4464,9 +4506,11 @@ function HostPanel({
             <div>
               <span className="async-eyebrow">按 Creator 控制</span>
               <h3>每个 App 的独立流程</h3>
-              <p>V0 发布后自动开放第一轮，V1 发布后自动开放第二轮，V2 发布后自动结束。Host 只需锁定当前轮次并启动开发。</p>
+              <p>V0 发布后自动开放第一轮，V1 发布后自动开放第二轮，V2 发布后自动结束。Host 勾选 App 后按轮次锁定，并把这一批交给 Codex。</p>
             </div>
             <div className="async-development-summary">
+              <span className="is-codex-waiting"><Clock3 /> 等待 Codex {activeDevelopmentCounts.codexWaiting}</span>
+              <span className="is-codex-processing"><Code2 /> Codex 处理中 {activeDevelopmentCounts.codexProcessing}</span>
               <span className="is-queued"><LoaderCircle /> 排队中 {activeDevelopmentCounts.queued}</span>
               <span className="is-running"><LoaderCircle /> 开发中 {activeDevelopmentCounts.running}</span>
               <span className="is-completed"><CheckCircle2 /> 成功 {activeDevelopmentCounts.completed}</span>
@@ -4506,11 +4550,11 @@ function HostPanel({
               <button
                 disabled={Boolean(busy) || !selectedCan('development_1')}
                 onClick={() => action('develop-selected-round-1', () => enterSelectedDevelopment(1))}
-              ><Lock /> 锁定第一轮并开发</button>
+              ><Lock /> 锁定第一轮并创建 Codex 任务</button>
               <button
                 disabled={Boolean(busy) || !selectedCan('development_2')}
                 onClick={() => action('develop-selected-round-2', () => enterSelectedDevelopment(2))}
-              ><Lock /> 锁定第二轮并开发</button>
+              ><Lock /> 锁定第二轮并创建 Codex 任务</button>
               <button
                 disabled={Boolean(busy) || !selectedCan('rollback')}
                 onClick={() => action('rollback-selected-apps', () => (
@@ -4526,6 +4570,42 @@ function HostPanel({
               ><RefreshCw /> 重新开发</button>
             </div>
           </div>
+          {state.codexTasks.length > 0 && (
+            <section className="async-codex-task-list" aria-label="Codex 开发任务">
+              <header>
+                <div><Code2 /><span><strong>Codex 任务</strong><small>复制任务说明发给 Codex；处理结果会回到 Creator 的待发布草稿。</small></span></div>
+              </header>
+              <div>
+                {state.codexTasks.slice(0, 6).map((task) => {
+                  const handoff = [
+                    `请处理社区开发任务 ${task.id}。`,
+                    `平台地址：${window.location.origin}`,
+                    `先运行：npm run codex-task -- pull ${task.id} --url ${window.location.origin}`,
+                    '按任务目录 request.md 的要求，把每个结果保存为 result.html。',
+                    `完成后运行：npm run codex-task -- push ${task.id} --url ${window.location.origin}`,
+                  ].join('\n');
+                  return (
+                    <article key={task.id} className={`is-${task.status}`}>
+                      <div>
+                        <strong>{task.is_test ? '测试' : '正式'} · 第 {task.iteration_number} 轮 · {task.job_count} 个 App</strong>
+                        <code>{task.id}</code>
+                        <small>已回传 {task.completed_count}/{task.job_count} · {formatDate(task.created_at)}</small>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(handoff).then(() => {
+                            setCopiedCodexTaskId(task.id);
+                            window.setTimeout(() => setCopiedCodexTaskId(''), 1800);
+                          });
+                        }}
+                      ><Code2 /> {copiedCodexTaskId === task.id ? '已复制' : '复制给 Codex'}</button>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
           <div className="async-development-table" role="table" aria-label="应用开发状态">
             <div className="async-development-table-heading" role="row">
               <span role="columnheader">选择 / Creator / 当前流程</span>
@@ -4588,6 +4668,8 @@ function HostPanel({
                     >
                       <span>
                         {status.key === 'running' && <LoaderCircle className="spin" />}
+                        {status.key === 'codex-waiting' && <Clock3 />}
+                        {status.key === 'codex-processing' && <Code2 />}
                         {status.key === 'completed' && <CheckCircle2 />}
                         {status.key === 'failed' && <X />}
                         {status.key === 'pending' && <Workflow />}

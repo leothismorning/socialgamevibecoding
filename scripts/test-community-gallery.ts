@@ -562,8 +562,41 @@ state = gallery.createSynthesis({
   content: 'A recreated second-round combined direction.',
   sources: [{ type: 'comment', id: recreatedSecondRoundComment.id }],
 });
-startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 2, true, [testApp.id]);
-gallery.completeCommunityGeneration(startedDevelopment.jobIds[0], html('Test App One V2'), 'Second community version');
+startedDevelopment = gallery.enterCommunityDevelopmentStage(
+  hostClient,
+  2,
+  true,
+  [testApp.id],
+  'codex',
+);
+assert.ok(startedDevelopment.codexTaskId);
+let codexTask = gallery.getCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId);
+assert.equal(codexTask.status, 'waiting');
+assert.equal(codexTask.itemCount, 1);
+assert.equal(codexTask.items[0].status, 'waiting_codex');
+assert.match(codexTask.fixedPrompt, /保留原文件/);
+assert.match(codexTask.items[0].baseCode, /Test App One V1/);
+assert.ok(codexTask.items[0].selectedIdeas.length >= 1);
+codexTask = gallery.claimCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId);
+assert.equal(codexTask.status, 'processing');
+assert.equal(codexTask.items[0].status, 'codex_processing');
+assert.throws(
+  () => gallery.submitCodexCommunityDevelopmentResult(
+    startedDevelopment.codexTaskId,
+    startedDevelopment.jobIds[0],
+    '<main>not a complete document</main>',
+  ),
+  /完整 html/,
+);
+codexTask = gallery.submitCodexCommunityDevelopmentResult(
+  startedDevelopment.codexTaskId,
+  startedDevelopment.jobIds[0],
+  html('Test App One V2'),
+  'Second community version from Codex',
+);
+assert.equal(codexTask.status, 'completed');
+state = gallery.getCommunityGalleryState(hostClient);
+assert.equal(state.codexTasks[0].completed_count, 1);
 state = gallery.publishCommunityVersion(client(1), testApp.id);
 currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'completed');

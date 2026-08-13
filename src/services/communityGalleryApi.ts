@@ -205,10 +205,11 @@ export const communityGalleryApi = {
     iterationNumber: 1 | 2,
     isTest: boolean,
     appIds?: string[],
+    executionProvider: 'codex' | 'deepseek-pro' = 'codex',
   ) =>
     request('/api/community-gallery/study/enter-development', {
       method: 'POST',
-      body: body({ clientId, iterationNumber, isTest, appIds }),
+      body: body({ clientId, iterationNumber, isTest, appIds, executionProvider }),
     }),
   controlAppFlows: (
     clientId: string,
