@@ -32,6 +32,7 @@ import {
   publishInitialVersion,
   publishProjectDraft,
   replayCelebratedContributionNotifications,
+  replacePublishedCommunityVersionHtml,
   rollbackFirstCommunityVersion,
   recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
@@ -624,6 +625,20 @@ export function registerCommunityGalleryRoutes(app: Express) {
       res.json(uploadAndPublishCommunityVersion(
         clientIdFrom(req),
         String(req.params.appId),
+        String(req.body?.code || ''),
+        String(req.body?.filename || ''),
+      ));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/apps/:appId/versions/:versionId/replace-html', (req, res) => {
+    try {
+      res.json(replacePublishedCommunityVersionHtml(
+        clientIdFrom(req),
+        String(req.params.appId),
+        Number(req.params.versionId),
         String(req.body?.code || ''),
         String(req.body?.filename || ''),
       ));

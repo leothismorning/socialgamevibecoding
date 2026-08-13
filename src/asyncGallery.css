@@ -504,6 +504,10 @@
 .async-version-tabs { display: flex; gap: 5px; padding: 4px; border-radius: 11px; background: #edf1f6; }
 .async-version-tabs button { min-height: 34px; padding: 0 11px; color: #6a788d; border: 0; border-radius: 8px; background: transparent; font-size: 14px; font-weight: 900; cursor: pointer; }
 .async-version-tabs button.is-active { color: #fff; background: #182a49; box-shadow: 0 5px 14px rgba(24, 42, 73, .18); }
+.async-replace-community-version { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; color: #3561bd; border: 1px solid #bfd0f3; border-radius: 10px; background: #f4f8ff; font-size: 14px; font-weight: 900; cursor: pointer; }
+.async-replace-community-version:hover { border-color: #84a4e5; background: #edf4ff; }
+.async-replace-community-version:disabled { cursor: not-allowed; opacity: .55; }
+.async-replace-community-version svg { width: 15px; }
 .async-detail-preview { height: 720px; overflow: hidden; margin-bottom: 24px; border: 1px solid #d9e2ed; border-radius: 18px; background: #edf2f7; }
 
 .async-flow-section {

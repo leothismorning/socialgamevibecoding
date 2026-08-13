@@ -384,6 +384,48 @@ assert.equal(gallery.getCommunityPreview(client(2), secondTestApp.id, 'community
 assert.equal(state.generationJobs.find(
   (job: any) => Number(job.id) === Number(uploadV2Development.jobIds[0]),
 )?.status, 'cancelled');
+assert.throws(
+  () => gallery.replacePublishedCommunityVersionHtml(
+    client(1),
+    secondTestApp.id,
+    uploadedV2.id,
+    html('Unauthorized Replacement V2'),
+    'unauthorized-replacement-v2.html',
+  ),
+  /只有该应用的创作者/,
+);
+const correctedUploadedV2Code = html('Test App Two Corrected Uploaded V2');
+state = gallery.replacePublishedCommunityVersionHtml(
+  client(2),
+  secondTestApp.id,
+  uploadedV2.id,
+  correctedUploadedV2Code,
+  'test-app-two-v2-corrected.html',
+);
+const correctedUploadedV2App = state.apps.find((app: any) => app.id === secondTestApp.id);
+const correctedUploadedV2 = state.versions.find((version: any) => (
+  version.app_id === secondTestApp.id
+  && version.kind === 'community'
+  && Number(version.version_number) === 3
+));
+assert.equal(Number(correctedUploadedV2.id), Number(uploadedV2.id));
+assert.equal(correctedUploadedV2.selection_reason, 'creator_html_upload');
+assert.equal(Number(correctedUploadedV2App.community_version_count), 2);
+assert.equal(correctedUploadedV2App.flow_stage, 'completed');
+assert.equal(
+  gallery.getCommunityPreview(client(2), secondTestApp.id, 'community'),
+  correctedUploadedV2Code,
+);
+assert.throws(
+  () => gallery.replacePublishedCommunityVersionHtml(
+    client(2),
+    secondTestApp.id,
+    uploadedV1.id,
+    html('Replacing An Old Version Must Fail'),
+    'old-v1.html',
+  ),
+  /当前最新/,
+);
 
 state = gallery.saveCommunityComment({
   clientId: client(2),

@@ -1157,7 +1157,7 @@ function GalleryVersionCard({
           version={version}
           title={`${app.title} ${isCommunity ? `社区版本 ${app.community_version_count}` : '初始版本'}`}
           compact
-          cacheKey={String(isCommunity ? app.community_version_id : app.initial_version_id || '')}
+          cacheKey={`${isCommunity ? app.community_version_id : app.initial_version_id || ''}-${state.serverNow}`}
         />
       </section>
       <div className="async-card-body">
@@ -3882,6 +3882,7 @@ function AppDetail({
     (version) => Number(version.id) === Number(viewVersionId),
   ) || latestVersion;
   const [sourceSynthesis, setSourceSynthesis] = useState<CommunitySynthesis | null>(null);
+  const replaceCommunityVersionInput = useRef<HTMLInputElement>(null);
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const canLikeApp = state.viewer?.role !== 'host'
     && !isOwner
@@ -3894,6 +3895,42 @@ function AppDetail({
   const latestDevelopmentJob = state.generationJobs
     .filter((job) => job.app_id === app.id)
     .sort((left, right) => Number(right.iteration_number) - Number(left.iteration_number))[0];
+  const canReplaceLatestCommunityVersion = Boolean(
+    isOwner
+    && viewedVersion?.kind === 'community'
+    && Number(viewedVersion.id) === Number(latestVersion?.id)
+    && (
+      (Number(viewedVersion.version_number) === 2 && app.flow_stage === 'round_2')
+      || (Number(viewedVersion.version_number) === 3 && app.flow_stage === 'completed')
+    ),
+  );
+
+  const replaceLatestCommunityVersion = async (file: File) => {
+    if (!viewedVersion || !canReplaceLatestCommunityVersion) return;
+    if (file.size > 8 * 1024 * 1024) {
+      window.alert('HTML 文件不能超过 8MB。');
+      return;
+    }
+    const code = await file.text();
+    if (!/(?:<!doctype\s+html|<html\b)/i.test(code) || !/<\/html\s*>/i.test(code)) {
+      window.alert('请选择包含完整 html 结构的 HTML 文件。');
+      return;
+    }
+    const iterationNumber = Number(viewedVersion.version_number) - 1;
+    if (!window.confirm(
+      `确认用“${file.name}”替换社区版本 ${iterationNumber} 吗？\n\n版本编号、评论、贡献记录和当前流程都会保留，仅替换作品代码。`,
+    )) return;
+    await action(
+      `replace-community-version-${viewedVersion.id}`,
+      () => communityGalleryApi.replaceCommunityVersionHtml(
+        clientId,
+        app.id,
+        viewedVersion.id,
+        code,
+        file.name,
+      ),
+    );
+  };
 
   useEffect(() => {
     setViewVersionId(Number(latestVersion?.id || app.initial_version_id));
@@ -3987,6 +4024,32 @@ function AppDetail({
               </button>
             ))}
           </div>
+          {canReplaceLatestCommunityVersion && (
+            <>
+              <input
+                ref={replaceCommunityVersionInput}
+                type="file"
+                accept=".html,.htm,text/html"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.currentTarget.value = '';
+                  if (file) void replaceLatestCommunityVersion(file);
+                }}
+              />
+              <button
+                type="button"
+                className="async-replace-community-version"
+                disabled={Boolean(busy)}
+                onClick={() => replaceCommunityVersionInput.current?.click()}
+              >
+                <Upload />
+                {busy === `replace-community-version-${viewedVersion?.id}`
+                  ? '正在重新上传…'
+                  : '重新上传当前版本'}
+              </button>
+            </>
+          )}
         </div>
       </header>
       <div className="async-detail-preview">
@@ -3997,7 +4060,7 @@ function AppDetail({
             version={viewedVersion.kind}
             versionId={viewedVersion.id}
             title={`${app.title} ${viewedVersion.kind === 'initial' ? '初始版本' : '社区版本'} ${viewedVersion.version_number}`}
-            cacheKey={String(viewedVersion.id)}
+            cacheKey={`${viewedVersion.id}-${state.serverNow}`}
           />
         )}
       </div>

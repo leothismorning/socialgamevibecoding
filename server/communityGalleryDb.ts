@@ -3826,6 +3826,63 @@ export function uploadAndPublishFirstCommunityVersion(
   return uploadAndPublishCommunityVersion(clientId, appId, code, filename);
 }
 
+export function replacePublishedCommunityVersionHtml(
+  clientId: string,
+  appId: string,
+  versionId: number,
+  code: string,
+  filename = '',
+) {
+  const { viewer, app } = ownedApp(clientId, appId);
+  const currentStudy = requireOpenStudy(Number(app.is_test));
+  if (!code.trim() || Buffer.byteLength(code, 'utf8') > 8 * 1024 * 1024) {
+    throw new Error('HTML 文件不能为空且不能超过 8MB。');
+  }
+  if (!/(?:<!doctype\s+html|<html\b)/i.test(code) || !/<\/html\s*>/i.test(code)) {
+    throw new Error('请选择包含完整 html 结构的 HTML 文件。');
+  }
+  const version = db.prepare(`
+    SELECT * FROM vg_async_versions
+    WHERE study_id = ? AND app_id = ? AND id = ? AND kind = 'community'
+  `).get(currentStudy.id, app.id, versionId) as any;
+  if (!version) throw new Error('要重新上传的社区版本不存在。');
+  if (Number(app.community_version_id) !== Number(version.id)) {
+    throw new Error('只能重新上传当前最新的社区版本。');
+  }
+  const iterationNumber = Number(version.version_number) - 1;
+  const expectedStage = iterationNumber === 1 ? 'round_2' : iterationNumber === 2 ? 'completed' : null;
+  if (!expectedStage || appFlowStage(app) !== expectedStage) {
+    throw new Error(iterationNumber === 1
+      ? '第二轮开发已经锁定，不能再替换作为开发基础的社区版本 1。'
+      : '当前社区版本不能重新上传。');
+  }
+  const normalizedFilename = filename.trim().slice(0, 180);
+  const timestamp = now();
+  const summary = normalizedFilename
+    ? `创作者重新上传 ${normalizedFilename}，替换社区版本 ${iterationNumber}。`
+    : `创作者重新上传 HTML，替换社区版本 ${iterationNumber}。`;
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE vg_async_versions
+      SET code = ?, summary = ?, selection_reason = 'creator_html_upload'
+      WHERE study_id = ? AND app_id = ? AND id = ?
+    `).run(code, summary, currentStudy.id, app.id, version.id);
+    db.prepare(`
+      UPDATE vg_async_apps SET updated_at = ?
+      WHERE study_id = ? AND id = ?
+    `).run(timestamp, currentStudy.id, app.id);
+  });
+  transaction();
+  recordEvent(viewer.code, 'replace_published_community_version_html', 'version', version.id, {
+    appId: app.id,
+    filename: normalizedFilename || null,
+    iterationNumber,
+    preservedVersionId: Number(version.id),
+    preservedFlowStage: expectedStage,
+  });
+  return getCommunityGalleryState(clientId);
+}
+
 export function rollbackFirstCommunityVersion(clientId: string, appId: string) {
   const { viewer, app } = ownedApp(clientId, appId);
   const currentStudy = requireOpenStudy(Number(app.is_test));

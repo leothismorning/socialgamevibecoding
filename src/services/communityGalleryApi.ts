@@ -165,6 +165,16 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, code, filename }),
     }),
+  replaceCommunityVersionHtml: (
+    clientId: string,
+    appId: string,
+    versionId: number,
+    code: string,
+    filename: string,
+  ) => request(`/api/community-gallery/apps/${appId}/versions/${versionId}/replace-html`, {
+    method: 'POST',
+    body: body({ clientId, code, filename }),
+  }),
   rollbackCommunityV1: (clientId: string, appId: string) =>
     request(`/api/community-gallery/apps/${appId}/rollback-community-v1`, {
       method: 'POST',
