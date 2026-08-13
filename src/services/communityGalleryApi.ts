@@ -150,6 +150,11 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, commentId }),
     }),
+  cancelWildcard: (clientId: string, appId: string) =>
+    request(`/api/community-gallery/apps/${appId}/wildcard`, {
+      method: 'DELETE',
+      body: body({ clientId }),
+    }),
   publishCommunity: (clientId: string, appId: string) =>
     request(`/api/community-gallery/apps/${appId}/publish-community`, {
       method: 'POST',

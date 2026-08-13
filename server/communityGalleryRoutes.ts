@@ -6,6 +6,7 @@ import {
   type DevelopmentAgentProgress,
 } from './developmentAgent.js';
 import {
+  cancelCommunityWildcard,
   closeAsyncCommunityStudy,
   claimCodexCommunityDevelopmentTask,
   controlCommunityAppFlows,
@@ -634,6 +635,14 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/apps/:appId/publish-community', (req, res) => {
     try {
       res.json(publishCommunityVersion(clientIdFrom(req), String(req.params.appId)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.delete('/api/community-gallery/apps/:appId/wildcard', (req, res) => {
+    try {
+      res.json(cancelCommunityWildcard(clientIdFrom(req), String(req.params.appId)));
     } catch (error) {
       sendError(res, error);
     }

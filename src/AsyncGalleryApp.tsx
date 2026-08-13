@@ -2192,6 +2192,10 @@ function IdeaFlowBoard({
         && version.kind === 'community'
         && Number(version.version_number) === 2
       ))?.id || 0);
+  const wildcardEligibleVersionIds = new Set([
+    Number(app.initial_version_id || 0),
+    ...(openLayer === 2 ? [developmentBaseVersionId] : []),
+  ].filter(Boolean));
 
   const targetSyntheses = state.syntheses
     .filter((synthesis) => synthesis.target_app_id === app.id)
@@ -2597,7 +2601,7 @@ function IdeaFlowBoard({
     && node.sourceType === 'comment'
     && node.comment?.target_type === 'app'
     && !node.comment.deleted_at
-    && Number(node.comment.version_id || 0) === developmentBaseVersionId
+    && wildcardEligibleVersionIds.has(Number(node.comment.version_id || 0))
   );
   const scheduleSelectionAnimation = (callback: () => void, delay: number) => {
     const timer = window.setTimeout(callback, delay);
@@ -2741,6 +2745,10 @@ function IdeaFlowBoard({
     && !ownWildcard
     && wildcardStageIsOpen
     && !selectionActive;
+  const canCancelWildcard = isOwner
+    && Boolean(ownWildcard)
+    && Number(ownWildcard?.iteration_number || 0) === Number(openLayer)
+    && wildcardStageIsOpen;
 
   const submitComment = async () => {
     await action('flow-comment', async () => {
@@ -2851,7 +2859,7 @@ function IdeaFlowBoard({
             <button
               className="async-primary async-development-start"
               disabled={Boolean(busy)}
-              title="使用一次性万能卡，指定一条当前版本的普通评论进入本轮开发"
+              title="使用一次性万能卡，指定第一轮或第二轮的一条普通评论进入本轮开发"
               onClick={() => {
                 setCommentComposerOpen(false);
                 setSelectionLayer(null);
@@ -2863,7 +2871,18 @@ function IdeaFlowBoard({
             ><Sparkles /> 使用万能卡</button>
           )}
           {isOwner && ownWildcard && (
-            <span className="async-wildcard-status"><Check /> 万能卡已用于第 {ownWildcard.iteration_number} 轮</span>
+            <div className="async-wildcard-status">
+              <span><Check /> 万能卡已为第 {ownWildcard.iteration_number} 轮开发选定评论</span>
+              {canCancelWildcard && (
+                <button
+                  disabled={Boolean(busy)}
+                  title="开发开始前可随时取消，取消后仍可重新选择"
+                  onClick={() => void action('cancel-wildcard', () => (
+                    communityGalleryApi.cancelWildcard(clientId, app.id)
+                  ))}
+                ><X /> 取消选择</button>
+              )}
+            </div>
           )}
           {canParticipate && (
             <button onClick={openBasket}>
@@ -2884,7 +2903,7 @@ function IdeaFlowBoard({
 
       {wildcardSelectionActive && (
         <div className="async-wildcard-picker-note">
-          <span><Sparkles /> 点击当前版本的一条普通评论，使用万能卡保证它进入本轮开发。</span>
+          <span><Sparkles /> 点击第一轮或第二轮的一条普通评论，使用万能卡保证它进入本轮开发。</span>
           <button onClick={() => setWildcardSelectionActive(false)}><X /> 取消</button>
         </div>
       )}

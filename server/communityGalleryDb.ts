@@ -2230,17 +2230,10 @@ function scoredSynthesisCandidates(appId: string, layer: 1 | 2) {
   });
 }
 
-function scoredDevelopmentCandidates(appId: string, iterationNumber: 1 | 2) {
-  const app = appById(appId);
-  if (!app) return [];
-  const eligibleVersionId = iterationNumber === 1
-    ? Number(app.initial_version_id)
-    : Number(
-        versionsForApp(appId).find(
-          (version) => version.kind === 'community' && Number(version.version_number) === 2,
-        )?.id || 0,
-      );
-  if (!eligibleVersionId) return [];
+function scoredAppCommentCandidates(appId: string, eligibleVersionIds: number[]) {
+  const versionIds = [...new Set(eligibleVersionIds.map(Number).filter(Boolean))];
+  if (!versionIds.length) return [];
+  const placeholders = versionIds.map(() => '?').join(',');
   const commentCandidates = db.prepare(`
     SELECT c.*,
       'comment' AS source_type,
@@ -2252,9 +2245,56 @@ function scoredDevelopmentCandidates(appId: string, iterationNumber: 1 | 2) {
       ON l.study_id = c.study_id AND l.comment_id = c.id
     WHERE c.study_id = ? AND c.app_id = ?
       AND c.target_type = 'app' AND c.deleted_at IS NULL
-      AND c.version_id = ?
+      AND c.version_id IN (${placeholders})
     GROUP BY c.id
-  `).all(study().id, appId, eligibleVersionId) as any[];
+  `).all(study().id, appId, ...versionIds) as any[];
+  return commentCandidates.map((candidate) => ({
+    ...candidate,
+    title: `普通评论 · ${candidate.author_code}`,
+    source_popularity_json: JSON.stringify({
+      like_count: Number(candidate.score || 0),
+      source_count: 0,
+    }),
+  }));
+}
+
+function wildcardEligibleVersionIds(appId: string, iterationNumber: 1 | 2) {
+  const app = appById(appId);
+  if (!app) return [];
+  const versionIds = [Number(app.initial_version_id || 0)];
+  if (iterationNumber === 2) {
+    versionIds.push(Number(
+      versionsForApp(appId).find(
+        (version) => version.kind === 'community' && Number(version.version_number) === 2,
+      )?.id || 0,
+    ));
+  }
+  return versionIds.filter(Boolean);
+}
+
+function scoredWildcardCommentCandidate(
+  appId: string,
+  iterationNumber: 1 | 2,
+  commentId: number,
+) {
+  return scoredAppCommentCandidates(
+    appId,
+    wildcardEligibleVersionIds(appId, iterationNumber),
+  ).find((candidate) => Number(candidate.source_id) === Number(commentId));
+}
+
+function scoredDevelopmentCandidates(appId: string, iterationNumber: 1 | 2) {
+  const app = appById(appId);
+  if (!app) return [];
+  const eligibleVersionId = iterationNumber === 1
+    ? Number(app.initial_version_id)
+    : Number(
+        versionsForApp(appId).find(
+          (version) => version.kind === 'community' && Number(version.version_number) === 2,
+        )?.id || 0,
+      );
+  if (!eligibleVersionId) return [];
+  const commentCandidates = scoredAppCommentCandidates(appId, [eligibleVersionId]);
   const synthesisCandidates = db.prepare(`
     SELECT s.*,
       'synthesis' AS source_type,
@@ -2275,14 +2315,7 @@ function scoredDevelopmentCandidates(appId: string, iterationNumber: 1 | 2) {
     GROUP BY s.id
   `).all(study().id, appId, iterationNumber, eligibleVersionId) as any[];
   return [
-    ...commentCandidates.map((candidate) => ({
-      ...candidate,
-      title: `普通评论 · ${candidate.author_code}`,
-      source_popularity_json: JSON.stringify({
-        like_count: Number(candidate.score || 0),
-        source_count: 0,
-      }),
-    })),
+    ...commentCandidates,
     ...synthesisCandidates.map((candidate) => ({
       ...candidate,
       source_popularity_json: JSON.stringify({
@@ -2335,11 +2368,9 @@ export function useCommunityWildcard(clientId: string, appId: string, commentId:
     throw new Error('万能卡只能用于已发布的应用。');
   }
   const iterationNumber = requireAppRoundOpen(app);
-  const eligibleComment = scoredDevelopmentCandidates(app.id, iterationNumber as 1 | 2).find((candidate) => (
-    candidate.source_type === 'comment' && Number(candidate.source_id) === Number(commentId)
-  ));
+  const eligibleComment = scoredWildcardCommentCandidate(app.id, iterationNumber, commentId);
   if (!eligibleComment) {
-    throw new Error('万能卡只能选择当前版本下的一条普通评论。');
+    throw new Error('万能卡只能选择本应用第一轮或第二轮的一条普通评论。');
   }
   const existing = db.prepare(`
     SELECT 1 FROM vg_async_wildcards WHERE study_id = ? AND creator_code = ?
@@ -2393,38 +2424,41 @@ export function enterCommunityDevelopmentStage(
   `).get(currentStudy.id, app.id));
   if (runningApps.length) throw new Error(`所选应用中有 ${runningApps.length} 个仍在开发中。`);
 
-  const candidatesByApp = publishedApps.map((app) => ({
-    app,
-    candidates: scoredDevelopmentCandidates(app.id, iterationNumber),
-  }));
+  const candidatesByApp = publishedApps.map((app) => {
+    const candidates = scoredDevelopmentCandidates(app.id, iterationNumber);
+    const wildcard = db.prepare(`
+      SELECT * FROM vg_async_wildcards
+      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+    `).get(currentStudy.id, app.id, iterationNumber) as any;
+    const wildcardSource = wildcard
+      ? scoredWildcardCommentCandidate(app.id, iterationNumber, Number(wildcard.source_id))
+      : undefined;
+    if (wildcard && !wildcardSource) {
+      throw new Error(`《${app.title}》的万能卡评论已不符合本轮开发条件。`);
+    }
+    return { app, candidates, wildcard, wildcardSource };
+  });
   if (iterationNumber === 2) {
     const missingFirstVersion = publishedApps.filter((app) => communityIterationCount(app.id) < 1);
     if (missingFirstVersion.length) {
       throw new Error(`仍有 ${missingFirstVersion.length} 个应用未发布社区版本 1。`);
     }
   }
-  const missingCandidates = candidatesByApp.filter((entry) => entry.candidates.length === 0);
+  const missingCandidates = candidatesByApp.filter((entry) => (
+    entry.candidates.length === 0 && !entry.wildcardSource
+  ));
   if (missingCandidates.length) {
     throw new Error(iterationNumber === 2
       ? `仍有 ${missingCandidates.length} 个应用没有针对社区版本 1 的第二轮普通评论或第二轮综合评论。`
       : `仍有 ${missingCandidates.length} 个应用没有可参与点赞评选的第一轮评论。`);
   }
 
-  const winners = candidatesByApp.map(({ app, candidates }) => {
-    const wildcard = db.prepare(`
-      SELECT * FROM vg_async_wildcards
-      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
-    `).get(currentStudy.id, app.id, iterationNumber) as any;
-    const wildcardSource = wildcard
-      ? candidates.find((candidate) => (
-          candidate.source_type === 'comment'
-          && Number(candidate.source_id) === Number(wildcard.source_id)
-        ))
-      : undefined;
-    if (wildcard && !wildcardSource) {
-      throw new Error(`《${app.title}》的万能卡评论已不符合本轮开发条件。`);
-    }
-    const randomCandidates = wildcardSource
+  const winners = candidatesByApp.map(({ app, candidates, wildcard, wildcardSource }) => {
+    const wildcardWasRandomCandidate = Boolean(wildcardSource && candidates.some((candidate) => (
+      candidate.source_type === 'comment'
+      && Number(candidate.source_id) === Number(wildcardSource.source_id)
+    )));
+    const randomCandidates = wildcardSource && wildcardWasRandomCandidate
       ? candidates.filter((candidate) => !(
           candidate.source_type === 'comment'
           && Number(candidate.source_id) === Number(wildcardSource.source_id)
@@ -2451,13 +2485,13 @@ export function enterCommunityDevelopmentStage(
           selected_source_type: null,
           selected_source_id: null,
         }),
-        wildcard_excluded_from_random_pool: Boolean(wildcardSource),
-        random_pool_exhausted: Boolean(wildcardSource && !randomSelection),
+        wildcard_excluded_from_random_pool: wildcardWasRandomCandidate,
+        random_pool_exhausted: Boolean(wildcardWasRandomCandidate && !randomSelection),
         wildcard: wildcard ? {
           creator_code: wildcard.creator_code,
           source_type: 'comment',
           source_id: Number(wildcard.source_id),
-          excluded_from_random_pool: true,
+          excluded_from_random_pool: wildcardWasRandomCandidate,
         } : null,
         developed_sources: sources.map((source) => ({
           source_type: source.source_type,
@@ -2465,7 +2499,7 @@ export function enterCommunityDevelopmentStage(
         })),
       }),
     };
-    return { app, winner, sources };
+    return { app, winner, sources, wildcardSource };
   });
   const timestamp = now();
   let notificationCount = 0;
@@ -2544,7 +2578,7 @@ export function enterCommunityDevelopmentStage(
   });
   transaction();
   const codexTaskId = executionProvider === 'codex' ? randomUUID() : null;
-  const jobIds = winners.map(({ app, winner, sources }) => createCommunityGenerationJob({
+  const jobIds = winners.map(({ app, winner, sources, wildcardSource }) => createCommunityGenerationJob({
     actorCode: viewer.code,
     app,
     sources: sources.map((source) => ({
@@ -2552,6 +2586,9 @@ export function enterCommunityDevelopmentStage(
       id: Number(source.source_id),
     })),
     creatorInstruction: sources.map((source) => source.content).filter(Boolean).join('\n\n'),
+    allowedCrossVersionCommentIds: wildcardSource
+      ? [Number(wildcardSource.source_id)]
+      : [],
     selectionReason: 'host_weighted_random_draw',
     automated: true,
     executionProvider,
@@ -2842,7 +2879,7 @@ export function deleteCommunityComment(clientId: string, commentId: number) {
     SELECT 1 FROM vg_async_wildcards
     WHERE study_id = ? AND source_id = ?
   `).get(study().id, commentId);
-  if (wildcard) throw new Error('这条评论已被万能卡锁定，等待进入开发后才能删除。');
+  if (wildcard) throw new Error('这条评论已被万能卡选中，请先由应用创作者取消万能卡选择。');
   const { app } = accessibleApp(clientId, comment.app_id);
   requireAppRoundOpen(app);
   const timestamp = now();
@@ -3205,6 +3242,7 @@ function createCreatorDevelopmentBrief(input: {
   baseVersionId: number;
   sources: DevelopmentSourceInput[];
   content: string;
+  allowedCrossVersionCommentIds?: number[];
 }) {
   const content = input.content.trim();
   if (!content) throw new Error('请先填写开发提示词。');
@@ -3226,10 +3264,21 @@ function createCreatorDevelopmentBrief(input: {
   if (resolved.some((source) => !source.record)) {
     throw new Error('所选评论已不存在，请重新选择。');
   }
+  const allowedCrossVersionCommentIds = new Set(
+    (input.allowedCrossVersionCommentIds || []).map(Number).filter(Boolean),
+  );
+  const eligibleWildcardVersionIds = new Set(
+    wildcardEligibleVersionIds(input.app.id, input.iterationNumber),
+  );
   const invalidSource = resolved.find((source) => {
     const record = source.record!;
     if (record.app_id !== input.app.id) return true;
-    if (Number(record.version_id || 0) !== input.baseVersionId) return true;
+    if (Number(record.version_id || 0) !== input.baseVersionId) {
+      const isAllowedWildcardComment = source.type === 'comment'
+        && allowedCrossVersionCommentIds.has(Number(source.id))
+        && eligibleWildcardVersionIds.has(Number(record.version_id || 0));
+      if (!isAllowedWildcardComment) return true;
+    }
     if (source.type === 'synthesis') {
       const synthesis = synthesisById(Number(source.id));
       return !synthesis
@@ -3305,6 +3354,7 @@ function createCommunityGenerationJob(input: {
   automated?: boolean;
   executionProvider?: CommunityDevelopmentProvider;
   codexTaskId?: string | null;
+  allowedCrossVersionCommentIds?: number[];
 }) {
   const currentStudy = requireOpenStudy(Number(input.app.is_test));
   if (currentStudy.status !== 'active') {
@@ -3347,6 +3397,7 @@ function createCommunityGenerationJob(input: {
       baseVersionId,
       sources: input.sources,
       content: input.creatorInstruction,
+      allowedCrossVersionCommentIds: input.allowedCrossVersionCommentIds,
     });
     sourceType = 'synthesis';
   }
@@ -4102,6 +4153,29 @@ export function replacePublishedCommunityVersionHtml(
     iterationNumber,
     preservedVersionId: Number(version.id),
     preservedFlowStage: expectedStage,
+  });
+  return getCommunityGalleryState(clientId);
+}
+
+export function cancelCommunityWildcard(clientId: string, appId: string) {
+  const { viewer, app } = ownedApp(clientId, appId);
+  const currentStudy = requireOpenStudy(Number(app.is_test));
+  const wildcard = db.prepare(`
+    SELECT * FROM vg_async_wildcards
+    WHERE study_id = ? AND creator_code = ? AND app_id = ?
+  `).get(currentStudy.id, viewer.code, app.id) as any;
+  if (!wildcard) throw new Error('当前没有已选择的万能卡评论。');
+  const iterationNumber = requireAppRoundOpen(app);
+  if (Number(wildcard.iteration_number) !== iterationNumber) {
+    throw new Error('本轮开发已经开始，不能再取消万能卡选择。');
+  }
+  db.prepare(`
+    DELETE FROM vg_async_wildcards
+    WHERE study_id = ? AND creator_code = ? AND app_id = ?
+  `).run(currentStudy.id, viewer.code, app.id);
+  recordEvent(viewer.code, 'cancel_community_wildcard', 'comment', wildcard.source_id, {
+    appId: app.id,
+    iterationNumber,
   });
   return getCommunityGalleryState(clientId);
 }

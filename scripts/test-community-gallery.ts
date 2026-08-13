@@ -446,6 +446,21 @@ state = gallery.saveCommunityComment({
 });
 const firstRoundComment = state.comments.find((comment: any) => comment.content === 'A test-only comment.');
 assert.ok(firstRoundComment);
+state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
+let selectedWildcard = state.wildcards.find((wildcard: any) => wildcard.app_id === testApp.id);
+assert.ok(selectedWildcard);
+assert.equal(Number(selectedWildcard.iteration_number), 1);
+assert.equal(Number(selectedWildcard.source_id), Number(firstRoundComment.id));
+assert.throws(
+  () => gallery.cancelCommunityWildcard(client(2), testApp.id),
+  /只有该应用的创作者/,
+);
+state = gallery.cancelCommunityWildcard(client(1), testApp.id);
+assert.equal(state.wildcards.some((wildcard: any) => wildcard.app_id === testApp.id), false);
+assert.throws(
+  () => gallery.cancelCommunityWildcard(client(1), testApp.id),
+  /没有已选择的万能卡评论/,
+);
 state = gallery.createSynthesis({
   clientId: client(2),
   targetAppId: testApp.id,
@@ -555,6 +570,20 @@ const recreatedSecondRoundComment = state.comments.find(
   (comment: any) => comment.content === 'A recreated second-round comment.',
 );
 assert.ok(recreatedSecondRoundComment);
+// During round two, the wildcard may target either an earlier V0 comment or a
+// current V1 comment. Cancelling before development returns the card so it can
+// be selected again.
+state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
+selectedWildcard = state.wildcards.find((wildcard: any) => wildcard.app_id === testApp.id);
+assert.equal(Number(selectedWildcard?.iteration_number), 2);
+assert.equal(Number(selectedWildcard?.source_id), Number(firstRoundComment.id));
+state = gallery.cancelCommunityWildcard(client(1), testApp.id);
+assert.equal(state.wildcards.some((wildcard: any) => wildcard.app_id === testApp.id), false);
+state = gallery.useCommunityWildcard(client(1), testApp.id, recreatedSecondRoundComment.id);
+selectedWildcard = state.wildcards.find((wildcard: any) => wildcard.app_id === testApp.id);
+assert.equal(Number(selectedWildcard?.source_id), Number(recreatedSecondRoundComment.id));
+state = gallery.cancelCommunityWildcard(client(1), testApp.id);
+state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
 state = gallery.createSynthesis({
   clientId: client(2),
   targetAppId: testApp.id,
@@ -577,6 +606,14 @@ assert.equal(codexTask.items[0].status, 'waiting_codex');
 assert.match(codexTask.fixedPrompt, /保留原文件/);
 assert.match(codexTask.items[0].baseCode, /Test App One V1/);
 assert.ok(codexTask.items[0].selectedIdeas.length >= 1);
+assert.ok(codexTask.items[0].selectedIdeas.some(
+  (idea: any) => idea.sourceType === 'comment'
+    && Number(idea.sourceId) === Number(firstRoundComment.id),
+), 'a first-round wildcard comment must remain in the second-round development input');
+assert.throws(
+  () => gallery.cancelCommunityWildcard(client(1), testApp.id),
+  /尚未开启.*第二轮|开发已经开始|评论流程/,
+);
 codexTask = gallery.claimCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId);
 assert.equal(codexTask.status, 'processing');
 assert.equal(codexTask.items[0].status, 'codex_processing');

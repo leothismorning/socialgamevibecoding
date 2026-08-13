@@ -549,7 +549,10 @@
 .async-flow-heading-actions svg { width: 14px; }
 .async-flow-heading-actions strong { min-width: 19px; height: 19px; display: grid; place-items: center; color: #fff; border-radius: 6px; background: #7252d5; font-size: 14px; }
 .async-wildcard-status { display: flex; align-items: center; gap: 5px; padding: 8px 10px; color: #8b5a13; border: 1px solid #efd28e; border-radius: 10px; background: #fff8e4; font-size: 14px; font-weight: 900; }
+.async-wildcard-status > span { display: flex; align-items: center; gap: 5px; }
 .async-wildcard-status svg { width: 13px; height: 13px; }
+.async-wildcard-status > button { display: flex; align-items: center; gap: 4px; min-height: 28px; margin-left: 3px; padding: 0 8px; color: #875a0e; border: 1px solid #dfbd68; border-radius: 7px; background: #fff; font-size: 14px; font-weight: 900; cursor: pointer; }
+.async-wildcard-status > button:disabled { cursor: wait; opacity: .55; }
 .async-wildcard-picker-note { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0; padding: 10px 12px; color: #805610; border: 1px solid #f0d38d; border-radius: 12px; background: linear-gradient(100deg, #fff7dc, #fffdf5); font-size: 14px; font-weight: 850; }
 .async-wildcard-picker-note span { display: flex; align-items: center; gap: 6px; }
 .async-wildcard-picker-note svg { width: 14px; height: 14px; }
