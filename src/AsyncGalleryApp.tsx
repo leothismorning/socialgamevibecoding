@@ -1157,7 +1157,7 @@ function GalleryVersionCard({
           version={version}
           title={`${app.title} ${isCommunity ? `社区版本 ${app.community_version_count}` : '初始版本'}`}
           compact
-          cacheKey={`${isCommunity ? app.community_version_id : app.initial_version_id || ''}-${state.serverNow}`}
+          cacheKey={String(isCommunity ? app.community_version_id : app.initial_version_id || '')}
         />
       </section>
       <div className="async-card-body">
@@ -3882,6 +3882,7 @@ function AppDetail({
     (version) => Number(version.id) === Number(viewVersionId),
   ) || latestVersion;
   const [sourceSynthesis, setSourceSynthesis] = useState<CommunitySynthesis | null>(null);
+  const [publishedPreviewRevision, setPublishedPreviewRevision] = useState(0);
   const replaceCommunityVersionInput = useRef<HTMLInputElement>(null);
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const canLikeApp = state.viewer?.role !== 'host'
@@ -3930,6 +3931,7 @@ function AppDetail({
         file.name,
       ),
     );
+    setPublishedPreviewRevision(Date.now());
   };
 
   useEffect(() => {
@@ -4060,7 +4062,7 @@ function AppDetail({
             version={viewedVersion.kind}
             versionId={viewedVersion.id}
             title={`${app.title} ${viewedVersion.kind === 'initial' ? '初始版本' : '社区版本'} ${viewedVersion.version_number}`}
-            cacheKey={`${viewedVersion.id}-${state.serverNow}`}
+            cacheKey={`${viewedVersion.id}-${publishedPreviewRevision}`}
           />
         )}
       </div>
