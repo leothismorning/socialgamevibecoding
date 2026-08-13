@@ -160,6 +160,11 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId, code, filename }),
     }),
+  uploadCommunityVersion: (clientId: string, appId: string, code: string, filename: string) =>
+    request(`/api/community-gallery/apps/${appId}/upload-community-version`, {
+      method: 'POST',
+      body: body({ clientId, code, filename }),
+    }),
   rollbackCommunityV1: (clientId: string, appId: string) =>
     request(`/api/community-gallery/apps/${appId}/rollback-community-v1`, {
       method: 'POST',

@@ -3544,7 +3544,7 @@ function CommunityDraftPanel({
   busy: string;
 }) {
   const [revision, setRevision] = useState('');
-  const uploadV1Input = useRef<HTMLInputElement>(null);
+  const uploadCommunityInput = useRef<HTMLInputElement>(null);
   const latestJob = state.generationJobs.find((job) => job.app_id === app.id);
   const events = latestJob
     ? state.generationEvents.filter((event) => Number(event.job_id) === Number(latestJob.id))
@@ -3554,8 +3554,13 @@ function CommunityDraftPanel({
   const hasCommunityDraft = app.draft_kind === 'community'
     && Number(app.draft_iteration_number || 0) > Number(app.community_version_count || 0)
     && Boolean(app.draft_code);
-  const canUploadFirstCommunityVersion = app.flow_stage === 'development_1'
-    && Number(app.community_version_count || 0) === 0;
+  const canUploadCommunityVersion = (
+    app.flow_stage === 'development_1'
+      && Number(app.community_version_count || 0) === 0
+  ) || (
+    app.flow_stage === 'development_2'
+      && Number(app.community_version_count || 0) === 1
+  );
   const communityMessages = state.developmentMessages.filter((message) => (
     message.app_id === app.id
     && message.phase === 'community'
@@ -3563,9 +3568,9 @@ function CommunityDraftPanel({
   ));
   const communityPromptRounds = communityMessages.filter((message) => message.role === 'creator').length;
   if (app.community_version_count >= 2) return null;
-  if (!hasCommunityDraft && latestJob?.status !== 'running' && !canUploadFirstCommunityVersion) return null;
+  if (!hasCommunityDraft && latestJob?.status !== 'running' && !canUploadCommunityVersion) return null;
 
-  const uploadAndPublishV1 = async (file: File) => {
+  const uploadAndPublishCommunityVersion = async (file: File) => {
     if (file.size > 8 * 1024 * 1024) {
       window.alert('HTML 文件不能超过 8MB。');
       return;
@@ -3575,12 +3580,15 @@ function CommunityDraftPanel({
       window.alert('请选择包含完整 html 结构的 HTML 文件。');
       return;
     }
+    const nextStageMessage = iterationNumber === 1
+      ? '发布后将进入第二轮评论'
+      : '发布后该应用将完成两轮社区开发';
     if (!window.confirm(
-      `确认上传“${file.name}”并直接发布为社区版本 1 吗？\n\n发布后将进入第二轮评论；如果 AI 仍在开发，AI 任务会停止，其结果不会覆盖上传版本。`,
+      `确认上传“${file.name}”并直接发布为社区版本 ${iterationNumber} 吗？\n\n${nextStageMessage}；如果 AI 仍在开发，AI 任务会停止，其结果不会覆盖上传版本。`,
     )) return;
     await action(
-      'upload-community-v1',
-      () => communityGalleryApi.uploadCommunityV1(clientId, app.id, code, file.name),
+      `upload-community-${iterationNumber}`,
+      () => communityGalleryApi.uploadCommunityVersion(clientId, app.id, code, file.name),
     );
   };
 
@@ -3609,32 +3617,36 @@ function CommunityDraftPanel({
           </ol>
         </div>
       )}
-      {canUploadFirstCommunityVersion && (
+      {canUploadCommunityVersion && (
         <section className="async-community-v1-upload">
           <div>
             <FileCode2 />
             <span>
-              <strong>也可以上传本地 HTML 完成第一轮开发</strong>
-              <small>上传后会直接发布为社区版本 1，并进入第二轮评论。若 AI 仍在运行，上传版本优先。</small>
+              <strong>也可以上传本地 HTML 完成第 {iterationNumber} 轮开发</strong>
+              <small>{iterationNumber === 1
+                ? '上传后会直接发布为社区版本 1，并进入第二轮评论。若 AI 仍在运行，上传版本优先。'
+                : '上传后会直接发布为社区版本 2，并完成该应用的两轮社区开发。若 AI 仍在运行，上传版本优先。'}</small>
             </span>
           </div>
           <input
-            ref={uploadV1Input}
+            ref={uploadCommunityInput}
             type="file"
             accept=".html,.htm,text/html"
             hidden
             onChange={(event) => {
               const file = event.target.files?.[0];
               event.currentTarget.value = '';
-              if (file) void uploadAndPublishV1(file);
+              if (file) void uploadAndPublishCommunityVersion(file);
             }}
           />
           <button
             type="button"
             className="async-upload-community-v1"
             disabled={Boolean(busy)}
-            onClick={() => uploadV1Input.current?.click()}
-          ><Upload /> {busy === 'upload-community-v1' ? '正在上传并发布…' : '上传 HTML 并发布 V1'}</button>
+            onClick={() => uploadCommunityInput.current?.click()}
+          ><Upload /> {busy === `upload-community-${iterationNumber}`
+              ? '正在上传并发布…'
+              : `上传 HTML 并发布 V${iterationNumber}`}</button>
         </section>
       )}
       {hasCommunityDraft && (

@@ -335,6 +335,56 @@ assert.equal(
   'a late AI result must never overwrite an uploaded and published V1',
 );
 
+// The same upload path is available after the second-round draw. It must use
+// V1 as its base, publish V2, cancel the round-two AI task, and complete the App.
+state = gallery.saveCommunityComment({
+  clientId: client(1),
+  appId: secondTestApp.id,
+  content: 'Use this idea for the uploaded second community version.',
+});
+const uploadV2SourceComment = state.comments.find(
+  (comment: any) => comment.content === 'Use this idea for the uploaded second community version.',
+);
+assert.ok(uploadV2SourceComment);
+const uploadV2Development = gallery.enterCommunityDevelopmentStage(
+  hostClient,
+  2,
+  true,
+  [secondTestApp.id],
+);
+assert.equal(uploadV2Development.jobIds.length, 1);
+assert.throws(
+  () => gallery.uploadAndPublishCommunityVersion(
+    client(1),
+    secondTestApp.id,
+    html('Unauthorized Uploaded V2'),
+    'unauthorized-v2.html',
+  ),
+  /只有该应用的创作者/,
+);
+const uploadedV2Code = html('Test App Two Uploaded V2');
+state = gallery.uploadAndPublishCommunityVersion(
+  client(2),
+  secondTestApp.id,
+  uploadedV2Code,
+  'test-app-two-v2.html',
+);
+const uploadedV2App = state.apps.find((app: any) => app.id === secondTestApp.id);
+const uploadedV2 = state.versions.find((version: any) => (
+  version.app_id === secondTestApp.id
+  && version.kind === 'community'
+  && Number(version.version_number) === 3
+));
+assert.ok(uploadedV2);
+assert.equal(uploadedV2App.flow_stage, 'completed');
+assert.equal(Number(uploadedV2App.community_version_count), 2);
+assert.equal(uploadedV2.selection_reason, 'creator_html_upload');
+assert.equal(Number(uploadedV2.base_version_id), Number(uploadedV1.id));
+assert.equal(gallery.getCommunityPreview(client(2), secondTestApp.id, 'community'), uploadedV2Code);
+assert.equal(state.generationJobs.find(
+  (job: any) => Number(job.id) === Number(uploadV2Development.jobIds[0]),
+)?.status, 'cancelled');
+
 state = gallery.saveCommunityComment({
   clientId: client(2),
   appId: testApp.id,
@@ -611,7 +661,7 @@ state = gallery.getCommunityGalleryState(hostClient);
 assert.equal(state.testData.testCreatorCount, 2);
 assert.equal(state.testData.testAppCount, 2);
 assert.ok(state.testData.versionCount >= 2);
-assert.equal(state.testData.commentCount, 3);
+assert.equal(state.testData.commentCount, 4);
 assert.equal(state.testData.hasTestData, true);
 
 state = gallery.closeAsyncCommunityStudy(hostClient, true);
