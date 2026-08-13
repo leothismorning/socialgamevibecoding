@@ -760,7 +760,12 @@ export function registerCommunityGalleryRoutes(app: Express) {
     try {
       res.json(setCommunityHomeFeedOrder(
         clientIdFrom(req),
-        String(req.body?.order || '') as 'asc' | 'desc' | 'random',
+        String(req.body?.order || '') as
+          | 'number_asc'
+          | 'number_desc'
+          | 'time_asc'
+          | 'time_desc'
+          | 'random',
       ));
     } catch (error) {
       sendError(res, error);

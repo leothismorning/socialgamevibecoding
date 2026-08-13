@@ -230,7 +230,10 @@ export const communityGalleryApi = {
     method: 'POST',
     body: body({ clientId, testCreatorCodes }),
   }),
-  setHomeFeedOrder: (clientId: string, order: 'asc' | 'desc' | 'random') =>
+  setHomeFeedOrder: (
+    clientId: string,
+    order: 'number_asc' | 'number_desc' | 'time_asc' | 'time_desc' | 'random',
+  ) =>
     request('/api/community-gallery/study/home-feed-order', {
       method: 'POST',
       body: body({ clientId, order }),

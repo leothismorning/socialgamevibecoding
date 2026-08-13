@@ -898,28 +898,41 @@ function participantHomeFeedOrderPrefix(studyId: string) {
   return `home_feed_order_participant_v1:${studyId}:`;
 }
 
+type HomeFeedOrder = 'number_asc' | 'number_desc' | 'time_asc' | 'time_desc' | 'random';
+
+function normalizeHomeFeedOrder(value?: string): HomeFeedOrder {
+  if (value === 'desc') return 'number_desc';
+  if (value === 'asc') return 'number_asc';
+  if (
+    value === 'number_asc'
+    || value === 'number_desc'
+    || value === 'time_asc'
+    || value === 'time_desc'
+    || value === 'random'
+  ) return value;
+  return 'number_asc';
+}
+
 function homeFeedShuffleSeedKey(studyId: string) {
   return `home_feed_shuffle_seed_v1:${studyId}`;
 }
 
-function homeFeedOrder(studyId: string): 'asc' | 'desc' | 'random' {
+function homeFeedOrder(studyId: string): HomeFeedOrder {
   const setting = db.prepare(`
     SELECT value FROM vg_async_settings WHERE key = ?
   `).get(homeFeedOrderKey(studyId)) as { value?: string } | undefined;
-  return setting?.value === 'desc' || setting?.value === 'random' ? setting.value : 'asc';
+  return normalizeHomeFeedOrder(setting?.value);
 }
 
 function homeFeedOrderForParticipant(
   studyId: string,
   participantCode?: string,
-): 'asc' | 'desc' | 'random' {
+): HomeFeedOrder {
   if (!participantCode) return homeFeedOrder(studyId);
   const setting = db.prepare(`
     SELECT value FROM vg_async_settings WHERE key = ?
   `).get(participantHomeFeedOrderKey(studyId, participantCode)) as { value?: string } | undefined;
-  return setting?.value === 'asc' || setting?.value === 'desc' || setting?.value === 'random'
-    ? setting.value
-    : homeFeedOrder(studyId);
+  return setting?.value ? normalizeHomeFeedOrder(setting.value) : homeFeedOrder(studyId);
 }
 
 function homeFeedShuffleSeed(studyId: string) {
@@ -1000,17 +1013,26 @@ export function setCommunityTestCreators(
   return getCommunityGalleryState(clientId);
 }
 
-export function setCommunityHomeFeedOrder(clientId: string, order: 'asc' | 'desc' | 'random') {
+export function setCommunityHomeFeedOrder(
+  clientId: string,
+  order: HomeFeedOrder | 'asc' | 'desc',
+) {
   const viewer = requireViewer(clientId);
-  if (order !== 'asc' && order !== 'desc' && order !== 'random') {
+  const validOrders = new Set([
+    'asc', 'desc', 'number_asc', 'number_desc', 'time_asc', 'time_desc', 'random',
+  ]);
+  if (!validOrders.has(order)) {
     throw new Error('首页排序方式无效。');
   }
-  if (viewer.role !== 'host' && order === 'random') {
-    throw new Error('创作者只能选择按编号正序或倒序。');
+  const normalizedOrder = normalizeHomeFeedOrder(order);
+  if (viewer.role !== 'host' && normalizedOrder === 'random') {
+    throw new Error('创作者只能选择按编号或发布时间排序。');
   }
   const currentStudy = study();
   const timestamp = now();
-  const shuffleSeed = order === 'random' ? randomUUID() : homeFeedShuffleSeed(currentStudy.id);
+  const shuffleSeed = normalizedOrder === 'random'
+    ? randomUUID()
+    : homeFeedShuffleSeed(currentStudy.id);
   const upsert = db.prepare(`
       INSERT INTO vg_async_settings (key, value, updated_at)
       VALUES (?, ?, ?)
@@ -1018,17 +1040,21 @@ export function setCommunityHomeFeedOrder(clientId: string, order: 'asc' | 'desc
     `);
   const transaction = db.transaction(() => {
     if (viewer.role === 'host') {
-      upsert.run(homeFeedOrderKey(currentStudy.id), order, timestamp);
+      upsert.run(homeFeedOrderKey(currentStudy.id), normalizedOrder, timestamp);
       const preferencePrefix = participantHomeFeedOrderPrefix(currentStudy.id);
       db.prepare(`DELETE FROM vg_async_settings WHERE substr(key, 1, ?) = ?`).run(
         preferencePrefix.length,
         preferencePrefix,
       );
-      if (order === 'random') {
+      if (normalizedOrder === 'random') {
         upsert.run(homeFeedShuffleSeedKey(currentStudy.id), shuffleSeed, timestamp);
       }
     } else {
-      upsert.run(participantHomeFeedOrderKey(currentStudy.id, viewer.code), order, timestamp);
+      upsert.run(
+        participantHomeFeedOrderKey(currentStudy.id, viewer.code),
+        normalizedOrder,
+        timestamp,
+      );
     }
   });
   transaction();
@@ -1038,9 +1064,9 @@ export function setCommunityHomeFeedOrder(clientId: string, order: 'asc' | 'desc
     viewer.role === 'host' ? 'study' : 'participant',
     viewer.role === 'host' ? currentStudy.id : viewer.code,
     {
-      order,
+      order: normalizedOrder,
       scope: viewer.role === 'host' ? 'all_participants' : 'personal_homepage',
-      shuffleSeed: order === 'random' ? shuffleSeed : null,
+      shuffleSeed: normalizedOrder === 'random' ? shuffleSeed : null,
     },
   );
   return getCommunityGalleryState(clientId);

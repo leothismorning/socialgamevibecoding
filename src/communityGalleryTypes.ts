@@ -244,7 +244,7 @@ export type CommunityGalleryState = {
     id: string;
     status: CommunityStatus;
     workflow_stage: CommunityWorkflowStage;
-    home_feed_order: 'asc' | 'desc' | 'random';
+    home_feed_order: 'number_asc' | 'number_desc' | 'time_asc' | 'time_desc' | 'random';
     home_feed_shuffle_seed: string;
     test_roles_configured: boolean;
     created_at: string;

@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Clock3,
   Code2,
   Download,
   Eye,
@@ -4879,14 +4880,21 @@ export default function AsyncGalleryApp() {
         || left.creator_code.localeCompare(right.creator_code, undefined, { numeric: true })
       ));
     }
-    const direction = state?.study.home_feed_order === 'desc' ? -1 : 1;
-    return [...publishedApps].sort((left, right) => (
-      left.creator_code.localeCompare(
+    const order = state?.study.home_feed_order || 'number_asc';
+    const direction = order === 'number_desc' || order === 'time_desc' ? -1 : 1;
+    return [...publishedApps].sort((left, right) => {
+      if (order === 'time_asc' || order === 'time_desc') {
+        const timeComparison = String(left.published_at || '').localeCompare(
+          String(right.published_at || ''),
+        );
+        if (timeComparison) return timeComparison * direction;
+      }
+      return left.creator_code.localeCompare(
         right.creator_code,
         undefined,
         { numeric: true },
-      ) * direction
-    ));
+      ) * direction;
+    });
   }, [publishedApps, state?.study.home_feed_order, state?.study.home_feed_shuffle_seed, state?.study.id]);
   const secondRoundPublishedApps = useMemo(
     () => homePublishedApps.filter((app) => (
@@ -5027,24 +5035,29 @@ export default function AsyncGalleryApp() {
                   : '先体验指定应用，也可以自由探索其他作品。普通讨论保持自然，综合创意由用户主动创建。'}</p>
               </div>
               <div className="async-home-order-actions">
-                  <button
-                    type="button"
-                    className={`async-home-order-button${state.study.home_feed_order === 'desc' ? ' is-active' : ''}`}
-                    aria-pressed={state.study.home_feed_order === 'desc'}
-                    disabled={Boolean(busy)}
-                    title={state.viewer.role === 'host'
-                      ? 'Host 的修改会同步覆盖所有账号的首页排序'
-                      : '只修改你自己首页中的作品编号顺序'}
-                    onClick={() => void action('set-home-feed-order', () => (
-                      communityGalleryApi.setHomeFeedOrder(
-                        clientId,
-                        state.study.home_feed_order === 'asc' ? 'desc' : 'asc',
-                      )
-                    ))}
-                  >
-                    <ArrowUpDown />
-                    {state.study.home_feed_order === 'asc' ? '按编号倒序' : '按编号正序'}
-                  </button>
+                  {([
+                    ['number_asc', '编号正序', <ArrowUpDown />],
+                    ['number_desc', '编号倒序', <ArrowUpDown />],
+                    ['time_asc', '时间正序', <Clock3 />],
+                    ['time_desc', '时间倒序', <Clock3 />],
+                  ] as const).map(([order, label, icon]) => (
+                    <button
+                      key={order}
+                      type="button"
+                      className={`async-home-order-button${state.study.home_feed_order === order ? ' is-active' : ''}`}
+                      aria-pressed={state.study.home_feed_order === order}
+                      disabled={Boolean(busy)}
+                      title={state.viewer.role === 'host'
+                        ? 'Host 的修改会同步覆盖所有账号的首页排序'
+                        : '只修改你自己的首页排序'}
+                      onClick={() => void action(`set-home-feed-order-${order}`, () => (
+                        communityGalleryApi.setHomeFeedOrder(clientId, order)
+                      ))}
+                    >
+                      {icon}
+                      {label}
+                    </button>
+                  ))}
                   {state.viewer.role === 'host' && (
                     <button
                       type="button"

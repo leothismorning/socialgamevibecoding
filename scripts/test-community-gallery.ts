@@ -52,25 +52,29 @@ for (const account of [1, 2, 3, 4, 5, 6]) {
   assert.equal(Number(creatorState.viewer?.isTest), account <= 2 ? 1 : 0);
 }
 
-assert.equal(gallery.getCommunityGalleryState(hostClient).study.home_feed_order, 'asc');
+assert.equal(gallery.getCommunityGalleryState(hostClient).study.home_feed_order, 'number_asc');
 assert.throws(
   () => gallery.setCommunityHomeFeedOrder(hostClient, 'newest' as any),
   /排序方式无效/,
 );
-state = gallery.setCommunityHomeFeedOrder(client(1), 'desc');
-assert.equal(state.study.home_feed_order, 'desc');
-assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'asc');
-assert.equal(gallery.getCommunityGalleryState(hostClient).study.home_feed_order, 'asc');
+state = gallery.setCommunityHomeFeedOrder(client(1), 'number_desc');
+assert.equal(state.study.home_feed_order, 'number_desc');
+assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'number_asc');
+assert.equal(gallery.getCommunityGalleryState(hostClient).study.home_feed_order, 'number_asc');
+state = gallery.setCommunityHomeFeedOrder(client(1), 'time_asc');
+assert.equal(state.study.home_feed_order, 'time_asc');
+state = gallery.setCommunityHomeFeedOrder(client(1), 'time_desc');
+assert.equal(state.study.home_feed_order, 'time_desc');
 assert.throws(
   () => gallery.setCommunityHomeFeedOrder(client(1), 'random'),
-  /只能选择按编号正序或倒序/,
+  /只能选择按编号或发布时间排序/,
 );
-state = gallery.setCommunityHomeFeedOrder(hostClient, 'desc');
-assert.equal(state.study.home_feed_order, 'desc');
-assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_order, 'desc');
-state = gallery.setCommunityHomeFeedOrder(client(1), 'asc');
-assert.equal(state.study.home_feed_order, 'asc');
-assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'desc');
+state = gallery.setCommunityHomeFeedOrder(hostClient, 'time_desc');
+assert.equal(state.study.home_feed_order, 'time_desc');
+assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_order, 'time_desc');
+state = gallery.setCommunityHomeFeedOrder(client(1), 'number_asc');
+assert.equal(state.study.home_feed_order, 'number_asc');
+assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'time_desc');
 state = gallery.setCommunityHomeFeedOrder(hostClient, 'random');
 const firstShuffleSeed = state.study.home_feed_shuffle_seed;
 assert.equal(state.study.home_feed_order, 'random');
@@ -80,9 +84,9 @@ assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_shuffle
 state = gallery.setCommunityHomeFeedOrder(hostClient, 'random');
 assert.equal(state.study.home_feed_order, 'random');
 assert.notEqual(state.study.home_feed_shuffle_seed, firstShuffleSeed);
-state = gallery.setCommunityHomeFeedOrder(hostClient, 'asc');
-assert.equal(state.study.home_feed_order, 'asc');
-assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'asc');
+state = gallery.setCommunityHomeFeedOrder(hostClient, 'number_asc');
+assert.equal(state.study.home_feed_order, 'number_asc');
+assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'number_asc');
 
 const failedOperationId = 'creator-operation-failure-test';
 gallery.startCreatorDevelopmentOperation(client(5), failedOperationId, 'generate');
