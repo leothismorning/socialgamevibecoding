@@ -4680,9 +4680,11 @@ function HostPanel({
 function NotificationDrawer({
   notifications,
   close,
+  openApp,
 }: {
   notifications: CommunityNotification[];
   close: () => void;
+  openApp: (appId: string) => void;
 }) {
   return (
     <div className="async-overlay" role="dialog" aria-modal="true" aria-label="消息中心">
@@ -4699,7 +4701,16 @@ function NotificationDrawer({
               <div>
                 <header><strong>{notification.title}</strong><small>{formatDate(notification.created_at)}</small></header>
                 <p>{notification.content}</p>
-                <footer><GitMerge /> {notification.app_title} · {notification.source_count} 条贡献被采用</footer>
+                <footer>
+                  <span><GitMerge /> {notification.app_title} · {notification.source_count} 条贡献被采用</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close();
+                      openApp(notification.app_id);
+                    }}
+                  >前往该作品 <ArrowRight /></button>
+                </footer>
               </div>
             </article>
           ))}
@@ -4869,17 +4880,13 @@ export default function AsyncGalleryApp() {
       ));
     }
     const direction = state?.study.home_feed_order === 'desc' ? -1 : 1;
-    return [...publishedApps].sort((left, right) => {
-      const timeComparison = String(left.published_at || '').localeCompare(
-        String(right.published_at || ''),
-      );
-      if (timeComparison) return timeComparison * direction;
-      return left.creator_code.localeCompare(
+    return [...publishedApps].sort((left, right) => (
+      left.creator_code.localeCompare(
         right.creator_code,
         undefined,
         { numeric: true },
-      ) * direction;
-    });
+      ) * direction
+    ));
   }, [publishedApps, state?.study.home_feed_order, state?.study.home_feed_shuffle_seed, state?.study.id]);
   const secondRoundPublishedApps = useMemo(
     () => homePublishedApps.filter((app) => (
@@ -5019,16 +5026,15 @@ export default function AsyncGalleryApp() {
                   ? '初始应用可以陆续发布；主持人点击开始后，大家才能发表评论和进行综合。'
                   : '先体验指定应用，也可以自由探索其他作品。普通讨论保持自然，综合创意由用户主动创建。'}</p>
               </div>
-              {state.viewer.role === 'host' ? (
-                <div className="async-home-order-actions">
+              <div className="async-home-order-actions">
                   <button
                     type="button"
                     className={`async-home-order-button${state.study.home_feed_order === 'desc' ? ' is-active' : ''}`}
                     aria-pressed={state.study.home_feed_order === 'desc'}
                     disabled={Boolean(busy)}
-                    title={state.study.home_feed_order === 'asc'
-                      ? '让所有账号的首页按发布时间倒序显示'
-                      : '恢复所有账号首页的发布时间正序'}
+                    title={state.viewer.role === 'host'
+                      ? 'Host 的修改会同步覆盖所有账号的首页排序'
+                      : '只修改你自己首页中的作品编号顺序'}
                     onClick={() => void action('set-home-feed-order', () => (
                       communityGalleryApi.setHomeFeedOrder(
                         clientId,
@@ -5037,26 +5043,28 @@ export default function AsyncGalleryApp() {
                     ))}
                   >
                     <ArrowUpDown />
-                    {state.study.home_feed_order === 'asc' ? '按时间倒序' : '恢复时间正序'}
+                    {state.study.home_feed_order === 'asc' ? '按编号倒序' : '按编号正序'}
                   </button>
-                  <button
-                    type="button"
-                    className={`async-home-order-button${state.study.home_feed_order === 'random' ? ' is-active' : ''}`}
-                    aria-pressed={state.study.home_feed_order === 'random'}
-                    disabled={Boolean(busy)}
-                    title="为所有账号生成并保存一套新的随机作品顺序"
-                    onClick={() => void action(
-                      'randomize-home-feed',
-                      () => communityGalleryApi.setHomeFeedOrder(clientId, 'random'),
-                    )}
-                  >
-                    <Shuffle />
-                    {state.study.home_feed_order === 'random' ? '重新随机排列' : '随机排列'}
-                  </button>
+                  {state.viewer.role === 'host' && (
+                    <button
+                      type="button"
+                      className={`async-home-order-button${state.study.home_feed_order === 'random' ? ' is-active' : ''}`}
+                      aria-pressed={state.study.home_feed_order === 'random'}
+                      disabled={Boolean(busy)}
+                      title="为所有账号生成并保存一套新的随机作品顺序"
+                      onClick={() => void action(
+                        'randomize-home-feed',
+                        () => communityGalleryApi.setHomeFeedOrder(clientId, 'random'),
+                      )}
+                    >
+                      <Shuffle />
+                      {state.study.home_feed_order === 'random' ? '重新随机排列' : '随机排列'}
+                    </button>
+                  )}
+                  {state.viewer.role !== 'host' && ownApp?.initial_version_id && (
+                    <span className="async-own-app-note"><CheckCircle2 /> 你的初始应用已发布</span>
+                  )}
                 </div>
-              ) : ownApp?.initial_version_id ? (
-                <span className="async-own-app-note"><CheckCircle2 /> 你的初始应用已发布</span>
-              ) : null}
             </header>
             {publishedApps.length > 0 && (
               <div className="async-home-round-sections">
@@ -5140,7 +5148,11 @@ export default function AsyncGalleryApp() {
         />
       )}
       {notificationsOpen && (
-        <NotificationDrawer notifications={state.notifications} close={() => setNotificationsOpen(false)} />
+        <NotificationDrawer
+          notifications={state.notifications}
+          close={() => setNotificationsOpen(false)}
+          openApp={navigateToApp}
+        />
       )}
       {celebration && (
         <FireworksCelebration

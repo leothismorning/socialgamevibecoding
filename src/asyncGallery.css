@@ -1390,8 +1390,12 @@
 .async-notification-list article header strong { font-size: 14px; }
 .async-notification-list article header small { flex: 0 0 auto; color: #8a96a7; font-size: 14px; }
 .async-notification-list article p { margin: 7px 0; color: #4d5d74; font-size: 14px; line-height: 1.6; }
-.async-notification-list article footer { display: flex; align-items: center; gap: 5px; color: #6c55b7; font-size: 14px; font-weight: 850; }
+.async-notification-list article footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: #6c55b7; font-size: 14px; font-weight: 850; }
+.async-notification-list article footer > span { display: inline-flex; align-items: center; gap: 5px; }
 .async-notification-list article footer svg { width: 11px; }
+.async-notification-list article footer button { min-height: 32px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; color: #fff; border: 0; border-radius: 8px; background: linear-gradient(135deg, #456ff0, #7650d8); font-size: 14px; font-weight: 900; cursor: pointer; }
+.async-notification-list article footer button:hover { filter: brightness(.96); }
+.async-notification-list article footer button svg { width: 13px; }
 .async-notification-empty { min-height: 280px; display: grid; place-content: center; justify-items: center; gap: 8px; color: #8190a5; text-align: center; }
 .async-notification-empty svg { width: 28px; }
 .async-notification-empty strong { color: #47566d; font-size: 14px; }

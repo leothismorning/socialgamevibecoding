@@ -54,19 +54,27 @@ for (const account of [1, 2, 3, 4, 5, 6]) {
 
 assert.equal(gallery.getCommunityGalleryState(hostClient).study.home_feed_order, 'asc');
 assert.throws(
-  () => gallery.setCommunityHomeFeedOrder(client(1), 'desc'),
-  /主持人|身份/,
-);
-assert.throws(
   () => gallery.setCommunityHomeFeedOrder(hostClient, 'newest' as any),
   /排序方式无效/,
+);
+state = gallery.setCommunityHomeFeedOrder(client(1), 'desc');
+assert.equal(state.study.home_feed_order, 'desc');
+assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'asc');
+assert.equal(gallery.getCommunityGalleryState(hostClient).study.home_feed_order, 'asc');
+assert.throws(
+  () => gallery.setCommunityHomeFeedOrder(client(1), 'random'),
+  /只能选择按编号正序或倒序/,
 );
 state = gallery.setCommunityHomeFeedOrder(hostClient, 'desc');
 assert.equal(state.study.home_feed_order, 'desc');
 assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_order, 'desc');
+state = gallery.setCommunityHomeFeedOrder(client(1), 'asc');
+assert.equal(state.study.home_feed_order, 'asc');
+assert.equal(gallery.getCommunityGalleryState(client(2)).study.home_feed_order, 'desc');
 state = gallery.setCommunityHomeFeedOrder(hostClient, 'random');
 const firstShuffleSeed = state.study.home_feed_shuffle_seed;
 assert.equal(state.study.home_feed_order, 'random');
+assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_order, 'random');
 assert.ok(firstShuffleSeed);
 assert.equal(gallery.getCommunityGalleryState(client(1)).study.home_feed_shuffle_seed, firstShuffleSeed);
 state = gallery.setCommunityHomeFeedOrder(hostClient, 'random');
