@@ -210,11 +210,10 @@ export const communityGalleryApi = {
     iterationNumber: 1 | 2,
     isTest: boolean,
     appIds?: string[],
-    executionProvider: 'codex' | 'deepseek-pro' = 'codex',
   ) =>
     request('/api/community-gallery/study/enter-development', {
       method: 'POST',
-      body: body({ clientId, iterationNumber, isTest, appIds, executionProvider }),
+      body: body({ clientId, iterationNumber, isTest, appIds }),
     }),
   controlAppFlows: (
     clientId: string,
@@ -224,11 +223,6 @@ export const communityGalleryApi = {
     method: 'POST',
     body: body({ clientId, appIds, action }),
   }),
-  retryAppDevelopment: (clientId: string, appIds: string[]) =>
-    request('/api/community-gallery/apps/retry-development', {
-      method: 'POST',
-      body: body({ clientId, appIds }),
-    }),
   setTestCreators: (
     clientId: string,
     testCreatorCodes: string[],
@@ -243,11 +237,6 @@ export const communityGalleryApi = {
     request('/api/community-gallery/study/home-feed-order', {
       method: 'POST',
       body: body({ clientId, order }),
-    }),
-  retryDevelopment: (clientId: string, jobId: number) =>
-    request(`/api/community-gallery/jobs/${jobId}/retry`, {
-      method: 'POST',
-      body: body({ clientId }),
     }),
   clearTestData: (clientId: string, confirmation: string) =>
     request('/api/community-gallery/study/clear-test-data', {

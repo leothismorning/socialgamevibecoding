@@ -6,7 +6,7 @@ export type CommunityRole = 'host' | 'creator';
 export type CommunityStatus = 'setup' | 'active' | 'closed';
 export type CommunitySourceType = 'comment' | 'synthesis';
 export type CommunityWorkspace = 'regular' | 'test';
-export type CommunityDevelopmentProvider = 'deepseek-pro' | 'codex';
+export type CommunityDevelopmentProvider = 'codex';
 export type CommunityAppFlowStage =
   | 'waiting_round_1'
   | 'round_1'
@@ -1349,6 +1349,27 @@ function requireAppRoundOpen(app: any) {
   return iterationNumber as 1 | 2;
 }
 
+function requireMutableWildcardIteration(app: any) {
+  const currentStudy = requireOpenStudy(Number(app.is_test));
+  if (currentStudy.status !== 'active') {
+    throw new Error('请等待主持人开始该账号空间的流程。');
+  }
+  const iterationNumber = communityIterationCount(app.id) + 1;
+  const roundStage = iterationNumber === 1 ? 'round_1' : iterationNumber === 2 ? 'round_2' : null;
+  const developmentStage = iterationNumber === 1
+    ? 'development_1'
+    : iterationNumber === 2
+      ? 'development_2'
+      : null;
+  if (!roundStage || !developmentStage) {
+    throw new Error('该应用已经完成两轮开发。');
+  }
+  if (![roundStage, developmentStage].includes(appFlowStage(app))) {
+    throw new Error(`主持人尚未开启该应用的第 ${iterationNumber} 轮流程。`);
+  }
+  return iterationNumber as 1 | 2;
+}
+
 function versionById(versionId: number) {
   return db.prepare(`
     SELECT * FROM vg_async_versions WHERE study_id = ? AND id = ?
@@ -2367,7 +2388,7 @@ export function useCommunityWildcard(clientId: string, appId: string, commentId:
   if (app.status !== 'published') {
     throw new Error('万能卡只能用于已发布的应用。');
   }
-  const iterationNumber = requireAppRoundOpen(app);
+  const iterationNumber = requireMutableWildcardIteration(app);
   const eligibleComment = scoredWildcardCommentCandidate(app.id, iterationNumber, commentId);
   if (!eligibleComment) {
     throw new Error('万能卡只能选择本应用第一轮或第二轮的一条普通评论。');
@@ -2394,7 +2415,6 @@ export function enterCommunityDevelopmentStage(
   iterationNumber: 1 | 2,
   isTest: boolean,
   requestedAppIds?: string[],
-  executionProvider: CommunityDevelopmentProvider = 'deepseek-pro',
 ) {
   const viewer = requireViewer(clientId, 'host');
   const currentStudy = requireOpenStudy(isTest);
@@ -2412,17 +2432,18 @@ export function enterCommunityDevelopmentStage(
     throw new Error('部分所选应用不存在、尚未发布，或不属于当前账号空间。');
   }
   if (!publishedApps.length) throw new Error('当前没有已发布的应用。');
-  const expectedAppStage: CommunityAppFlowStage = iterationNumber === 1 ? 'round_1' : 'round_2';
-  const invalidStageApps = publishedApps.filter((app) => appFlowStage(app) !== expectedAppStage);
+  const expectedRoundStage: CommunityAppFlowStage = iterationNumber === 1 ? 'round_1' : 'round_2';
+  const expectedDevelopmentStage: CommunityAppFlowStage = iterationNumber === 1
+    ? 'development_1'
+    : 'development_2';
+  const eligibleStages: CommunityAppFlowStage[] = [expectedRoundStage, expectedDevelopmentStage];
+  const invalidStageApps = publishedApps.filter((app) => (
+    communityIterationCount(app.id) !== iterationNumber - 1
+    || !eligibleStages.includes(appFlowStage(app))
+  ));
   if (invalidStageApps.length) {
-    throw new Error(`所选应用中有 ${invalidStageApps.length} 个尚未进入第 ${iterationNumber} 轮评论流程。`);
+    throw new Error(`所选应用中有 ${invalidStageApps.length} 个不在第 ${iterationNumber} 轮评论或未发布开发阶段。`);
   }
-  const runningApps = publishedApps.filter((app) => db.prepare(`
-    SELECT 1 FROM vg_async_generation_jobs
-    WHERE study_id = ? AND app_id = ?
-      AND status IN ('running', 'waiting_codex', 'codex_processing')
-  `).get(currentStudy.id, app.id));
-  if (runningApps.length) throw new Error(`所选应用中有 ${runningApps.length} 个仍在开发中。`);
 
   const candidatesByApp = publishedApps.map((app) => {
     const candidates = scoredDevelopmentCandidates(app.id, iterationNumber);
@@ -2436,7 +2457,13 @@ export function enterCommunityDevelopmentStage(
     if (wildcard && !wildcardSource) {
       throw new Error(`《${app.title}》的万能卡评论已不符合本轮开发条件。`);
     }
-    return { app, candidates, wildcard, wildcardSource };
+    return {
+      app,
+      candidates,
+      wildcard,
+      wildcardSource,
+      isRelock: appFlowStage(app) === expectedDevelopmentStage,
+    };
   });
   if (iterationNumber === 2) {
     const missingFirstVersion = publishedApps.filter((app) => communityIterationCount(app.id) < 1);
@@ -2453,7 +2480,7 @@ export function enterCommunityDevelopmentStage(
       : `仍有 ${missingCandidates.length} 个应用没有可参与点赞评选的第一轮评论。`);
   }
 
-  const winners = candidatesByApp.map(({ app, candidates, wildcard, wildcardSource }) => {
+  const winners = candidatesByApp.map(({ app, candidates, wildcard, wildcardSource, isRelock }) => {
     const wildcardWasRandomCandidate = Boolean(wildcardSource && candidates.some((candidate) => (
       candidate.source_type === 'comment'
       && Number(candidate.source_id) === Number(wildcardSource.source_id)
@@ -2499,7 +2526,7 @@ export function enterCommunityDevelopmentStage(
         })),
       }),
     };
-    return { app, winner, sources, wildcardSource };
+    return { app, winner, sources, wildcardSource, isRelock };
   });
   const timestamp = now();
   let notificationCount = 0;
@@ -2522,7 +2549,50 @@ export function enterCommunityDevelopmentStage(
         selected_at = excluded.selected_at,
         host_code = excluded.host_code
     `);
-    winners.forEach(({ app, winner, sources }) => {
+    winners.forEach(({ app, winner, sources, isRelock }) => {
+      if (isRelock) {
+        db.prepare(`
+          UPDATE vg_async_generation_jobs
+          SET status = 'cancelled',
+            error = '主持人重新锁定本轮开发，旧任务已被新 Codex 任务替代。',
+            completed_at = ?
+          WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+            AND status IN ('running', 'waiting_codex', 'codex_processing')
+        `).run(timestamp, currentStudy.id, app.id, iterationNumber);
+        db.prepare(`
+          UPDATE vg_async_generation_events
+          SET status = 'failed', title = '旧任务已被重新锁定替代',
+            detail = '主持人根据最新万能卡和重新抽取结果创建了新的 Codex 任务。',
+            updated_at = ?
+          WHERE study_id = ? AND app_id = ? AND status IN ('pending', 'running')
+            AND job_id IN (
+              SELECT id FROM vg_async_generation_jobs
+              WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+            )
+        `).run(
+          timestamp,
+          currentStudy.id,
+          app.id,
+          currentStudy.id,
+          app.id,
+          iterationNumber,
+        );
+        db.prepare(`
+          DELETE FROM vg_async_drafts
+          WHERE study_id = ? AND app_id = ? AND kind = 'community'
+            AND iteration_number = ?
+        `).run(currentStudy.id, app.id, iterationNumber);
+        db.prepare(`
+          DELETE FROM vg_async_development_messages
+          WHERE study_id = ? AND app_id = ? AND phase = 'community'
+            AND iteration_number = ?
+        `).run(currentStudy.id, app.id, iterationNumber);
+        db.prepare(`
+          DELETE FROM vg_async_notifications
+          WHERE study_id = ? AND app_id = ? AND type = 'contribution_selected'
+            AND version_number = ?
+        `).run(currentStudy.id, app.id, iterationNumber);
+      }
       insert.run(
         currentStudy.id,
         app.id,
@@ -2577,8 +2647,9 @@ export function enterCommunityDevelopmentStage(
     ));
   });
   transaction();
-  const codexTaskId = executionProvider === 'codex' ? randomUUID() : null;
-  const jobIds = winners.map(({ app, winner, sources, wildcardSource }) => createCommunityGenerationJob({
+  const executionProvider: CommunityDevelopmentProvider = 'codex';
+  const codexTaskId = randomUUID();
+  const jobIds = winners.map(({ app, winner, sources, wildcardSource, isRelock }) => createCommunityGenerationJob({
     actorCode: viewer.code,
     app,
     sources: sources.map((source) => ({
@@ -2589,7 +2660,7 @@ export function enterCommunityDevelopmentStage(
     allowedCrossVersionCommentIds: wildcardSource
       ? [Number(wildcardSource.source_id)]
       : [],
-    selectionReason: 'host_weighted_random_draw',
+    selectionReason: isRelock ? 'host_weighted_random_redraw' : 'host_weighted_random_draw',
     automated: true,
     executionProvider,
     codexTaskId,
@@ -2609,6 +2680,7 @@ export function enterCommunityDevelopmentStage(
     jobIds,
     executionProvider,
     codexTaskId,
+    relockedAppIds: winners.filter(({ isRelock }) => isRelock).map(({ app }) => app.id),
     workspace: isTest ? 'test' : 'regular',
   });
   return { jobIds, codexTaskId, executionProvider, state: getCommunityGalleryState(clientId) };
@@ -3412,9 +3484,9 @@ function createCommunityGenerationJob(input: {
   const developmentPrompt = input.creatorInstruction.trim() || selectedSource.content.trim();
   if (!developmentPrompt) throw new Error('开发提示词不能为空。');
   const timestamp = now();
-  const executionProvider = input.executionProvider || 'deepseek-pro';
-  const initialStatus = executionProvider === 'codex' ? 'waiting_codex' : 'running';
-  if (executionProvider === 'codex' && !input.codexTaskId) {
+  const executionProvider: CommunityDevelopmentProvider = 'codex';
+  const initialStatus = 'waiting_codex';
+  if (!input.codexTaskId) {
     throw new Error('Codex 任务缺少批次编号。');
   }
   let jobId = 0;
@@ -3518,8 +3590,8 @@ export function retryCommunityGeneration(clientId: string, failedJobId: number) 
     requestedBaseVersionId: Number(failedJob.base_version_id),
     selectionReason: failedJob.selection_reason || '',
     automated: false,
-    executionProvider: failedJob.execution_provider === 'codex' ? 'codex' : 'deepseek-pro',
-    codexTaskId: failedJob.execution_provider === 'codex' ? randomUUID() : null,
+    executionProvider: 'codex',
+    codexTaskId: randomUUID(),
   });
   recordEvent(viewer.code, 'retry_community_generation', 'generation_job', jobId, {
     retryOfJobId: Number(failedJobId),
@@ -3528,7 +3600,7 @@ export function retryCommunityGeneration(clientId: string, failedJobId: number) 
   });
   return {
     jobId,
-    executionProvider: failedJob.execution_provider === 'codex' ? 'codex' : 'deepseek-pro',
+    executionProvider: 'codex' as const,
     state: getCommunityGalleryState(clientId),
   };
 }
@@ -3565,9 +3637,7 @@ export function retryLatestCommunityGenerations(clientId: string, appIds: string
   const restarted = jobs.map((job) => retryCommunityGeneration(clientId, Number(job.id)));
   return {
     jobIds: restarted.map((item) => item.jobId),
-    backgroundJobIds: restarted
-      .filter((item) => item.executionProvider === 'deepseek-pro')
-      .map((item) => item.jobId),
+    backgroundJobIds: [],
     state: getCommunityGalleryState(clientId),
   };
 }
@@ -4165,9 +4235,9 @@ export function cancelCommunityWildcard(clientId: string, appId: string) {
     WHERE study_id = ? AND creator_code = ? AND app_id = ?
   `).get(currentStudy.id, viewer.code, app.id) as any;
   if (!wildcard) throw new Error('当前没有已选择的万能卡评论。');
-  const iterationNumber = requireAppRoundOpen(app);
+  const iterationNumber = requireMutableWildcardIteration(app);
   if (Number(wildcard.iteration_number) !== iterationNumber) {
-    throw new Error('本轮开发已经开始，不能再取消万能卡选择。');
+    throw new Error('该万能卡不属于当前尚未发布的开发轮次。');
   }
   db.prepare(`
     DELETE FROM vg_async_wildcards

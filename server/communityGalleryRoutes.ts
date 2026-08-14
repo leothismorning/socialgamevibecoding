@@ -722,9 +722,6 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const clientId = clientIdFrom(req);
       const started = retryCommunityGeneration(clientId, Number(req.params.jobId));
       res.json(started.state);
-      if (started.executionProvider === 'deepseek-pro') {
-        runCommunityGenerationInBackground(started.jobId);
-      }
     } catch (error) {
       sendError(res, error);
     }
@@ -749,7 +746,6 @@ export function registerCommunityGalleryRoutes(app: Express) {
         Array.isArray(req.body?.appIds) ? req.body.appIds.map(String) : [],
       );
       res.json(started.state);
-      started.backgroundJobIds.forEach(runCommunityGenerationInBackground);
     } catch (error) {
       sendError(res, error);
     }
@@ -765,20 +761,13 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/study/enter-development', (req, res) => {
     try {
-      const executionProvider = req.body?.executionProvider === 'deepseek-pro'
-        ? 'deepseek-pro'
-        : 'codex';
       const started = enterCommunityDevelopmentStage(
         clientIdFrom(req),
         Number(req.body?.iterationNumber) as 1 | 2,
         Boolean(req.body?.isTest),
         Array.isArray(req.body?.appIds) ? req.body.appIds.map(String) : undefined,
-        executionProvider,
       );
       res.json(started.state);
-      if (executionProvider === 'deepseek-pro') {
-        started.jobIds.forEach(runCommunityGenerationInBackground);
-      }
     } catch (error) {
       sendError(res, error);
     }

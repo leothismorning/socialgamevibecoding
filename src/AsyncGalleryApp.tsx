@@ -2736,9 +2736,9 @@ function IdeaFlowBoard({
     wildcard.creator_code === state.viewer?.code
   ));
   const wildcardStageIsOpen = openLayer === 1
-    ? app.flow_stage === 'round_1'
+    ? app.flow_stage === 'round_1' || app.flow_stage === 'development_1'
     : openLayer === 2
-      ? app.flow_stage === 'round_2'
+      ? app.flow_stage === 'round_2' || app.flow_stage === 'development_2'
       : false;
   const canUseWildcard = isOwner
     && Boolean(openLayer)
@@ -2876,7 +2876,7 @@ function IdeaFlowBoard({
               {canCancelWildcard && (
                 <button
                   disabled={Boolean(busy)}
-                  title="开发开始前可随时取消，取消后仍可重新选择"
+                  title="本轮作品发布前可随时取消；重新选择后，由 Host 重新锁定并创建新的 Codex 任务"
                   onClick={() => void action('cancel-wildcard', () => (
                     communityGalleryApi.cancelWildcard(clientId, app.id)
                   ))}
@@ -4296,21 +4296,24 @@ function HostPanel({
   const isActiveDevelopmentJob = (status?: string) => (
     status === 'running' || status === 'waiting_codex' || status === 'codex_processing'
   );
-  const selectedCan = (target: 'development_1' | 'development_2' | 'rollback' | 'retry') => (
+  const selectedCan = (target: 'development_1' | 'development_2' | 'rollback') => (
     selectedApps.length > 0 && selectedApps.every((app) => {
       const workspace = app.is_test ? testWorkspace : regularWorkspace;
       if (workspace.status !== 'active') return false;
-      if (target === 'development_1') return app.flow_stage === 'round_1';
-      if (target === 'development_2') return app.flow_stage === 'round_2';
+      if (target === 'development_1') {
+        return Number(app.community_version_count) === 0
+          && ['round_1', 'development_1'].includes(app.flow_stage);
+      }
+      if (target === 'development_2') {
+        return Number(app.community_version_count) === 1
+          && ['round_2', 'development_2'].includes(app.flow_stage);
+      }
       if (target === 'rollback') {
         return ['development_1', 'development_2'].includes(app.flow_stage)
           && app.draft_kind !== 'community'
           && !isActiveDevelopmentJob(latestJobFor(app)?.status);
       }
-      const iterationNumber = app.flow_stage === 'development_1' ? 1 : app.flow_stage === 'development_2' ? 2 : null;
-      const latestJob = iterationNumber ? latestJobFor(app, iterationNumber) : undefined;
-      return Boolean(iterationNumber && latestJob && !isActiveDevelopmentJob(latestJob.status)
-        && Number(app.community_version_count) < iterationNumber);
+      return false;
     })
   );
   const enterSelectedDevelopment = async (iterationNumber: 1 | 2) => {
@@ -4323,7 +4326,6 @@ function HostPanel({
           iterationNumber,
           isTest,
           appIds,
-          'codex',
         );
       }
     }
@@ -4569,24 +4571,17 @@ function HostPanel({
               <button
                 disabled={Boolean(busy) || !selectedCan('development_1')}
                 onClick={() => action('develop-selected-round-1', () => enterSelectedDevelopment(1))}
-              ><Lock /> 锁定第一轮并创建 Codex 任务</button>
+              ><Lock /> 锁定/重新锁定第一轮并创建 Codex 任务</button>
               <button
                 disabled={Boolean(busy) || !selectedCan('development_2')}
                 onClick={() => action('develop-selected-round-2', () => enterSelectedDevelopment(2))}
-              ><Lock /> 锁定第二轮并创建 Codex 任务</button>
+              ><Lock /> 锁定/重新锁定第二轮并创建 Codex 任务</button>
               <button
                 disabled={Boolean(busy) || !selectedCan('rollback')}
                 onClick={() => action('rollback-selected-apps', () => (
                   communityGalleryApi.controlAppFlows(clientId, selectedAppIds, 'rollback')
                 ))}
               ><ArrowLeft /> 回退上一流程</button>
-              <button
-                className="async-retry-development"
-                disabled={Boolean(busy) || !selectedCan('retry')}
-                onClick={() => action('retry-selected-development', () => (
-                  communityGalleryApi.retryAppDevelopment(clientId, selectedAppIds)
-                ))}
-              ><RefreshCw /> 重新开发</button>
             </div>
           </div>
           {state.codexTasks.length > 0 && (
@@ -4696,16 +4691,6 @@ function HostPanel({
                       </span>
                       <p>{status.detail}</p>
                       {status.time && <small>{formatDate(status.time)}</small>}
-                      {status.restartable && status.jobId && (
-                        <button
-                          className="async-retry-development"
-                          disabled={Boolean(busy)}
-                          onClick={() => action(
-                            `retry-development-${status.jobId}`,
-                            () => communityGalleryApi.retryDevelopment(clientId, status.jobId!),
-                          )}
-                        ><RefreshCw /> {status.key === 'failed' ? '失败后重试' : '重新开发'}</button>
-                      )}
                     </div>
                   ))}
                 </article>

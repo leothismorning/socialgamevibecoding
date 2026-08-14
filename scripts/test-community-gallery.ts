@@ -446,6 +446,15 @@ state = gallery.saveCommunityComment({
 });
 const firstRoundComment = state.comments.find((comment: any) => comment.content === 'A test-only comment.');
 assert.ok(firstRoundComment);
+state = gallery.saveCommunityComment({
+  clientId: client(2),
+  appId: testApp.id,
+  content: 'An alternate first-round wildcard direction.',
+});
+const alternateFirstRoundComment = state.comments.find(
+  (comment: any) => comment.content === 'An alternate first-round wildcard direction.',
+);
+assert.ok(alternateFirstRoundComment);
 state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
 let selectedWildcard = state.wildcards.find((wildcard: any) => wildcard.app_id === testApp.id);
 assert.ok(selectedWildcard);
@@ -469,21 +478,42 @@ state = gallery.createSynthesis({
   sources: [{ type: 'comment', id: firstRoundComment.id }],
 });
 let currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
-assert.equal(Number(currentTestApp.current_round_comment_count), 1);
+assert.equal(Number(currentTestApp.current_round_comment_count), 2);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 1);
 let startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 1, true, [testApp.id]);
 assert.equal(startedDevelopment.jobIds.length, 1);
+assert.ok(startedDevelopment.codexTaskId);
 state = gallery.toggleCommunityAppLike(client(2), testApp.id, Number(testInitialVersion.id));
 likedTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(Number(likedTestApp.like_count), 1);
 assert.equal(Number(likedTestApp.viewer_liked), 1);
-gallery.failCommunityGeneration(startedDevelopment.jobIds[0], new Error('simulated generation failure'));
-let restartedDevelopment = gallery.retryLatestCommunityGenerations(hostClient, [testApp.id]);
-assert.equal(restartedDevelopment.jobIds.length, 1);
-gallery.failCommunityGeneration(restartedDevelopment.jobIds[0], new Error('simulated retry failure'));
-state = gallery.controlCommunityAppFlows(hostClient, [testApp.id], 'rollback');
-assert.equal(state.apps.find((app: any) => app.id === testApp.id)?.flow_stage, 'round_1');
+state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
+state = gallery.cancelCommunityWildcard(client(1), testApp.id);
+state = gallery.useCommunityWildcard(client(1), testApp.id, alternateFirstRoundComment.id);
+const firstRelockedDevelopment = gallery.enterCommunityDevelopmentStage(
+  hostClient,
+  1,
+  true,
+  [testApp.id],
+);
+assert.equal(firstRelockedDevelopment.jobIds.length, 1);
+assert.notEqual(firstRelockedDevelopment.codexTaskId, startedDevelopment.codexTaskId);
+let supersededTask = gallery.getCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId!);
+assert.equal(supersededTask.items[0].status, 'cancelled');
+let relockedTask = gallery.getCodexCommunityDevelopmentTask(firstRelockedDevelopment.codexTaskId!);
+assert.ok(relockedTask.items[0].selectedIdeas.some(
+  (idea: any) => idea.sourceType === 'comment'
+    && Number(idea.sourceId) === Number(alternateFirstRoundComment.id),
+));
+gallery.failCommunityGeneration(firstRelockedDevelopment.jobIds[0], new Error('simulated generation failure'));
+state = gallery.cancelCommunityWildcard(client(1), testApp.id);
+state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
 startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 1, true, [testApp.id]);
+relockedTask = gallery.getCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId!);
+assert.ok(relockedTask.items[0].selectedIdeas.some(
+  (idea: any) => idea.sourceType === 'comment'
+    && Number(idea.sourceId) === Number(firstRoundComment.id),
+));
 gallery.completeCommunityGeneration(startedDevelopment.jobIds[0], html('Test App One V1'), 'First community version');
 state = gallery.publishCommunityVersion(client(1), testApp.id);
 currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
@@ -570,20 +600,6 @@ const recreatedSecondRoundComment = state.comments.find(
   (comment: any) => comment.content === 'A recreated second-round comment.',
 );
 assert.ok(recreatedSecondRoundComment);
-// During round two, the wildcard may target either an earlier V0 comment or a
-// current V1 comment. Cancelling before development returns the card so it can
-// be selected again.
-state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
-selectedWildcard = state.wildcards.find((wildcard: any) => wildcard.app_id === testApp.id);
-assert.equal(Number(selectedWildcard?.iteration_number), 2);
-assert.equal(Number(selectedWildcard?.source_id), Number(firstRoundComment.id));
-state = gallery.cancelCommunityWildcard(client(1), testApp.id);
-assert.equal(state.wildcards.some((wildcard: any) => wildcard.app_id === testApp.id), false);
-state = gallery.useCommunityWildcard(client(1), testApp.id, recreatedSecondRoundComment.id);
-selectedWildcard = state.wildcards.find((wildcard: any) => wildcard.app_id === testApp.id);
-assert.equal(Number(selectedWildcard?.source_id), Number(recreatedSecondRoundComment.id));
-state = gallery.cancelCommunityWildcard(client(1), testApp.id);
-state = gallery.useCommunityWildcard(client(1), testApp.id, firstRoundComment.id);
 state = gallery.createSynthesis({
   clientId: client(2),
   targetAppId: testApp.id,
@@ -596,7 +612,6 @@ startedDevelopment = gallery.enterCommunityDevelopmentStage(
   2,
   true,
   [testApp.id],
-  'codex',
 );
 assert.ok(startedDevelopment.codexTaskId);
 let codexTask = gallery.getCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId);
@@ -606,14 +621,12 @@ assert.equal(codexTask.items[0].status, 'waiting_codex');
 assert.match(codexTask.fixedPrompt, /保留原文件/);
 assert.match(codexTask.items[0].baseCode, /Test App One V1/);
 assert.ok(codexTask.items[0].selectedIdeas.length >= 1);
-assert.ok(codexTask.items[0].selectedIdeas.some(
-  (idea: any) => idea.sourceType === 'comment'
-    && Number(idea.sourceId) === Number(firstRoundComment.id),
-), 'a first-round wildcard comment must remain in the second-round development input');
-assert.throws(
-  () => gallery.cancelCommunityWildcard(client(1), testApp.id),
-  /尚未开启.*第二轮|开发已经开始|评论流程/,
-);
+const supersededSecondRoundTaskId = startedDevelopment.codexTaskId!;
+startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 2, true, [testApp.id]);
+supersededTask = gallery.getCodexCommunityDevelopmentTask(supersededSecondRoundTaskId);
+assert.equal(supersededTask.items[0].status, 'cancelled');
+codexTask = gallery.getCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId!);
+assert.ok(codexTask.items[0].selectedIdeas.length >= 1);
 codexTask = gallery.claimCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId);
 assert.equal(codexTask.status, 'processing');
 assert.equal(codexTask.items[0].status, 'codex_processing');
@@ -785,7 +798,7 @@ state = gallery.getCommunityGalleryState(hostClient);
 assert.equal(state.testData.testCreatorCount, 2);
 assert.equal(state.testData.testAppCount, 2);
 assert.ok(state.testData.versionCount >= 2);
-assert.equal(state.testData.commentCount, 4);
+assert.equal(state.testData.commentCount, 5);
 assert.equal(state.testData.hasTestData, true);
 
 state = gallery.closeAsyncCommunityStudy(hostClient, true);
