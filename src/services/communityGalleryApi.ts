@@ -160,6 +160,11 @@ export const communityGalleryApi = {
       method: 'POST',
       body: body({ clientId }),
     }),
+  discardCommunityDevelopment: (clientId: string, appId: string) =>
+    request(`/api/community-gallery/apps/${appId}/discard-community-development`, {
+      method: 'POST',
+      body: body({ clientId }),
+    }),
   uploadCommunityV1: (clientId: string, appId: string, code: string, filename: string) =>
     request(`/api/community-gallery/apps/${appId}/upload-community-v1`, {
       method: 'POST',

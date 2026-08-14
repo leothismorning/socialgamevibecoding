@@ -16,6 +16,7 @@ import {
   deleteOwnInitialApp,
   deleteCommunityComment,
   deleteCommunitySynthesis,
+  discardCommunityDevelopment,
   exportCommunityStudy,
   exportCommunityWorkspace,
   enterCommunityDevelopmentStage,
@@ -635,6 +636,17 @@ export function registerCommunityGalleryRoutes(app: Express) {
   app.post('/api/community-gallery/apps/:appId/publish-community', (req, res) => {
     try {
       res.json(publishCommunityVersion(clientIdFrom(req), String(req.params.appId)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/apps/:appId/discard-community-development', (req, res) => {
+    try {
+      res.json(discardCommunityDevelopment(
+        clientIdFrom(req),
+        String(req.params.appId),
+      ));
     } catch (error) {
       sendError(res, error);
     }

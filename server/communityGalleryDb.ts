@@ -2382,6 +2382,20 @@ function drawWeightedDevelopmentCandidate(candidates: any[]) {
   };
 }
 
+function retireCommunityDevelopmentBriefs(
+  studyId: string,
+  appId: string,
+  iterationNumber: 1 | 2,
+  timestamp: string,
+) {
+  db.prepare(`
+    UPDATE vg_async_syntheses
+    SET deleted_at = COALESCE(deleted_at, ?), updated_at = ?
+    WHERE study_id = ? AND target_app_id = ? AND layer = ?
+      AND COALESCE(is_development_brief, 0) = 1
+  `).run(timestamp, timestamp, studyId, appId, iterationNumber);
+}
+
 export function useCommunityWildcard(clientId: string, appId: string, commentId: number) {
   const { viewer, app } = ownedApp(clientId, appId);
   const currentStudy = requireOpenStudy(Number(app.is_test));
@@ -2551,6 +2565,12 @@ export function enterCommunityDevelopmentStage(
     `);
     winners.forEach(({ app, winner, sources, isRelock }) => {
       if (isRelock) {
+        retireCommunityDevelopmentBriefs(
+          currentStudy.id,
+          app.id,
+          iterationNumber,
+          timestamp,
+        );
         db.prepare(`
           UPDATE vg_async_generation_jobs
           SET status = 'cancelled',
@@ -4250,6 +4270,117 @@ export function cancelCommunityWildcard(clientId: string, appId: string) {
   return getCommunityGalleryState(clientId);
 }
 
+export function discardCommunityDevelopment(clientId: string, appId: string) {
+  const { viewer, app } = ownedApp(clientId, appId);
+  const currentStudy = requireOpenStudy(Number(app.is_test));
+  const completedIterations = communityIterationCount(app.id);
+  const iterationNumber = completedIterations + 1;
+  const expectedDevelopmentStage = iterationNumber === 1
+    ? 'development_1'
+    : iterationNumber === 2
+      ? 'development_2'
+      : null;
+  const roundStage = iterationNumber === 1
+    ? 'round_1'
+    : iterationNumber === 2
+      ? 'round_2'
+      : null;
+  if (!expectedDevelopmentStage || !roundStage || appFlowStage(app) !== expectedDevelopmentStage) {
+    throw new Error('当前没有可放弃的未发布社区开发。');
+  }
+
+  const timestamp = now();
+  const transaction = db.transaction(() => {
+    retireCommunityDevelopmentBriefs(
+      currentStudy.id,
+      app.id,
+      iterationNumber as 1 | 2,
+      timestamp,
+    );
+    db.prepare(`
+      UPDATE vg_async_generation_jobs
+      SET status = 'cancelled',
+        error = '创作者放弃本次开发，等待重新选择万能卡并由主持人再次锁定。',
+        completed_at = COALESCE(completed_at, ?)
+      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+        AND status <> 'cancelled'
+    `).run(timestamp, currentStudy.id, app.id, iterationNumber);
+    db.prepare(`
+      UPDATE vg_async_generation_events
+      SET status = 'failed', title = '创作者已放弃本次开发',
+        detail = '本轮草稿和入选状态已清除，等待主持人重新锁定。',
+        updated_at = ?
+      WHERE study_id = ? AND app_id = ? AND status IN ('pending', 'running')
+        AND job_id IN (
+          SELECT id FROM vg_async_generation_jobs
+          WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+        )
+    `).run(
+      timestamp,
+      currentStudy.id,
+      app.id,
+      currentStudy.id,
+      app.id,
+      iterationNumber,
+    );
+    db.prepare(`
+      UPDATE vg_async_creator_operations
+      SET status = 'failed', error = '创作者已放弃本次社区开发。',
+        completed_at = COALESCE(completed_at, ?)
+      WHERE study_id = ? AND app_id = ? AND phase = 'community' AND status = 'running'
+    `).run(timestamp, currentStudy.id, app.id);
+    db.prepare(`
+      UPDATE vg_async_creator_progress
+      SET status = 'failed', title = '创作者已放弃本次开发',
+        detail = '未发布草稿已删除。', updated_at = ?
+      WHERE study_id = ? AND operation_id IN (
+        SELECT id FROM vg_async_creator_operations
+        WHERE study_id = ? AND app_id = ? AND phase = 'community'
+      ) AND status IN ('pending', 'running')
+    `).run(timestamp, currentStudy.id, currentStudy.id, app.id);
+    db.prepare(`
+      DELETE FROM vg_async_drafts
+      WHERE study_id = ? AND app_id = ? AND kind = 'community'
+        AND iteration_number = ?
+    `).run(currentStudy.id, app.id, iterationNumber);
+    db.prepare(`
+      DELETE FROM vg_async_development_messages
+      WHERE study_id = ? AND app_id = ? AND phase = 'community'
+        AND iteration_number = ?
+    `).run(currentStudy.id, app.id, iterationNumber);
+    db.prepare(`
+      DELETE FROM vg_async_stage_selections
+      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+    `).run(currentStudy.id, app.id, iterationNumber);
+    db.prepare(`
+      DELETE FROM vg_async_wildcards
+      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+    `).run(currentStudy.id, app.id, iterationNumber);
+    db.prepare(`
+      DELETE FROM vg_async_contributors
+      WHERE study_id = ? AND app_id = ? AND iteration_number = ?
+    `).run(currentStudy.id, app.id, iterationNumber);
+    db.prepare(`
+      DELETE FROM vg_async_notifications
+      WHERE study_id = ? AND app_id = ? AND type = 'contribution_selected'
+        AND version_number = ?
+    `).run(currentStudy.id, app.id, iterationNumber);
+    db.prepare(`
+      UPDATE vg_async_apps
+      SET flow_stage = ?, selected_synthesis_id = NULL,
+        selected_source_type = NULL, selected_source_id = NULL, updated_at = ?
+      WHERE study_id = ? AND id = ?
+    `).run(roundStage, timestamp, currentStudy.id, app.id);
+  });
+  transaction();
+  recordEvent(viewer.code, 'discard_community_development', 'app', app.id, {
+    iterationNumber,
+    returnedToStage: roundStage,
+    wildcardReleased: true,
+  });
+  return getCommunityGalleryState(clientId);
+}
+
 export function rollbackFirstCommunityVersion(clientId: string, appId: string) {
   const { viewer, app } = ownedApp(clientId, appId);
   const currentStudy = requireOpenStudy(Number(app.is_test));
@@ -5222,7 +5353,7 @@ export function getCommunityGalleryState(clientId = '') {
           AND s.withdrawn_at IS NULL
           AND (
             s.deleted_at IS NULL
-            OR s.author_code = ?
+            OR (s.author_code = ? AND COALESCE(s.is_development_brief, 0) = 0)
             OR EXISTS (
               SELECT 1 FROM vg_async_synthesis_sources source
               WHERE source.study_id = s.study_id

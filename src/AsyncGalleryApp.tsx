@@ -3626,6 +3626,15 @@ function CommunityDraftPanel({
       () => communityGalleryApi.uploadCommunityVersion(clientId, app.id, code, file.name),
     );
   };
+  const discardCurrentDevelopment = async () => {
+    if (!window.confirm(
+      `确定放弃第 ${iterationNumber} 轮本次开发吗？\n\n当前 Codex 任务和未发布草稿会被取消，本轮入选标记及万能卡选择也会清除。原评论不会删除，之后可以重新选择万能卡，再由 Host 重新锁定开发。`,
+    )) return;
+    await action(
+      `discard-community-${iterationNumber}`,
+      () => communityGalleryApi.discardCommunityDevelopment(clientId, app.id),
+    );
+  };
 
   return (
     <section className="async-community-studio">
@@ -3768,8 +3777,26 @@ function CommunityDraftPanel({
                 return next;
               })}
             ><Check /> 发布并且保存</button>
+            <button
+              type="button"
+              className="async-discard-development"
+              disabled={Boolean(busy)}
+              onClick={() => void discardCurrentDevelopment()}
+            ><RotateCcw /> {busy === `discard-community-${iterationNumber}`
+                ? '正在放弃本次开发…'
+                : '放弃本次开发'}</button>
           </div>
         </div>
+      )}
+      {canUploadCommunityVersion && !hasCommunityDraft && (
+        <button
+          type="button"
+          className="async-discard-development is-standalone"
+          disabled={Boolean(busy)}
+          onClick={() => void discardCurrentDevelopment()}
+        ><RotateCcw /> {busy === `discard-community-${iterationNumber}`
+            ? '正在放弃本次开发…'
+            : '放弃本次开发'}</button>
       )}
     </section>
   );

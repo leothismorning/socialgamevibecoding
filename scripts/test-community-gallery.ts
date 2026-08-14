@@ -515,6 +515,42 @@ assert.ok(relockedTask.items[0].selectedIdeas.some(
     && Number(idea.sourceId) === Number(firstRoundComment.id),
 ));
 gallery.completeCommunityGeneration(startedDevelopment.jobIds[0], html('Test App One V1'), 'First community version');
+state = gallery.getCommunityGalleryState(client(1));
+assert.equal(state.syntheses.filter((synthesis: any) => (
+  synthesis.target_app_id === testApp.id && synthesis.is_development_brief
+)).length, 1, 'only the latest relocked development brief should remain visible');
+assert.throws(
+  () => gallery.discardCommunityDevelopment(client(2), testApp.id),
+  /只有该应用的创作者|只能操作|自己的应用/,
+);
+state = gallery.discardCommunityDevelopment(client(1), testApp.id);
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(currentTestApp.flow_stage, 'round_1');
+assert.equal(currentTestApp.draft_kind, null);
+assert.equal(state.wildcards.some((wildcard: any) => wildcard.app_id === testApp.id), false);
+assert.equal(state.syntheses.some((synthesis: any) => (
+  synthesis.target_app_id === testApp.id && synthesis.is_development_brief
+)), false);
+assert.equal(state.generationJobs.find(
+  (job: any) => Number(job.id) === Number(startedDevelopment.jobIds[0]),
+)?.status, 'cancelled');
+assert.equal(Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_stage_selections
+  WHERE app_id = ? AND iteration_number = 1
+`).get(testApp.id) as { count: number }).count), 0);
+assert.equal(Number((db.prepare(`
+  SELECT COUNT(*) AS count FROM vg_async_notifications
+  WHERE app_id = ? AND type = 'contribution_selected' AND version_number = 1
+`).get(testApp.id) as { count: number }).count), 0);
+assert.ok(state.comments.some((comment: any) => comment.id === firstRoundComment.id));
+state = gallery.useCommunityWildcard(client(1), testApp.id, alternateFirstRoundComment.id);
+startedDevelopment = gallery.enterCommunityDevelopmentStage(hostClient, 1, true, [testApp.id]);
+relockedTask = gallery.getCodexCommunityDevelopmentTask(startedDevelopment.codexTaskId!);
+assert.ok(relockedTask.items[0].selectedIdeas.some(
+  (idea: any) => idea.sourceType === 'comment'
+    && Number(idea.sourceId) === Number(alternateFirstRoundComment.id),
+), 'a discarded wildcard must be selectable again for the replacement task');
+gallery.completeCommunityGeneration(startedDevelopment.jobIds[0], html('Test App One V1'), 'Replacement first community version');
 state = gallery.publishCommunityVersion(client(1), testApp.id);
 currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'round_2');
