@@ -37,7 +37,7 @@ import {
   publishProjectDraft,
   replayCelebratedContributionNotifications,
   replacePublishedCommunityVersionHtml,
-  rollbackFirstCommunityVersion,
+  rollbackLatestCommunityVersion,
   recordCreatorDevelopmentProgress,
   recordCommunityGenerationProgress,
   clearCommunityTestData,
@@ -798,9 +798,19 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
+  app.post('/api/community-gallery/apps/:appId/rollback-latest-community-version', (req, res) => {
+    try {
+      res.json(rollbackLatestCommunityVersion(clientIdFrom(req), String(req.params.appId)));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  // Keep stale, already-open clients functional across deployment. New clients
+  // use the generic latest-version endpoint above.
   app.post('/api/community-gallery/apps/:appId/rollback-community-v1', (req, res) => {
     try {
-      res.json(rollbackFirstCommunityVersion(clientIdFrom(req), String(req.params.appId)));
+      res.json(rollbackLatestCommunityVersion(clientIdFrom(req), String(req.params.appId)));
     } catch (error) {
       sendError(res, error);
     }

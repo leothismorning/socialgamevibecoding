@@ -185,8 +185,8 @@ export const communityGalleryApi = {
     method: 'POST',
     body: body({ clientId, code, filename }),
   }),
-  rollbackCommunityV1: (clientId: string, appId: string) =>
-    request(`/api/community-gallery/apps/${appId}/rollback-community-v1`, {
+  rollbackLatestCommunityVersion: (clientId: string, appId: string) =>
+    request(`/api/community-gallery/apps/${appId}/rollback-latest-community-version`, {
       method: 'POST',
       body: body({ clientId }),
     }),

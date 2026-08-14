@@ -595,24 +595,36 @@ assert.ok(secondRoundSynthesis);
 state = gallery.toggleCommunityCommentLike(client(1), secondRoundComment.id);
 state = gallery.voteForSynthesis(client(1), secondRoundSynthesis.id);
 state = gallery.toggleCreativeBasket(client(1), 'comment', secondRoundComment.id);
+const firstSelectionBeforePublishRollback = db.prepare(`
+  SELECT * FROM vg_async_stage_selections
+  WHERE app_id = ? AND iteration_number = 1
+`).get(testApp.id) as any;
+const firstSelectionAuditBeforePublishRollback = JSON.parse(
+  firstSelectionBeforePublishRollback.source_popularity_json,
+);
+const retainedFirstRoundSource = {
+  sourceType: firstSelectionAuditBeforePublishRollback.selected_source_type,
+  sourceId: Number(firstSelectionAuditBeforePublishRollback.selected_source_id),
+};
+assert.ok(retainedFirstRoundSource.sourceType);
+assert.ok(retainedFirstRoundSource.sourceId);
 assert.throws(
-  () => gallery.rollbackFirstCommunityVersion(client(2), testApp.id),
+  () => gallery.rollbackLatestCommunityVersion(client(2), testApp.id),
   /只有主持人/,
-  'a non-owner Creator may not roll back the published first community version',
+  'a non-owner Creator may not withdraw the latest published community version',
 );
 assert.throws(
-  () => gallery.rollbackFirstCommunityVersion(client(1), testApp.id),
+  () => gallery.rollbackLatestCommunityVersion(client(1), testApp.id),
   /只有主持人/,
-  'the App Creator no longer owns the published-version rollback control',
+  'the App Creator does not own the published-version withdrawal control',
 );
-state = gallery.rollbackFirstCommunityVersion(hostClient, testApp.id);
+state = gallery.rollbackLatestCommunityVersion(hostClient, testApp.id);
 currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'development_1');
 assert.equal(currentTestApp.community_version_id, null);
 assert.equal(Number(currentTestApp.community_version_count), 0);
-assert.equal(currentTestApp.draft_kind, 'community');
-assert.equal(Number(currentTestApp.draft_iteration_number), 1);
-assert.match(String(currentTestApp.draft_code), /Test App One V1/);
+assert.equal(currentTestApp.draft_kind, null);
+assert.equal(state.wildcards.some((wildcard: any) => wildcard.app_id === testApp.id), false);
 assert.equal(state.versions.some((version: any) => version.id === firstCommunityVersion.id), false);
 assert.equal(state.comments.some((comment: any) => comment.id === secondRoundComment.id), false);
 assert.equal(state.syntheses.some((synthesis: any) => synthesis.id === secondRoundSynthesis.id), false);
@@ -628,10 +640,59 @@ assert.equal(Number((db.prepare(`
   SELECT COUNT(*) AS count FROM vg_async_synthesis_likes WHERE synthesis_id = ?
 `).get(secondRoundSynthesis.id) as { count: number }).count), 0);
 
+const retainedFirstRoundSelection = db.prepare(`
+  SELECT * FROM vg_async_stage_selections
+  WHERE app_id = ? AND iteration_number = 1
+`).get(testApp.id) as any;
+const retainedFirstRoundAudit = JSON.parse(retainedFirstRoundSelection.source_popularity_json);
+assert.equal(retainedFirstRoundAudit.selected_source_type, retainedFirstRoundSource.sourceType);
+assert.equal(Number(retainedFirstRoundAudit.selected_source_id), retainedFirstRoundSource.sourceId);
+assert.equal(retainedFirstRoundAudit.wildcard, null);
+assert.deepEqual(retainedFirstRoundAudit.developed_sources, [{
+  source_type: retainedFirstRoundSource.sourceType,
+  source_id: retainedFirstRoundSource.sourceId,
+}]);
+state = gallery.useCommunityWildcard(client(1), testApp.id, alternateFirstRoundComment.id);
+const replacementAfterPublishRollback = gallery.enterCommunityDevelopmentStage(
+  hostClient,
+  1,
+  true,
+  [testApp.id],
+);
+const replacementAfterPublishRollbackTask = gallery.getCodexCommunityDevelopmentTask(
+  replacementAfterPublishRollback.codexTaskId!,
+);
+assert.ok(replacementAfterPublishRollbackTask.items[0].selectedIdeas.some(
+  (idea: any) => idea.sourceType === retainedFirstRoundSource.sourceType
+    && Number(idea.sourceId) === retainedFirstRoundSource.sourceId,
+), 'the originally drawn source must be reused after withdrawing a published round');
+assert.ok(replacementAfterPublishRollbackTask.items[0].selectedIdeas.some(
+  (idea: any) => idea.sourceType === 'comment'
+    && Number(idea.sourceId) === Number(alternateFirstRoundComment.id),
+), 'the released wildcard may be selected again and merged into the replacement task');
+const reusedFirstRoundSelection = db.prepare(`
+  SELECT source_popularity_json FROM vg_async_stage_selections
+  WHERE app_id = ? AND iteration_number = 1
+`).get(testApp.id) as any;
+const reusedFirstRoundAudit = JSON.parse(reusedFirstRoundSelection.source_popularity_json);
+assert.equal(reusedFirstRoundAudit.reused_system_selection, true);
+assert.equal(reusedFirstRoundAudit.selected_source_type, retainedFirstRoundSource.sourceType);
+assert.equal(Number(reusedFirstRoundAudit.selected_source_id), retainedFirstRoundSource.sourceId);
+gallery.completeCommunityGeneration(
+  replacementAfterPublishRollback.jobIds[0],
+  html('Test App One V1 Redeveloped'),
+  'Redeveloped first community version after withdrawal',
+);
 state = gallery.publishCommunityVersion(client(1), testApp.id);
 currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'round_2');
 assert.equal(Number(currentTestApp.community_version_count), 1);
+const republishedFirstCommunityVersion = state.versions.find(
+  (version: any) => version.app_id === testApp.id
+    && version.kind === 'community'
+    && Number(version.version_number) === 2,
+);
+assert.ok(republishedFirstCommunityVersion);
 state = gallery.saveCommunityComment({
   clientId: client(2),
   appId: testApp.id,
@@ -693,11 +754,55 @@ currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'completed');
 assert.equal(Number(currentTestApp.current_round_comment_count), 0);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 0);
-assert.throws(
-  () => gallery.rollbackFirstCommunityVersion(hostClient, testApp.id),
-  /尚未发布社区版本 2|只有已经发布社区版本 1/,
-  'the destructive rollback is unavailable after V2 has already been published',
+const publishedSecondCommunityVersion = state.versions.find(
+  (version: any) => version.app_id === testApp.id
+    && version.kind === 'community'
+    && Number(version.version_number) === 3,
 );
+assert.ok(publishedSecondCommunityVersion);
+const secondSelectionBeforePublishRollback = db.prepare(`
+  SELECT source_popularity_json FROM vg_async_stage_selections
+  WHERE app_id = ? AND iteration_number = 2
+`).get(testApp.id) as any;
+const secondSelectionAuditBeforePublishRollback = JSON.parse(
+  secondSelectionBeforePublishRollback.source_popularity_json,
+);
+state = gallery.rollbackLatestCommunityVersion(hostClient, testApp.id);
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(currentTestApp.flow_stage, 'development_2');
+assert.equal(Number(currentTestApp.community_version_count), 1);
+assert.equal(
+  Number(currentTestApp.community_version_id),
+  Number(republishedFirstCommunityVersion.id),
+);
+assert.equal(state.versions.some(
+  (version: any) => Number(version.id) === Number(publishedSecondCommunityVersion.id),
+), false);
+assert.ok(state.comments.some(
+  (comment: any) => Number(comment.id) === Number(recreatedSecondRoundComment.id),
+), 'withdrawing V2 must preserve its second-round source discussion');
+const replacementSecondRoundDevelopment = gallery.enterCommunityDevelopmentStage(
+  hostClient,
+  2,
+  true,
+  [testApp.id],
+);
+const replacementSecondRoundTask = gallery.getCodexCommunityDevelopmentTask(
+  replacementSecondRoundDevelopment.codexTaskId!,
+);
+assert.ok(replacementSecondRoundTask.items[0].selectedIdeas.some(
+  (idea: any) => idea.sourceType === secondSelectionAuditBeforePublishRollback.selected_source_type
+    && Number(idea.sourceId) === Number(secondSelectionAuditBeforePublishRollback.selected_source_id),
+), 'V2 redevelopment must reuse the original second-round system draw');
+gallery.completeCommunityGeneration(
+  replacementSecondRoundDevelopment.jobIds[0],
+  html('Test App One V2 Redeveloped'),
+  'Redeveloped second community version after withdrawal',
+);
+state = gallery.publishCommunityVersion(client(1), testApp.id);
+currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
+assert.equal(currentTestApp.flow_stage, 'completed');
+assert.equal(Number(currentTestApp.community_version_count), 2);
 assert.throws(() => gallery.saveCommunityComment({
   clientId: client(4),
   appId: regularApp.id,

@@ -4320,10 +4320,14 @@ function HostPanel({
           && !isActiveDevelopmentJob(latestJobFor(app)?.status);
       }
       if (target === 'version_rollback') {
-        return Number(app.community_version_count) === 1
+        const publishedIteration = Number(app.community_version_count);
+        const stageAllowsRollback = publishedIteration === 1
+          ? ['round_2', 'development_2'].includes(app.flow_stage)
+          : publishedIteration === 2 && app.flow_stage === 'completed';
+        return [1, 2].includes(publishedIteration)
           && Boolean(app.community_version_id)
-          && ['round_2', 'development_2'].includes(app.flow_stage)
-          && !isActiveDevelopmentJob(latestJobFor(app, 2)?.status);
+          && stageAllowsRollback
+          && !isActiveDevelopmentJob(latestJobFor(app)?.status);
       }
       return false;
     })
@@ -4346,12 +4350,12 @@ function HostPanel({
   const rollbackSelectedVersions = async () => {
     const labels = selectedApps.map((app) => app.creator_code).join('、');
     const confirmed = window.confirm(
-      `确认将 ${labels} 的社区版本 1 回退到初始版本吗？\n\n第二轮评论、点赞和综合评论将被清除；V1 会保留为 Creator 可见的待发布草稿。`,
+      `确认撤回 ${labels} 最新一轮已经发布的社区版本吗？\n\n本轮系统抽中的评论会保留，不会重新抽取；本轮万能卡将释放，Creator 可以重新选择后再次开发。若撤回 V1，依赖 V1 的第二轮讨论会被清除。`,
     );
     if (!confirmed) return state;
     let next = state;
     for (const app of selectedApps) {
-      next = await communityGalleryApi.rollbackCommunityV1(clientId, app.id);
+      next = await communityGalleryApi.rollbackLatestCommunityVersion(clientId, app.id);
     }
     return next;
   };
@@ -4607,10 +4611,10 @@ function HostPanel({
                 ))}
               ><ArrowLeft /> 回退上一流程</button>
               <button
-                className="async-rollback-community-v1"
+                className="async-withdraw-community-version"
                 disabled={Boolean(busy) || !selectedCan('version_rollback')}
                 onClick={() => action('rollback-selected-versions', rollbackSelectedVersions)}
-              ><RotateCcw /> 回退到初始版本</button>
+              ><RotateCcw /> 撤回本轮发布并重新开发</button>
             </div>
           </div>
           {state.codexTasks.length > 0 && (
