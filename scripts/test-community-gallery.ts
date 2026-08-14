@@ -597,10 +597,15 @@ state = gallery.voteForSynthesis(client(1), secondRoundSynthesis.id);
 state = gallery.toggleCreativeBasket(client(1), 'comment', secondRoundComment.id);
 assert.throws(
   () => gallery.rollbackFirstCommunityVersion(client(2), testApp.id),
-  /自己的应用|只能操作|只有该应用的创作者/,
-  'only the App creator may roll back the published first community version',
+  /只有主持人/,
+  'a non-owner Creator may not roll back the published first community version',
 );
-state = gallery.rollbackFirstCommunityVersion(client(1), testApp.id);
+assert.throws(
+  () => gallery.rollbackFirstCommunityVersion(client(1), testApp.id),
+  /只有主持人/,
+  'the App Creator no longer owns the published-version rollback control',
+);
+state = gallery.rollbackFirstCommunityVersion(hostClient, testApp.id);
 currentTestApp = state.apps.find((app: any) => app.id === testApp.id);
 assert.equal(currentTestApp.flow_stage, 'development_1');
 assert.equal(currentTestApp.community_version_id, null);
@@ -689,7 +694,7 @@ assert.equal(currentTestApp.flow_stage, 'completed');
 assert.equal(Number(currentTestApp.current_round_comment_count), 0);
 assert.equal(Number(currentTestApp.current_round_synthesis_count), 0);
 assert.throws(
-  () => gallery.rollbackFirstCommunityVersion(client(1), testApp.id),
+  () => gallery.rollbackFirstCommunityVersion(hostClient, testApp.id),
   /尚未发布社区版本 2|只有已经发布社区版本 1/,
   'the destructive rollback is unavailable after V2 has already been published',
 );

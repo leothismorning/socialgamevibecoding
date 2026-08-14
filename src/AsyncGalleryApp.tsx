@@ -367,8 +367,6 @@ function PublishedCreatorStudio({
     + Number(ownApp.feedback_reply_count || 0)
     + Number(ownApp.feedback_synthesis_count || 0);
   const deleteBlockedByFeedback = feedbackCount > 0;
-  const canRollbackCommunityV1 = Number(ownApp.community_version_count || 0) === 1
-    && Boolean(ownApp.community_version_id);
   const progressSteps = [
     ['plan', '理解需求'],
     ['structure', '搭建页面'],
@@ -450,24 +448,6 @@ function PublishedCreatorStudio({
           <ArrowRight />
         </button>
         <aside className={`async-delete-app-control${deleteBlockedByFeedback ? ' is-blocked' : ''}`}>
-          {canRollbackCommunityV1 && (
-            <button
-              type="button"
-              className="async-rollback-community-v1"
-              disabled={Boolean(busy)}
-              title="撤回社区版本 1，恢复初始版本并清除第二轮讨论"
-              onClick={() => {
-                const confirmed = window.confirm(
-                  `确认将“${ownApp.title}”回退到初始版本吗？\n\n社区版本 1 会转为仅你可见的待发布草稿，第二轮评论、点赞和综合评论将被清除。`,
-                );
-                if (!confirmed) return;
-                void action(
-                  'rollback-community-v1',
-                  () => communityGalleryApi.rollbackCommunityV1(clientId, ownApp.id),
-                );
-              }}
-            ><RotateCcw /> {busy === 'rollback-community-v1' ? '正在回退…' : '回退到初始版本'}</button>
-          )}
           <button
             type="button"
             className="async-delete-initial-app"
@@ -481,9 +461,6 @@ function PublishedCreatorStudio({
           ><Trash2 /> 删除这个 App</button>
           {deleteBlockedByFeedback && (
             <small id="delete-app-feedback-note">作品已有评论，不能删除</small>
-          )}
-          {canRollbackCommunityV1 && (
-            <small className="async-rollback-note">回退会清除第二轮讨论，V1 将保留为待发布草稿</small>
           )}
         </aside>
       </section>
@@ -4323,7 +4300,9 @@ function HostPanel({
   const isActiveDevelopmentJob = (status?: string) => (
     status === 'running' || status === 'waiting_codex' || status === 'codex_processing'
   );
-  const selectedCan = (target: 'development_1' | 'development_2' | 'rollback') => (
+  const selectedCan = (
+    target: 'development_1' | 'development_2' | 'flow_rollback' | 'version_rollback',
+  ) => (
     selectedApps.length > 0 && selectedApps.every((app) => {
       const workspace = app.is_test ? testWorkspace : regularWorkspace;
       if (workspace.status !== 'active') return false;
@@ -4335,10 +4314,16 @@ function HostPanel({
         return Number(app.community_version_count) === 1
           && ['round_2', 'development_2'].includes(app.flow_stage);
       }
-      if (target === 'rollback') {
+      if (target === 'flow_rollback') {
         return ['development_1', 'development_2'].includes(app.flow_stage)
           && app.draft_kind !== 'community'
           && !isActiveDevelopmentJob(latestJobFor(app)?.status);
+      }
+      if (target === 'version_rollback') {
+        return Number(app.community_version_count) === 1
+          && Boolean(app.community_version_id)
+          && ['round_2', 'development_2'].includes(app.flow_stage)
+          && !isActiveDevelopmentJob(latestJobFor(app, 2)?.status);
       }
       return false;
     })
@@ -4355,6 +4340,18 @@ function HostPanel({
           appIds,
         );
       }
+    }
+    return next;
+  };
+  const rollbackSelectedVersions = async () => {
+    const labels = selectedApps.map((app) => app.creator_code).join('、');
+    const confirmed = window.confirm(
+      `确认将 ${labels} 的社区版本 1 回退到初始版本吗？\n\n第二轮评论、点赞和综合评论将被清除；V1 会保留为 Creator 可见的待发布草稿。`,
+    );
+    if (!confirmed) return state;
+    let next = state;
+    for (const app of selectedApps) {
+      next = await communityGalleryApi.rollbackCommunityV1(clientId, app.id);
     }
     return next;
   };
@@ -4604,11 +4601,16 @@ function HostPanel({
                 onClick={() => action('develop-selected-round-2', () => enterSelectedDevelopment(2))}
               ><Lock /> 锁定/重新锁定第二轮并创建 Codex 任务</button>
               <button
-                disabled={Boolean(busy) || !selectedCan('rollback')}
+                disabled={Boolean(busy) || !selectedCan('flow_rollback')}
                 onClick={() => action('rollback-selected-apps', () => (
                   communityGalleryApi.controlAppFlows(clientId, selectedAppIds, 'rollback')
                 ))}
               ><ArrowLeft /> 回退上一流程</button>
+              <button
+                className="async-rollback-community-v1"
+                disabled={Boolean(busy) || !selectedCan('version_rollback')}
+                onClick={() => action('rollback-selected-versions', rollbackSelectedVersions)}
+              ><RotateCcw /> 回退到初始版本</button>
             </div>
           </div>
           {state.codexTasks.length > 0 && (

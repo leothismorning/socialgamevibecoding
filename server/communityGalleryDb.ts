@@ -4382,7 +4382,10 @@ export function discardCommunityDevelopment(clientId: string, appId: string) {
 }
 
 export function rollbackFirstCommunityVersion(clientId: string, appId: string) {
-  const { viewer, app } = ownedApp(clientId, appId);
+  const { viewer, app } = accessibleApp(clientId, appId);
+  if (viewer.role !== 'host') {
+    throw new Error('只有主持人可以回退已发布的社区版本。');
+  }
   const currentStudy = requireOpenStudy(Number(app.is_test));
   const completedIterations = communityIterationCount(app.id);
   if (completedIterations !== 1 || !app.community_version_id) {
