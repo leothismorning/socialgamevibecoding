@@ -49,10 +49,16 @@ function numericOption(name: string, environmentName: string, fallback: number, 
   return Number.isFinite(value) && value >= minimum ? value : fallback;
 }
 
-function defaultCodexCommand() {
-  const executable = process.platform === 'win32' ? 'codex.cmd' : 'codex';
-  const localCommand = path.resolve(process.cwd(), 'node_modules', '.bin', executable);
-  return existsSync(localCommand) ? localCommand : 'codex';
+function codexInvocation() {
+  const configuredCommand = argumentValue('--codex-command') || process.env.CODEX_COMMAND;
+  if (configuredCommand) {
+    return { command: configuredCommand, argumentPrefix: [] as string[] };
+  }
+  const localCli = path.resolve(process.cwd(), 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  if (existsSync(localCli)) {
+    return { command: process.execPath, argumentPrefix: [localCli] };
+  }
+  return { command: 'codex', argumentPrefix: [] as string[] };
 }
 
 function codexChildEnvironment() {
@@ -185,7 +191,7 @@ function validateResult(code: string) {
 }
 
 async function runCodex(taskRoot: string, timeoutMs: number) {
-  const command = argumentValue('--codex-command') || process.env.CODEX_COMMAND || defaultCodexCommand();
+  const invocation = codexInvocation();
   const instruction = [
     '阅读当前目录的 request.md，并严格按要求完成作品。',
     '如果存在 original.html，只把它作为基础版本读取，不要覆盖。',
@@ -202,10 +208,10 @@ async function runCodex(taskRoot: string, timeoutMs: number) {
     instruction,
   ];
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(invocation.command, [...invocation.argumentPrefix, ...args], {
       cwd: taskRoot,
       env: codexChildEnvironment(),
-      shell: process.platform === 'win32',
+      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';
