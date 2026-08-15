@@ -28,11 +28,11 @@ npm run codex-worker -- --url https://socialgamevibecoding-production.up.railway
 1. Creator 提交应用名称、简介和创作提示。
 2. Railway 只保存任务并立即返回，页面显示“等待 Codex”。
 3. 本地 Worker 领取一个任务，在 `.codex-worker-tasks/` 中创建独立目录。
-4. Codex 读取 `request.md`，生成单个完整的 `result.html`。
-5. Worker 校验 HTML 后回传；Creator 页面自动显示可试玩、可继续修改的草稿。
+4. Codex 在只读沙箱中读取 `request.md`，把完整单文件 HTML 返回给 Worker。
+5. Worker 保存并校验 `result.html` 后回传；Creator 页面自动显示可试玩、可继续修改的草稿。
 6. Creator 点击发布后作品才正式进入社区。
 
-任务目录和 Worker ID 已加入 `.gitignore`。Creator 输入只会作为作品需求写入任务文件；Codex 使用临时会话、忽略本机自定义规则、关闭网络，并只拥有任务目录的写权限。Worker 令牌和本机环境中的 API Key 不会传入 Codex 子进程。
+任务目录和 Worker ID 已加入 `.gitignore`。Creator 输入只会作为作品需求写入任务文件；Codex 使用临时会话、忽略本机自定义规则、关闭网络，并在只读沙箱中运行。只有固定的 Worker 程序能够保存最终 HTML。Worker 令牌、本机 API Key 和 Codex Desktop 内部环境变量不会传入 Codex 子进程。
 
 ## 常见问题
 

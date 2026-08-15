@@ -64,11 +64,24 @@ function codexInvocation() {
 function codexChildEnvironment() {
   const environment = { ...process.env };
   for (const name of Object.keys(environment)) {
-    if (/(?:api_?key|token|secret|password|credential)/i.test(name)) {
+    const isCodexDesktopInternal = /^CODEX_/i.test(name) && name.toUpperCase() !== 'CODEX_HOME';
+    if (isCodexDesktopInternal || /(?:api_?key|token|secret|password|credential)/i.test(name)) {
       delete environment[name];
     }
   }
   return environment;
+}
+
+function htmlFromCodexResponse(response: string) {
+  const trimmed = response.trim();
+  const fenced = trimmed.match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fenced?.[1]?.trim() || trimmed;
+  const doctypeStart = candidate.search(/<!doctype\s+html/i);
+  const htmlStart = candidate.search(/<html\b/i);
+  const start = doctypeStart >= 0 ? doctypeStart : htmlStart;
+  const closing = candidate.toLowerCase().lastIndexOf('</html>');
+  if (start < 0 || closing < start) return candidate;
+  return candidate.slice(start, closing + '</html>'.length).trim();
 }
 
 function safeName(value: string, fallback: string) {
@@ -192,19 +205,29 @@ function validateResult(code: string) {
 
 async function runCodex(taskRoot: string, timeoutMs: number) {
   const invocation = codexInvocation();
+  const finalResponsePath = path.join(taskRoot, 'codex-final-response.txt');
+  if (existsSync(finalResponsePath)) {
+    await rename(
+      finalResponsePath,
+      path.join(taskRoot, `codex-final-response.previous-${Date.now()}.txt`),
+    );
+  }
   const instruction = [
     '阅读当前目录的 request.md，并严格按要求完成作品。',
     '如果存在 original.html，只把它作为基础版本读取，不要覆盖。',
-    '必须把最终完整单文件 HTML 写入当前目录的 result.html。',
-    '不要只在最终回复里粘贴代码；确认文件已经写入后即可结束。',
+    '当前运行环境为只读，不要尝试创建、修改或删除文件。',
+    '最终回复必须只包含完整的单文件 HTML 源码，从 <!doctype html> 开始到 </html> 结束。',
+    '不要使用 Markdown 代码围栏，不要附加解释、摘要或其他文字。',
   ].join('');
   const args = [
     'exec',
     '--ephemeral',
     '--ignore-user-config',
     '--sandbox',
-    'workspace-write',
+    'read-only',
     '--skip-git-repo-check',
+    '--output-last-message',
+    finalResponsePath,
     instruction,
   ];
   await new Promise<void>((resolve, reject) => {
@@ -248,6 +271,9 @@ async function runCodex(taskRoot: string, timeoutMs: number) {
       ].filter(Boolean).join('\n')));
     });
   });
+  const response = await readFile(finalResponsePath, 'utf8').catch(() => '');
+  if (!response.trim()) throw new Error('Codex 没有返回最终 HTML 内容。');
+  return htmlFromCodexResponse(response);
 }
 
 async function processItem(
@@ -276,9 +302,9 @@ async function processItem(
   }
   process.stdout.write(`\n开始开发 ${item.creatorCode} · ${item.appTitle}\n任务目录：${itemRoot}\n`);
   try {
-    await runCodex(itemRoot, timeoutMs);
-    const code = await readFile(resultPath, 'utf8');
+    const code = await runCodex(itemRoot, timeoutMs);
     validateResult(code);
+    await writeFile(resultPath, code, 'utf8');
     await requestJson(
       `${baseUrl}/api/community-gallery/codex-worker/tasks/${encodeURIComponent(task.taskId)}`
         + `/jobs/${encodeURIComponent(String(item.jobId))}/result`,
