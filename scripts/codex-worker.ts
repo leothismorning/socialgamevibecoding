@@ -93,6 +93,34 @@ function sleep(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+class PlatformRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'PlatformRequestError';
+    this.status = status;
+  }
+}
+
+type RequestRetryOptions = {
+  attempts?: number;
+  timeoutMs?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  label?: string;
+};
+
+function retryablePlatformError(error: unknown) {
+  if (error instanceof PlatformRequestError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500;
+  }
+  const message = error instanceof Error
+    ? `${error.name} ${error.message} ${String((error as Error & { cause?: unknown }).cause || '')}`
+    : String(error);
+  return /fetch failed|abort|timeout|timed out|econn|enet|eai_again|socket|network/i.test(message);
+}
+
 function platformUrl() {
   return (argumentValue('--url') || process.env.COMMUNITY_GALLERY_URL || 'http://localhost:3000')
     .replace(/\/+$/, '');
@@ -110,21 +138,51 @@ async function requestJson<T>(
   url: string,
   token: string,
   options: RequestInit = {},
+  retryOptions: RequestRetryOptions = {},
 ): Promise<T | null> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(options.headers || {}),
-    },
-  });
-  if (response.status === 204) return null;
-  const payload = await response.json().catch(() => ({})) as any;
-  if (!response.ok) {
-    throw new Error(payload.error || `平台请求失败（HTTP ${response.status}）。`);
+  const attempts = Math.max(1, Math.floor(retryOptions.attempts || 1));
+  const timeoutMs = Math.max(5_000, retryOptions.timeoutMs || 30_000);
+  const baseDelayMs = Math.max(250, retryOptions.baseDelayMs || 1_000);
+  const maxDelayMs = Math.max(baseDelayMs, retryOptions.maxDelayMs || 15_000);
+  const label = retryOptions.label || '平台请求';
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...(options.headers || {}),
+        },
+      });
+      if (response.status === 204) return null;
+      const payload = await response.json().catch(() => ({})) as any;
+      if (!response.ok) {
+        throw new PlatformRequestError(
+          payload.error || `平台请求失败（HTTP ${response.status}）。`,
+          response.status,
+        );
+      }
+      return payload as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !retryablePlatformError(error)) throw error;
+      const delayMs = Math.min(maxDelayMs, baseDelayMs * (2 ** (attempt - 1)));
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `${label}暂时失败（${attempt}/${attempts}）：${message}；${Math.ceil(delayMs / 1000)} 秒后重试。\n`,
+      );
+      await sleep(delayMs);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
-  return payload as T;
+  throw lastError;
 }
 
 function requestMarkdown(task: CodexTask, item: CodexTaskItem) {
@@ -297,14 +355,43 @@ async function processItem(
     'utf8',
   );
   const resultPath = path.join(itemRoot, 'result.html');
-  if (existsSync(resultPath)) {
-    await rename(resultPath, path.join(itemRoot, `result.previous-${Date.now()}.html`));
-  }
   process.stdout.write(`\n开始开发 ${item.creatorCode} · ${item.appTitle}\n任务目录：${itemRoot}\n`);
+  let code = '';
   try {
-    const code = await runCodex(itemRoot, timeoutMs);
-    validateResult(code);
-    await writeFile(resultPath, code, 'utf8');
+    if (existsSync(resultPath)) {
+      code = await readFile(resultPath, 'utf8');
+      validateResult(code);
+      process.stdout.write(`检测到已生成的本地结果，直接继续回传 ${item.creatorCode} · ${item.appTitle}\n`);
+    } else {
+      code = await runCodex(itemRoot, timeoutMs);
+      validateResult(code);
+      await writeFile(resultPath, code, 'utf8');
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`开发失败 ${item.creatorCode} · ${item.appTitle}：${message}\n`);
+    try {
+      await requestJson(
+        `${baseUrl}/api/community-gallery/codex-worker/tasks/${encodeURIComponent(task.taskId)}`
+          + `/jobs/${encodeURIComponent(String(item.jobId))}/error`,
+        token,
+        {
+          method: 'POST',
+          body: JSON.stringify({ workerId, error: message.slice(0, 4000) }),
+        },
+        {
+          attempts: 6,
+          label: '失败状态回传',
+        },
+      );
+    } catch (reportError) {
+      const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
+      throw new Error(`Codex 生成失败，且暂时无法向平台回传失败状态：${reportMessage}`);
+    }
+    return;
+  }
+
+  try {
     await requestJson(
       `${baseUrl}/api/community-gallery/codex-worker/tasks/${encodeURIComponent(task.taskId)}`
         + `/jobs/${encodeURIComponent(String(item.jobId))}/result`,
@@ -319,20 +406,24 @@ async function processItem(
             : 'Codex 已根据本轮入选评论完成平台兼容版本。',
         }),
       },
+      {
+        attempts: 20,
+        timeoutMs: 30_000,
+        baseDelayMs: 1_000,
+        maxDelayMs: 15_000,
+        label: '作品结果回传',
+      },
     );
     process.stdout.write(`已回传 ${item.creatorCode} · ${item.appTitle}\n`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`开发失败 ${item.creatorCode} · ${item.appTitle}：${message}\n`);
-    await requestJson(
-      `${baseUrl}/api/community-gallery/codex-worker/tasks/${encodeURIComponent(task.taskId)}`
-        + `/jobs/${encodeURIComponent(String(item.jobId))}/error`,
-      token,
-      {
-        method: 'POST',
-        body: JSON.stringify({ workerId, error: message.slice(0, 4000) }),
-      },
-    );
+    process.stderr.write([
+      `结果尚未回传 ${item.creatorCode} · ${item.appTitle}：${message}`,
+      `完整 HTML 已保存在 ${resultPath}`,
+      'Worker 不会把这次网络故障标记为作品开发失败；连接恢复并重新领取任务后会直接复用本地结果。',
+      '',
+    ].join('\n'));
+    throw error;
   }
 }
 
