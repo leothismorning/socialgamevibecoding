@@ -111,6 +111,63 @@ const retryOperationId = 'creator-operation-retry-test';
 gallery.startCreatorDevelopmentOperation(reloggedCreatorClient, retryOperationId, 'generate');
 gallery.failCreatorDevelopmentOperation(retryOperationId, new Error('test cleanup'));
 
+const codexCreatorClient = client(7);
+gallery.joinCommunityGallery(codexCreatorClient, '7', '7');
+const initialCodexTaskId = '11111111-1111-4111-8111-111111111111';
+state = gallery.queueCreatorCodexDevelopment({
+  clientId: codexCreatorClient,
+  operationId: initialCodexTaskId,
+  action: 'generate',
+  title: 'Codex Initial App',
+  brief: 'Created by the local worker',
+  prompt: 'Create a working counter',
+  request: 'Create a working counter',
+});
+assert.equal(state.creatorDevelopment?.status, 'waiting_codex');
+assert.equal(state.creatorDevelopment?.events[0]?.step_key, 'queue');
+assert.equal(state.creatorDevelopment?.events[0]?.status, 'pending');
+let workerTask = gallery.claimNextCodexDevelopmentTask('worker-community-test');
+assert.equal(workerTask?.taskId, initialCodexTaskId);
+assert.equal(workerTask?.taskType, 'initial');
+assert.equal(workerTask?.items[0]?.baseCode, '');
+gallery.heartbeatCodexDevelopmentTask(initialCodexTaskId, 'worker-community-test');
+gallery.submitCodexDevelopmentResult(
+  initialCodexTaskId,
+  0,
+  html('Codex Initial App'),
+  'Initial Codex draft',
+  'worker-community-test',
+);
+state = gallery.getCommunityGalleryState(codexCreatorClient);
+let codexDraftApp = state.apps.find((app: any) => app.creator_code === 'C07');
+assert.equal(codexDraftApp?.draft_code, html('Codex Initial App'));
+assert.equal(state.creatorDevelopment, null);
+
+const refineCodexTaskId = '22222222-2222-4222-8222-222222222222';
+state = gallery.queueCreatorCodexDevelopment({
+  clientId: codexCreatorClient,
+  operationId: refineCodexTaskId,
+  action: 'refine',
+  request: 'Add a reset button',
+});
+assert.equal(state.creatorDevelopment?.status, 'waiting_codex');
+workerTask = gallery.claimNextCodexDevelopmentTask('worker-community-test');
+assert.equal(workerTask?.taskId, refineCodexTaskId);
+assert.equal(workerTask?.taskType, 'initial');
+assert.equal(workerTask?.items[0]?.baseCode, html('Codex Initial App'));
+gallery.submitCodexDevelopmentResult(
+  refineCodexTaskId,
+  0,
+  html('Codex Refined App'),
+  'Refined Codex draft',
+  'worker-community-test',
+);
+state = gallery.getCommunityGalleryState(codexCreatorClient);
+codexDraftApp = state.apps.find((app: any) => app.creator_code === 'C07');
+assert.equal(codexDraftApp?.draft_code, html('Codex Refined App'));
+assert.ok(state.developmentMessages.some((message: any) => message.content === 'Add a reset button'));
+gallery.deleteOwnInitialApp(codexCreatorClient, codexDraftApp.id);
+
 const publishInitial = (account: number, title: string) => {
   const clientId = client(account);
   gallery.saveInitialDraft({

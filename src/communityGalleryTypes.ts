@@ -228,7 +228,7 @@ export type CreatorDevelopmentProgress = {
   app_id?: string;
   phase: 'initial' | 'community' | 'project';
   action: 'generate' | 'refine';
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'waiting_codex' | 'codex_processing' | 'completed' | 'failed';
   error?: string;
   started_at: string;
   completed_at?: string;
@@ -287,7 +287,8 @@ export type CommunityGalleryState = {
   generationJobs: CommunityGenerationJob[];
   codexTasks: Array<{
     id: string;
-    iteration_number: 1 | 2;
+    task_type: 'initial' | 'community';
+    iteration_number: 0 | 1 | 2;
     is_test: number;
     status: 'waiting' | 'processing' | 'completed' | 'partial';
     job_count: number;

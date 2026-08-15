@@ -27,6 +27,7 @@ type CodexTaskItem = {
 
 type CodexTask = {
   taskId: string;
+  taskType: 'initial' | 'community';
   status: string;
   fixedPrompt: string;
   itemCount: number;
@@ -89,13 +90,17 @@ function requestMarkdown(task: CodexTask, item: CodexTaskItem) {
     idea.content,
     idea.contributionNote ? `\n贡献说明：${idea.contributionNote}` : '',
   ].filter(Boolean).join('\n')).join('\n\n');
-  return `# ${item.creatorCode} · ${item.appTitle} · 第 ${item.iterationNumber} 轮开发
+  const taskTitle = task.taskType === 'initial'
+    ? `${item.creatorCode} · ${item.appTitle} · 初始作品开发`
+    : `${item.creatorCode} · ${item.appTitle} · 第 ${item.iterationNumber} 轮开发`;
+  const sourceSection = task.taskType === 'initial'
+    ? `## 创作者需求
 
-## 固定要求
-
-${task.fixedPrompt}
-
-## 本轮入选创意
+- 应用名称：${item.appTitle}
+- 一句话简介：${item.appBrief || '未填写'}
+- 原始创作提示：${item.basePrompt || '未填写'}
+- 本次要求：${item.creatorInstruction || item.basePrompt || '未填写'}`
+    : `## 本轮入选创意
 
 ${ideas}
 
@@ -104,12 +109,22 @@ ${ideas}
 - 简介：${item.appBrief || '未填写'}
 - 原始创作提示：${item.basePrompt || '未填写'}
 - 本轮综合开发内容：${item.creatorInstruction}
-- 基础版本：平台内部版本 ${item.baseVersionNumber}
+- 基础版本：平台内部版本 ${item.baseVersionNumber}`;
+  const fileRules = item.baseCode.trim()
+    ? `- 保留 \`original.html\`，不要直接修改它。
+- 在它的基础上生成同目录的 \`result.html\`。`
+    : '- 这是从零创建的作品，直接把完整单文件版本保存为同目录的 `result.html`。';
+  return `# ${taskTitle}
+
+## 固定要求
+
+${task.fixedPrompt}
+
+${sourceSection}
 
 ## 文件约定
 
-- 保留 \`original.html\`，不要直接修改它。
-- 把新的单文件版本保存为同目录的 \`result.html\`。
+${fileRules}
 - 完成即可停止，不需要启动浏览器做长时间检查。
 `;
 }
@@ -129,7 +144,9 @@ async function pull(taskId: string, baseUrl: string) {
     const directory = `${safeName(item.creatorCode, 'creator')}-${safeName(item.appTitle, 'app')}-${item.jobId}`;
     const itemRoot = path.join(root, directory);
     await mkdir(itemRoot, { recursive: true });
-    await writeFile(path.join(itemRoot, 'original.html'), item.baseCode, 'utf8');
+    if (item.baseCode.trim()) {
+      await writeFile(path.join(itemRoot, 'original.html'), item.baseCode, 'utf8');
+    }
     await writeFile(path.join(itemRoot, 'request.md'), requestMarkdown(task, item), 'utf8');
     await writeFile(path.join(itemRoot, 'item.json'), `${JSON.stringify({ ...item, baseCode: undefined }, null, 2)}\n`, 'utf8');
     metadata.items.push({

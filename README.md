@@ -24,6 +24,8 @@
 3. 启动 React、Express 和 SQLite：`npm run dev`
 4. 打开 `http://localhost:3000`
 
+参与者初始作品改由研究者电脑上的 Codex 处理。Railway 与本机 Worker 的配置和启动步骤见 [Codex Worker 使用说明](docs/Codex-Worker使用说明.md)。
+
 默认 SQLite 数据库位于 `data/vibecoding-study.db`，该文件不会提交到 Git。
 
 ## 数据持久化

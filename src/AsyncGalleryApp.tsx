@@ -646,7 +646,8 @@ function InitialCreatorStudio({
   }, [state.creatorDevelopment]);
 
   useEffect(() => {
-    if (!developmentProgress || developmentProgress.status !== 'running') return;
+    const activeStatuses = new Set(['running', 'waiting_codex', 'codex_processing']);
+    if (!developmentProgress || !activeStatuses.has(developmentProgress.status)) return;
     const operationId = developmentProgress.id;
     let disposed = false;
     let timer: number | undefined;
@@ -655,7 +656,7 @@ function InitialCreatorStudio({
         const next = await communityGalleryApi.developmentProgress(clientId, operationId);
         if (disposed) return;
         setDevelopmentProgress(next);
-        if (next.status !== 'running') {
+        if (!activeStatuses.has(next.status)) {
           if (timer) window.clearInterval(timer);
           if (next.status === 'completed') {
             void action('refresh-development', () => communityGalleryApi.state(clientId));
@@ -724,22 +725,19 @@ function InitialCreatorStudio({
   }
 
   const progressSteps = [
-    ['plan', '理解需求'],
-    ['structure', '搭建页面'],
-    ['images', '检查图片'],
-    ['styles', '完善样式'],
-    ['logic', '实现交互'],
-    ['summary', '整理说明'],
-    ['validation', '最终检查'],
+    ['queue', '等待领取'],
+    ['codex', 'Codex 开发'],
+    ['validation', '保存草稿'],
   ] as const;
   const currentProgressEvent = developmentProgress?.events.find((event) => event.status === 'running')
     || developmentProgress?.events[developmentProgress.events.length - 1];
-  const isWaitingForKey = developmentProgress?.status === 'running'
-    && currentProgressEvent?.step_key === 'queue'
-    && currentProgressEvent.status === 'pending';
+  const isWaitingForKey = developmentProgress?.status === 'waiting_codex'
+    || (currentProgressEvent?.step_key === 'queue' && currentProgressEvent.status === 'pending');
   const isDeveloping = busy === 'generate-initial'
     || busy === 'refine-initial'
-    || developmentProgress?.status === 'running';
+    || developmentProgress?.status === 'running'
+    || developmentProgress?.status === 'waiting_codex'
+    || developmentProgress?.status === 'codex_processing';
   const completedProgressCount = developmentProgress?.events.filter(
     (event) => event.status === 'completed'
       && progressSteps.some(([stepKey]) => stepKey === event.step_key),
@@ -805,12 +803,12 @@ function InitialCreatorStudio({
         <div>
           <span className="async-eyebrow">创作 · 初始版本</span>
           <h2>先完成你的独立作品</h2>
-          <p>可以让 AI 生成新草稿，也可以上传之前保存的 HTML 恢复项目。只有你确认满意并主动发布后，作品才会出现在首页。</p>
+          <p>可以提交给 Codex 生成新草稿，也可以上传之前保存的 HTML 恢复项目。只有你确认满意并主动发布后，作品才会出现在首页。</p>
         </div>
         <span className="async-step-chip">第 1 / 4 步 · 创作</span>
       </header>
       {developmentProgress && (
-        <section className={`async-creator-progress is-${developmentProgress.status}`} aria-live="polite">
+        <section className={`async-creator-progress is-codex is-${developmentProgress.status}`} aria-live="polite">
           <header>
             <span className="async-progress-icon">
               {developmentProgress.status === 'completed'
@@ -825,7 +823,7 @@ function InitialCreatorStudio({
                   ? '本轮开发已经完成'
                   : developmentProgress.status === 'failed'
                     ? '开发失败，请重试'
-                    : currentProgressEvent?.title || '系统正在启动 AI 开发'}
+                    : currentProgressEvent?.title || '系统正在启动 Codex 开发'}
               </strong>
               <p>
                 {developmentProgress.status === 'failed'
@@ -864,10 +862,10 @@ function InitialCreatorStudio({
           </ol>
           {isDeveloping && (
             <footer>
-              <strong>{isWaitingForKey ? '任务正在排队中' : '系统正在开发中'}</strong>
+              <strong>{isWaitingForKey ? '任务正在等待 Codex Worker' : 'Codex 正在开发中'}</strong>
               <span>{isWaitingForKey
-                ? '有可用 AI 通道后会自动开始，请不要重复点击。'
-                : '请不要刷新页面或关闭窗口，完成后预览会自动更新。'}</span>
+                ? '本机 Worker 上线后会自动领取；你可以离开页面，不需要重复点击。'
+                : '你可以离开当前页面，完成后草稿会自动保存并显示。'}</span>
             </footer>
           )}
           {developmentProgress.status === 'failed' && (
@@ -897,10 +895,10 @@ function InitialCreatorStudio({
                     ),
                   )}
                 ><Sparkles /> {isDeveloping
-                  ? 'AI 正在开发…'
+                  ? isWaitingForKey ? '等待 Codex 领取…' : 'Codex 正在开发…'
                   : developmentProgress?.status === 'failed'
                     ? '重新生成应用草稿'
-                    : 'AI 生成应用草稿'}</button>
+                    : '使用 Codex 生成草稿'}</button>
                 <label className={`async-upload-button${busy || isDeveloping ? ' is-disabled' : ''}`}>
                   <Upload /> {busy === 'upload-initial' ? '正在恢复…' : '从本地恢复项目'}
                   <input
@@ -945,7 +943,7 @@ function InitialCreatorStudio({
               </div>
               <section className="async-creator-chat">
                 <header>
-                  <div><Bot /><span><strong>与 AI 继续修改</strong><small>{initialMessages.length
+                  <div><Bot /><span><strong>与 Codex 继续修改</strong><small>{initialMessages.length
                     ? `已完成 ${Math.floor(initialMessages.length / 2)} 轮，可继续对话`
                     : '可以开始多轮对话修改'}</small></span></div>
                   <em>发布前草稿</em>
@@ -989,7 +987,7 @@ function InitialCreatorStudio({
           )}
         </div>
         <div className="async-studio-preview">
-          <div><Code2 /><strong>实时预览</strong><span>{isDeveloping ? 'AI 开发中，请勿刷新' : ownApp?.draft_code ? '草稿已保存 · 尚未发布' : '等待创建'}</span></div>
+          <div><Code2 /><strong>实时预览</strong><span>{isDeveloping ? 'Codex 开发中，可离开页面' : ownApp?.draft_code ? '草稿已保存 · 尚未发布' : '等待创建'}</span></div>
           {ownApp?.draft_code
             ? <AppPreview clientId={clientId} app={ownApp} version="draft" title={`${ownApp.title} 草稿`} cacheKey={state.serverNow} />
             : <div className="async-empty-preview"><FileCode2 /><span>生成或上传后在这里试玩</span></div>}
@@ -4634,7 +4632,9 @@ function HostPanel({
                   return (
                     <article key={task.id} className={`is-${task.status}`}>
                       <div>
-                        <strong>{task.is_test ? '测试' : '正式'} · 第 {task.iteration_number} 轮 · {task.job_count} 个 App</strong>
+                        <strong>{task.is_test ? '测试' : '正式'} · {task.task_type === 'initial'
+                          ? '初始作品'
+                          : `第 ${task.iteration_number} 轮`} · {task.job_count} 个 App</strong>
                         <code>{task.id}</code>
                         <small>已回传 {task.completed_count}/{task.job_count} · {formatDate(task.created_at)}</small>
                       </div>

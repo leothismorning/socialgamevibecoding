@@ -34,6 +34,13 @@ export const CODEX_COMMUNITY_DEVELOPMENT_PROMPT = `保留原文件，生成新�
 不依赖外部图片、脚本、接口或网络资源。
 保证按钮和交互真实可用。
 不要长时间检查或过度开发，完成后直接提供文件。`;
+export const CODEX_INITIAL_DEVELOPMENT_PROMPT = `根据创作者的名称、简介和提示词生成一个新的平台兼容作品。
+实现简单、快速，重点突出创作者要求中的核心创意和交互。
+必须能直接上传并展示在平台中。
+使用单个 HTML，尽量采用原生 HTML/CSS/JS。
+不依赖外部图片、脚本、接口或网络资源。
+保证按钮和交互真实可用。
+不要长时间检查或过度开发，完成后直接保存为 result.html。`;
 const TEST_RESET_CONFIRMATION = '清除测试角色数据';
 const COMMUNITY_STUDY_DATA_TABLES = [
   'vg_async_participants',
@@ -514,6 +521,12 @@ ensureColumn('vg_async_generation_jobs', 'selected_source_id', 'INTEGER');
 ensureColumn('vg_async_generation_jobs', 'execution_provider', `TEXT NOT NULL DEFAULT 'deepseek-pro'`);
 ensureColumn('vg_async_generation_jobs', 'codex_task_id', 'TEXT');
 ensureColumn('vg_async_generation_jobs', 'codex_claimed_at', 'TEXT');
+ensureColumn('vg_async_generation_jobs', 'codex_worker_id', 'TEXT');
+ensureColumn('vg_async_generation_jobs', 'codex_heartbeat_at', 'TEXT');
+ensureColumn('vg_async_creator_operations', 'codex_request', `TEXT NOT NULL DEFAULT ''`);
+ensureColumn('vg_async_creator_operations', 'codex_claimed_at', 'TEXT');
+ensureColumn('vg_async_creator_operations', 'codex_worker_id', 'TEXT');
+ensureColumn('vg_async_creator_operations', 'codex_heartbeat_at', 'TEXT');
 ensureColumn('vg_async_studies', 'workflow_stage', `TEXT NOT NULL DEFAULT 'synthesis_1'`);
 ensureColumn('vg_async_syntheses', 'layer', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('vg_async_syntheses', 'withdrawn_at', 'TEXT');
@@ -1484,6 +1497,110 @@ export function saveInitialDraft(input: {
   });
   transaction();
   recordEvent(viewer.code, 'save_initial_draft', 'app', appId);
+  return getCommunityGalleryState(input.clientId);
+}
+
+export function queueCreatorCodexDevelopment(input: {
+  clientId: string;
+  operationId: string;
+  action: 'generate' | 'refine';
+  title?: string;
+  brief?: string;
+  prompt?: string;
+  request: string;
+}) {
+  const viewer = requireViewer(input.clientId, 'creator');
+  const currentStudy = requireOpenStudy(Number(viewer.isTest));
+  const normalizedId = input.operationId.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizedId)) {
+    throw new Error('无效的 Codex 开发任务编号。');
+  }
+  const request = input.request.trim();
+  if (!request) throw new Error('请填写创作或修改要求。');
+  const activeOperation = db.prepare(`
+    SELECT id FROM vg_async_creator_operations
+    WHERE study_id = ? AND creator_code = ?
+      AND status IN ('running', 'waiting_codex', 'codex_processing')
+  `).get(currentStudy.id, viewer.code) as { id?: string } | undefined;
+  if (activeOperation) throw new Error('当前已有一个 Codex 开发任务，请等待完成。');
+
+  const existing = db.prepare(`
+    SELECT * FROM vg_async_apps WHERE study_id = ? AND creator_code = ?
+  `).get(currentStudy.id, viewer.code) as any;
+  if (existing?.initial_version_id) throw new Error('初始版本已经发布，不能覆盖。');
+  if (input.action === 'generate' && !String(input.title || '').trim()) {
+    throw new Error('请填写应用名称。');
+  }
+  if (input.action === 'refine') {
+    if (!existing) throw new Error('请先创建应用草稿。');
+    const draft = db.prepare(`
+      SELECT code FROM vg_async_drafts
+      WHERE study_id = ? AND app_id = ? AND kind = 'initial'
+    `).get(currentStudy.id, existing.id) as { code?: string } | undefined;
+    if (!draft?.code) throw new Error('当前没有可供 Codex 修改的初始草稿。');
+  }
+
+  const appId = existing?.id || randomUUID();
+  const timestamp = now();
+  const transaction = db.transaction(() => {
+    if (input.action === 'generate') {
+      db.prepare(`
+        INSERT INTO vg_async_apps
+          (id, study_id, creator_code, condition_name, is_test, title, brief,
+           creator_prompt, status, created_at, updated_at)
+        VALUES (?, ?, ?, 'experimental', ?, ?, ?, ?, 'draft', ?, ?)
+        ON CONFLICT(study_id, creator_code) DO UPDATE SET
+          is_test = excluded.is_test,
+          title = excluded.title,
+          brief = excluded.brief,
+          creator_prompt = excluded.creator_prompt,
+          updated_at = excluded.updated_at
+      `).run(
+        appId,
+        currentStudy.id,
+        viewer.code,
+        Number(viewer.isTest),
+        String(input.title || '').trim(),
+        String(input.brief || '').trim(),
+        String(input.prompt || '').trim(),
+        timestamp,
+        timestamp,
+      );
+    }
+    db.prepare(`
+      INSERT INTO vg_async_creator_operations
+        (id, study_id, client_id, creator_code, app_id, phase, action, status,
+         codex_request, started_at)
+      VALUES (?, ?, ?, ?, ?, 'initial', ?, 'waiting_codex', ?, ?)
+    `).run(
+      normalizedId,
+      currentStudy.id,
+      input.clientId,
+      viewer.code,
+      appId,
+      input.action,
+      request,
+      timestamp,
+    );
+    db.prepare(`
+      INSERT INTO vg_async_creator_progress
+        (study_id, operation_id, step_key, sort_order, status, title, detail, created_at, updated_at)
+      VALUES (?, ?, 'queue', 1, 'pending', ?, ?, ?, ?)
+    `).run(
+      currentStudy.id,
+      normalizedId,
+      '已提交给 Codex，正在等待本机 Worker 领取',
+      '你可以离开当前页面；任务完成后，草稿会自动保存到平台。',
+      timestamp,
+      timestamp,
+    );
+  });
+  transaction();
+  recordEvent(viewer.code, 'queue_creator_codex_development', 'creator_operation', normalizedId, {
+    appId,
+    action: input.action,
+    phase: 'initial',
+  });
   return getCommunityGalleryState(input.clientId);
 }
 
@@ -3862,6 +3979,355 @@ export function submitCodexCommunityDevelopmentResult(
   return getCodexCommunityDevelopmentTask(task.taskId);
 }
 
+function initialCodexDevelopmentTask(taskId: string) {
+  const normalizedTaskId = requireCodexTaskId(taskId);
+  const operation = db.prepare(`
+    SELECT operation.*, app.title AS app_title, app.brief AS app_brief,
+      app.creator_prompt AS base_prompt, draft.code AS draft_code
+    FROM vg_async_creator_operations operation
+    JOIN vg_async_apps app ON app.id = operation.app_id
+    LEFT JOIN vg_async_drafts draft
+      ON draft.study_id = operation.study_id AND draft.app_id = operation.app_id
+    WHERE operation.study_id = ? AND operation.id = ? AND operation.phase = 'initial'
+  `).get(study().id, normalizedTaskId) as any;
+  if (!operation) return null;
+  const completedCount = operation.status === 'completed' ? 1 : 0;
+  const failed = ['failed', 'cancelled'].includes(operation.status);
+  const status = completedCount
+    ? 'completed'
+    : failed
+      ? 'partial'
+      : operation.status === 'codex_processing'
+        ? 'processing'
+        : 'waiting';
+  return {
+    taskId: normalizedTaskId,
+    taskType: 'initial' as const,
+    status,
+    fixedPrompt: operation.action === 'refine'
+      ? CODEX_COMMUNITY_DEVELOPMENT_PROMPT
+      : CODEX_INITIAL_DEVELOPMENT_PROMPT,
+    itemCount: 1,
+    completedCount,
+    createdAt: operation.started_at,
+    items: [{
+      jobId: 0,
+      status: operation.status,
+      appId: operation.app_id,
+      creatorCode: operation.creator_code,
+      appTitle: operation.app_title,
+      appBrief: operation.app_brief || '',
+      iterationNumber: 0,
+      baseVersionId: 0,
+      baseVersionNumber: 0,
+      basePrompt: operation.base_prompt || '',
+      baseCode: operation.action === 'refine' ? operation.draft_code || '' : '',
+      creatorInstruction: operation.codex_request || operation.base_prompt || '',
+      selectedIdeas: [],
+      createdAt: operation.started_at,
+      claimedAt: operation.codex_claimed_at || null,
+      completedAt: operation.completed_at || null,
+      error: operation.error || null,
+      outputFilename: `${operation.creator_code}-initial-draft.html`,
+    }],
+  };
+}
+
+export function getCodexDevelopmentTask(taskId: string) {
+  const initialTask = initialCodexDevelopmentTask(taskId);
+  if (initialTask) return initialTask;
+  return {
+    ...getCodexCommunityDevelopmentTask(taskId),
+    taskType: 'community' as const,
+  };
+}
+
+export function claimCodexDevelopmentTask(taskId: string) {
+  const initialTask = initialCodexDevelopmentTask(taskId);
+  if (!initialTask) return {
+    ...claimCodexCommunityDevelopmentTask(taskId),
+    taskType: 'community' as const,
+  };
+  const timestamp = now();
+  db.prepare(`
+    UPDATE vg_async_creator_operations
+    SET status = 'codex_processing', codex_claimed_at = COALESCE(codex_claimed_at, ?),
+      codex_heartbeat_at = ?
+    WHERE study_id = ? AND id = ? AND status = 'waiting_codex'
+  `).run(timestamp, timestamp, study().id, initialTask.taskId);
+  db.prepare(`
+    UPDATE vg_async_creator_progress
+    SET status = 'completed', title = 'Codex 已领取任务',
+      detail = 'Codex 已经开始处理你的创作要求。', updated_at = ?
+    WHERE study_id = ? AND operation_id = ? AND step_key = 'queue'
+  `).run(timestamp, study().id, initialTask.taskId);
+  db.prepare(`
+    INSERT INTO vg_async_creator_progress
+      (study_id, operation_id, step_key, sort_order, status, title, detail, created_at, updated_at)
+    VALUES (?, ?, 'codex', 2, 'running', ?, ?, ?, ?)
+    ON CONFLICT(operation_id, step_key) DO UPDATE SET
+      status = excluded.status, title = excluded.title,
+      detail = excluded.detail, updated_at = excluded.updated_at
+  `).run(
+    study().id,
+    initialTask.taskId,
+    'Codex 正在生成应用草稿',
+    '完成后会自动回传并保存到平台。',
+    timestamp,
+    timestamp,
+  );
+  return initialCodexDevelopmentTask(initialTask.taskId);
+}
+
+function requireCodexWorkerId(workerId: string) {
+  const normalized = String(workerId || '').trim();
+  if (!/^[a-zA-Z0-9_-]{8,100}$/.test(normalized)) throw new Error('Codex Worker 编号无效。');
+  return normalized;
+}
+
+function codexWorkerLeaseCutoff() {
+  const configured = Number(process.env.CODEX_WORKER_LEASE_MS);
+  const leaseMs = Number.isFinite(configured) && configured >= 60_000
+    ? Math.min(configured, 24 * 60 * 60 * 1000)
+    : 15 * 60 * 1000;
+  return new Date(Date.now() - leaseMs).toISOString();
+}
+
+export function claimNextCodexDevelopmentTask(workerId: string) {
+  const normalizedWorkerId = requireCodexWorkerId(workerId);
+  const currentStudy = study();
+  const timestamp = now();
+  const staleBefore = codexWorkerLeaseCutoff();
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE vg_async_creator_operations
+      SET status = 'waiting_codex', codex_worker_id = NULL,
+        codex_claimed_at = NULL, codex_heartbeat_at = NULL
+      WHERE study_id = ? AND status = 'codex_processing'
+        AND COALESCE(codex_heartbeat_at, codex_claimed_at, started_at) < ?
+    `).run(currentStudy.id, staleBefore);
+    db.prepare(`
+      UPDATE vg_async_generation_jobs
+      SET status = 'waiting_codex', codex_worker_id = NULL,
+        codex_claimed_at = NULL, codex_heartbeat_at = NULL
+      WHERE study_id = ? AND execution_provider = 'codex'
+        AND status = 'codex_processing'
+        AND COALESCE(codex_heartbeat_at, codex_claimed_at, started_at) < ?
+    `).run(currentStudy.id, staleBefore);
+
+    const resumedInitial = db.prepare(`
+      SELECT id AS task_id, started_at AS created_at
+      FROM vg_async_creator_operations
+      WHERE study_id = ? AND phase = 'initial' AND status = 'codex_processing'
+        AND codex_worker_id = ?
+      ORDER BY started_at LIMIT 1
+    `).get(currentStudy.id, normalizedWorkerId) as any;
+    const resumedCommunity = db.prepare(`
+      SELECT codex_task_id AS task_id, MIN(created_at) AS created_at
+      FROM vg_async_generation_jobs
+      WHERE study_id = ? AND execution_provider = 'codex'
+        AND status = 'codex_processing' AND codex_worker_id = ?
+      GROUP BY codex_task_id ORDER BY MIN(created_at) LIMIT 1
+    `).get(currentStudy.id, normalizedWorkerId) as any;
+    const resumed = [resumedInitial, resumedCommunity]
+      .filter(Boolean)
+      .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at))[0];
+    if (resumed?.task_id) return String(resumed.task_id);
+
+    const waitingInitial = db.prepare(`
+      SELECT id AS task_id, started_at AS created_at, 'initial' AS task_type
+      FROM vg_async_creator_operations
+      WHERE study_id = ? AND phase = 'initial' AND status = 'waiting_codex'
+      ORDER BY started_at LIMIT 1
+    `).get(currentStudy.id) as any;
+    const waitingCommunity = db.prepare(`
+      SELECT codex_task_id AS task_id, MIN(created_at) AS created_at, 'community' AS task_type
+      FROM vg_async_generation_jobs
+      WHERE study_id = ? AND execution_provider = 'codex' AND status = 'waiting_codex'
+      GROUP BY codex_task_id ORDER BY MIN(created_at) LIMIT 1
+    `).get(currentStudy.id) as any;
+    const candidate = [waitingInitial, waitingCommunity]
+      .filter(Boolean)
+      .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at))[0];
+    if (!candidate?.task_id) return null;
+
+    if (candidate.task_type === 'initial') {
+      const claimed = db.prepare(`
+        UPDATE vg_async_creator_operations
+        SET status = 'codex_processing', codex_worker_id = ?,
+          codex_claimed_at = ?, codex_heartbeat_at = ?
+        WHERE study_id = ? AND id = ? AND status = 'waiting_codex'
+      `).run(normalizedWorkerId, timestamp, timestamp, currentStudy.id, candidate.task_id);
+      if (!claimed.changes) return null;
+      db.prepare(`
+        UPDATE vg_async_creator_progress
+        SET status = 'completed', title = 'Codex Worker 已领取任务',
+          detail = '本机 Codex 已经开始处理你的创作要求。', updated_at = ?
+        WHERE study_id = ? AND operation_id = ? AND step_key = 'queue'
+      `).run(timestamp, currentStudy.id, candidate.task_id);
+      db.prepare(`
+        INSERT INTO vg_async_creator_progress
+          (study_id, operation_id, step_key, sort_order, status, title, detail, created_at, updated_at)
+        VALUES (?, ?, 'codex', 2, 'running', ?, ?, ?, ?)
+        ON CONFLICT(operation_id, step_key) DO UPDATE SET
+          status = excluded.status, title = excluded.title,
+          detail = excluded.detail, updated_at = excluded.updated_at
+      `).run(
+        currentStudy.id,
+        candidate.task_id,
+        'Codex 正在生成应用草稿',
+        '任务在你的本机 Codex 中运行，完成后会自动回传。',
+        timestamp,
+        timestamp,
+      );
+    } else {
+      const claimed = db.prepare(`
+        UPDATE vg_async_generation_jobs
+        SET status = 'codex_processing', codex_worker_id = ?,
+          codex_claimed_at = COALESCE(codex_claimed_at, ?), codex_heartbeat_at = ?
+        WHERE study_id = ? AND codex_task_id = ?
+          AND execution_provider = 'codex' AND status = 'waiting_codex'
+      `).run(normalizedWorkerId, timestamp, timestamp, currentStudy.id, candidate.task_id);
+      if (!claimed.changes) return null;
+    }
+    return String(candidate.task_id);
+  });
+  const taskId = transaction();
+  return taskId ? getCodexDevelopmentTask(taskId) : null;
+}
+
+export function heartbeatCodexDevelopmentTask(taskId: string, workerId: string) {
+  const normalizedTaskId = requireCodexTaskId(taskId);
+  const normalizedWorkerId = requireCodexWorkerId(workerId);
+  const timestamp = now();
+  const initial = db.prepare(`
+    UPDATE vg_async_creator_operations SET codex_heartbeat_at = ?
+    WHERE study_id = ? AND id = ? AND status = 'codex_processing' AND codex_worker_id = ?
+  `).run(timestamp, study().id, normalizedTaskId, normalizedWorkerId);
+  const community = db.prepare(`
+    UPDATE vg_async_generation_jobs SET codex_heartbeat_at = ?
+    WHERE study_id = ? AND codex_task_id = ? AND execution_provider = 'codex'
+      AND status = 'codex_processing' AND codex_worker_id = ?
+  `).run(timestamp, study().id, normalizedTaskId, normalizedWorkerId);
+  if (!initial.changes && !community.changes) throw new Error('该任务不属于当前 Codex Worker。');
+  return { ok: true, timestamp };
+}
+
+function validateCodexResultHtml(code: string) {
+  if (!code.trim() || Buffer.byteLength(code, 'utf8') > 8 * 1024 * 1024) {
+    throw new Error('Codex 结果不能为空且不能超过 8MB。');
+  }
+  if (!/(?:<!doctype\s+html|<html\b)/i.test(code) || !/<\/html\s*>/i.test(code)) {
+    throw new Error('Codex 必须回传包含完整 html 结构的单个 HTML 文件。');
+  }
+}
+
+export function submitCodexDevelopmentResult(
+  taskId: string,
+  jobId: number,
+  code: string,
+  summary = '',
+  workerId = '',
+) {
+  const initialTask = initialCodexDevelopmentTask(taskId);
+  if (!initialTask) return submitCodexCommunityDevelopmentResult(taskId, jobId, code, summary);
+  const operation = db.prepare(`
+    SELECT * FROM vg_async_creator_operations WHERE study_id = ? AND id = ?
+  `).get(study().id, initialTask.taskId) as any;
+  if (operation.status === 'completed') return initialTask;
+  if (!['waiting_codex', 'codex_processing'].includes(operation.status)) {
+    throw new Error('该初始作品任务已经停止，不能再回传结果。');
+  }
+  if (workerId && operation.codex_worker_id !== requireCodexWorkerId(workerId)) {
+    throw new Error('该任务不属于当前 Codex Worker。');
+  }
+  validateCodexResultHtml(code);
+  const resultSummary = summary.trim() || 'Codex 已完成平台兼容的初始作品草稿。';
+  recordCreatorDevelopmentProgress(initialTask.taskId, {
+    step: 'codex',
+    order: 2,
+    status: 'completed',
+    title: 'Codex 已生成应用草稿',
+    detail: resultSummary,
+  });
+  recordCreatorDevelopmentProgress(initialTask.taskId, {
+    step: 'validation',
+    order: 3,
+    status: 'running',
+    title: '正在检查并保存应用草稿',
+    detail: '正在确认 HTML 完整性并写入平台。',
+  });
+  if (operation.action === 'refine') {
+    saveRefinedDraft(
+      operation.client_id,
+      code,
+      resultSummary,
+      operation.codex_request || '使用 Codex 修改草稿',
+      resultSummary,
+    );
+  } else {
+    const app = appById(operation.app_id);
+    if (!app) throw new Error('初始作品对应的 App 已不存在。');
+    saveInitialDraft({
+      clientId: operation.client_id,
+      title: app.title,
+      brief: app.brief || '',
+      prompt: app.creator_prompt || operation.codex_request || '',
+      code,
+      summary: resultSummary,
+      conversation: {
+        creator: operation.codex_request || app.creator_prompt || '',
+        assistant: resultSummary,
+      },
+    });
+  }
+  recordCreatorDevelopmentProgress(initialTask.taskId, {
+    step: 'validation',
+    order: 3,
+    status: 'completed',
+    title: '应用草稿已经保存',
+    detail: '请在平台中试玩，确认满意后再自行发布。',
+  });
+  completeCreatorDevelopmentOperation(initialTask.taskId, operation.app_id);
+  return initialCodexDevelopmentTask(initialTask.taskId);
+}
+
+export function failCodexDevelopmentItem(
+  taskId: string,
+  jobId: number,
+  error: unknown,
+  workerId = '',
+) {
+  const initialTask = initialCodexDevelopmentTask(taskId);
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = `Codex Worker 开发失败：${rawMessage || '未知错误'}`;
+  if (initialTask) {
+    const operation = db.prepare(`
+      SELECT * FROM vg_async_creator_operations WHERE study_id = ? AND id = ?
+    `).get(study().id, initialTask.taskId) as any;
+    if (workerId && operation.codex_worker_id !== requireCodexWorkerId(workerId)) {
+      throw new Error('该任务不属于当前 Codex Worker。');
+    }
+    failCreatorDevelopmentOperation(initialTask.taskId, new Error(message));
+    return initialCodexDevelopmentTask(initialTask.taskId);
+  }
+  const task = getCodexCommunityDevelopmentTask(taskId);
+  const item = task.items.find((candidate) => Number(candidate.jobId) === Number(jobId));
+  if (!item) throw new Error('该 App 不属于这个 Codex 任务。');
+  const timestamp = now();
+  db.prepare(`
+    UPDATE vg_async_generation_jobs
+    SET status = 'failed', error = ?, completed_at = ?
+    WHERE study_id = ? AND id = ? AND execution_provider = 'codex'
+      AND status IN ('waiting_codex', 'codex_processing')
+  `).run(message, timestamp, study().id, Number(jobId));
+  recordEvent(item.creatorCode, 'fail_codex_worker_development', 'generation_job', Number(jobId), {
+    taskId: task.taskId,
+    error: message,
+  });
+  return getCodexCommunityDevelopmentTask(task.taskId);
+}
+
 export function recordCommunityGenerationProgress(jobId: number, progress: DevelopmentAgentProgress) {
   const input = getCommunityGenerationInput(jobId);
   if (input.job.status !== 'running') return;
@@ -5067,7 +5533,8 @@ export function deleteOwnInitialApp(clientId: string, appId: string) {
     const runningTaskCount = Number((db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM vg_async_creator_operations
-          WHERE study_id = ? AND app_id = ? AND status = 'running') +
+          WHERE study_id = ? AND app_id = ?
+            AND status IN ('running', 'waiting_codex', 'codex_processing')) +
         (SELECT COUNT(*) FROM vg_async_generation_jobs
           WHERE study_id = ? AND app_id = ?
             AND status IN ('running', 'waiting_codex', 'codex_processing')) AS count
@@ -5683,7 +6150,8 @@ export function getCommunityGalleryState(clientId = '') {
     : [];
   type CodexTaskSummary = {
     id: string;
-    iteration_number: number;
+    task_type: 'initial' | 'community';
+    iteration_number: 0 | 1 | 2;
     is_test: number;
     created_at: string;
     job_count: number;
@@ -5692,12 +6160,13 @@ export function getCommunityGalleryState(clientId = '') {
     waiting_count: number;
     failed_count: number;
   };
-  const codexTasks = viewer?.role === 'host'
+  const communityCodexTasks = viewer?.role === 'host'
     ? Array.from(generationJobs.reduce<Map<string, CodexTaskSummary>>((tasks, job) => {
         if (job.execution_provider !== 'codex' || !job.codex_task_id) return tasks;
         const existing = tasks.get(job.codex_task_id) || {
           id: job.codex_task_id,
-          iteration_number: Number(job.iteration_number),
+          task_type: 'community' as const,
+          iteration_number: Number(job.iteration_number) as 1 | 2,
           is_test: Number(apps.find((app) => app.id === job.app_id)?.is_test || 0),
           created_at: job.created_at,
           job_count: 0,
@@ -5724,6 +6193,36 @@ export function getCommunityGalleryState(clientId = '') {
               : 'waiting',
       }))
     : [];
+  const initialCodexTasks = viewer?.role === 'host'
+    ? (db.prepare(`
+        SELECT operation.*, app.is_test
+        FROM vg_async_creator_operations operation
+        JOIN vg_async_apps app ON app.id = operation.app_id
+        WHERE operation.study_id = ? AND operation.phase = 'initial'
+          AND operation.status IN ('waiting_codex', 'codex_processing', 'completed', 'failed')
+        ORDER BY operation.started_at DESC
+      `).all(currentStudy.id) as any[]).map((operation): CodexTaskSummary & { status: string } => ({
+        id: operation.id,
+        task_type: 'initial',
+        iteration_number: 0,
+        is_test: Number(operation.is_test || 0),
+        created_at: operation.started_at,
+        job_count: 1,
+        completed_count: operation.status === 'completed' ? 1 : 0,
+        processing_count: operation.status === 'codex_processing' ? 1 : 0,
+        waiting_count: operation.status === 'waiting_codex' ? 1 : 0,
+        failed_count: operation.status === 'failed' ? 1 : 0,
+        status: operation.status === 'completed'
+          ? 'completed'
+          : operation.status === 'failed'
+            ? 'partial'
+            : operation.status === 'codex_processing'
+              ? 'processing'
+              : 'waiting',
+      }))
+    : [];
+  const codexTasks = [...initialCodexTasks, ...communityCodexTasks]
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
   const jobIds = generationJobs.map((job) => job.id);
   const jobPlaceholders = jobIds.map(() => '?').join(',');
   const generationEvents = jobIds.length

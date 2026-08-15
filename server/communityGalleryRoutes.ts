@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from 'express';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   runDevelopmentAgent,
   type DevelopmentAgentInput,
@@ -7,8 +7,9 @@ import {
 } from './developmentAgent.js';
 import {
   cancelCommunityWildcard,
+  claimNextCodexDevelopmentTask,
+  claimCodexDevelopmentTask,
   closeAsyncCommunityStudy,
-  claimCodexCommunityDevelopmentTask,
   controlCommunityAppFlows,
   completeCreatorDevelopmentOperation,
   completeCommunityGeneration,
@@ -20,11 +21,12 @@ import {
   exportCommunityStudy,
   exportCommunityWorkspace,
   enterCommunityDevelopmentStage,
+  failCodexDevelopmentItem,
   failCreatorDevelopmentOperation,
   failCommunityGeneration,
   getCommunityGalleryState,
   getCommunityGenerationInput,
-  getCodexCommunityDevelopmentTask,
+  getCodexDevelopmentTask,
   getCommunityPreview,
   getPublishedCommunityVersionDownload,
   getCreatorDevelopmentProgress,
@@ -32,6 +34,7 @@ import {
   joinCommunityGallery,
   markCommunityNotificationsCelebrated,
   markCommunityNotificationsRead,
+  heartbeatCodexDevelopmentTask,
   publishCommunityVersion,
   publishInitialVersion,
   publishProjectDraft,
@@ -46,6 +49,7 @@ import {
   saveCommunityComment,
   saveInitialDraft,
   saveRefinedDraft,
+  queueCreatorCodexDevelopment,
   setCommunityHomeFeedOrder,
   setCommunityTestCreators,
   startCreatorDevelopmentOperation,
@@ -53,7 +57,7 @@ import {
   startCommunityGeneration,
   startNewAsyncCommunityStudy,
   startNewAsyncCommunityWorkspace,
-  submitCodexCommunityDevelopmentResult,
+  submitCodexDevelopmentResult,
   toggleCommunityAppLike,
   toggleCommunityCommentLike,
   toggleCreativeBasket,
@@ -88,6 +92,29 @@ function sendError(res: Response, error: unknown) {
 
 function clientIdFrom(req: Request) {
   return String(req.body?.clientId || req.query.clientId || '').trim();
+}
+
+function requireCodexWorkerConfiguration() {
+  const configuredToken = String(process.env.CODEX_WORKER_TOKEN || '').trim();
+  if (!configuredToken) {
+    const error = new Error('服务器尚未配置 CODEX_WORKER_TOKEN。') as Error & { status?: number };
+    error.status = 503;
+    throw error;
+  }
+  return configuredToken;
+}
+
+function requireCodexWorker(req: Request) {
+  const configuredToken = requireCodexWorkerConfiguration();
+  const authorization = String(req.headers.authorization || '');
+  const suppliedToken = authorization.replace(/^Bearer\s+/i, '').trim();
+  const configured = Buffer.from(configuredToken);
+  const supplied = Buffer.from(suppliedToken);
+  if (!supplied.length || supplied.length !== configured.length || !timingSafeEqual(supplied, configured)) {
+    const error = new Error('Codex Worker 令牌无效。') as Error & { status?: number };
+    error.status = 401;
+    throw error;
+  }
 }
 
 function publicAgentMessage(result: Awaited<ReturnType<typeof runDevelopmentAgent>>) {
@@ -180,9 +207,70 @@ function runCommunityGenerationInBackground(jobId: number) {
 }
 
 export function registerCommunityGalleryRoutes(app: Express) {
+  app.post('/api/community-gallery/codex-worker/claim-next', (req, res) => {
+    try {
+      requireCodexWorker(req);
+      const task = claimNextCodexDevelopmentTask(String(req.body?.workerId || ''));
+      if (!task) return res.status(204).end();
+      return res.json(task);
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/codex-worker/tasks/:taskId/heartbeat', (req, res) => {
+    try {
+      requireCodexWorker(req);
+      return res.json(heartbeatCodexDevelopmentTask(
+        String(req.params.taskId || ''),
+        String(req.body?.workerId || ''),
+      ));
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/codex-worker/tasks/:taskId/jobs/:jobId/result', (req, res) => {
+    try {
+      requireCodexWorker(req);
+      return res.json(submitCodexDevelopmentResult(
+        String(req.params.taskId || ''),
+        Number(req.params.jobId),
+        String(req.body?.code || ''),
+        String(req.body?.summary || ''),
+        String(req.body?.workerId || ''),
+      ));
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.post('/api/community-gallery/codex-worker/tasks/:taskId/jobs/:jobId/error', (req, res) => {
+    try {
+      requireCodexWorker(req);
+      return res.json(failCodexDevelopmentItem(
+        String(req.params.taskId || ''),
+        Number(req.params.jobId),
+        String(req.body?.error || 'Codex 未能生成 result.html。'),
+        String(req.body?.workerId || ''),
+      ));
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
+  app.get('/api/community-gallery/codex-worker/tasks/:taskId', (req, res) => {
+    try {
+      requireCodexWorker(req);
+      return res.json(getCodexDevelopmentTask(String(req.params.taskId || '')));
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
   app.get('/api/community-gallery/codex-tasks/:taskId', (req, res) => {
     try {
-      res.json(getCodexCommunityDevelopmentTask(String(req.params.taskId || '')));
+      res.json(getCodexDevelopmentTask(String(req.params.taskId || '')));
     } catch (error) {
       sendError(res, error);
     }
@@ -190,7 +278,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/codex-tasks/:taskId/claim', (req, res) => {
     try {
-      res.json(claimCodexCommunityDevelopmentTask(String(req.params.taskId || '')));
+      res.json(claimCodexDevelopmentTask(String(req.params.taskId || '')));
     } catch (error) {
       sendError(res, error);
     }
@@ -198,7 +286,7 @@ export function registerCommunityGalleryRoutes(app: Express) {
 
   app.post('/api/community-gallery/codex-tasks/:taskId/jobs/:jobId/result', (req, res) => {
     try {
-      res.json(submitCodexCommunityDevelopmentResult(
+      res.json(submitCodexDevelopmentResult(
         String(req.params.taskId || ''),
         Number(req.params.jobId),
         String(req.body?.code || ''),
@@ -278,10 +366,9 @@ export function registerCommunityGalleryRoutes(app: Express) {
     }
   });
 
-  app.post('/api/community-gallery/apps/generate-initial', async (req, res) => {
-    let operationId = '';
-    let operationStarted = false;
+  app.post('/api/community-gallery/apps/generate-initial', (req, res) => {
     try {
+      requireCodexWorkerConfiguration();
       const clientId = clientIdFrom(req);
       const state = getCommunityGalleryState(clientId);
       if (state.viewer?.role !== 'creator') throw new Error('请选择创作者身份。');
@@ -290,47 +377,17 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const brief = String(req.body?.brief || '').trim();
       const prompt = String(req.body?.prompt || '').trim();
       if (!title || !prompt) throw new Error('请填写应用名称和创作提示。');
-      operationId = String(req.body?.operationId || randomUUID()).trim();
-      startCreatorDevelopmentOperation(clientId, operationId, 'generate');
-      operationStarted = true;
-      const result = await runQueuedDevelopmentAgent({
-        provider: 'deepseek-pro',
-        experimentTitle: title,
-        brief,
-        creatorPrompt: prompt,
-        creatorMessage: prompt,
-        mode: 'initial-project',
-        onProgress: (progress) => recordCreatorDevelopmentProgress(
-          operationId,
-          initialCreatorProgress(progress),
-        ),
-      }, (progress) => recordCreatorDevelopmentProgress(operationId, progress));
-      const nextState = saveInitialDraft({
+      res.json(queueCreatorCodexDevelopment({
         clientId,
+        operationId: String(req.body?.operationId || randomUUID()).trim(),
+        action: 'generate',
         title,
         brief,
         prompt,
-        code: result.code,
-        summary: result.text,
-        conversation: {
-          creator: prompt,
-          assistant: publicAgentMessage(result),
-        },
-      });
-      completeCreatorDevelopmentOperation(
-        operationId,
-        nextState.apps.find((item) => item.creator_code === state.viewer?.code)?.id,
-      );
-      res.json(getCommunityGalleryState(clientId));
+        request: prompt,
+      }));
     } catch (error) {
-      if (operationId) {
-        failCreatorDevelopmentOperation(operationId, error);
-        sendError(res, operationStarted
-          ? new Error('AI 开发过程中出现异常，本轮开发失败，请重试。')
-          : error);
-      } else {
-        sendError(res, error);
-      }
+      sendError(res, error);
     }
   });
 
@@ -361,6 +418,15 @@ export function registerCommunityGalleryRoutes(app: Express) {
       const context = getCreatorDraftContext(clientId);
       operationId = String(req.body?.operationId || randomUUID()).trim();
       const operationPhase = context.messagePhase as 'initial' | 'community' | 'project';
+      if (operationPhase === 'initial') {
+        requireCodexWorkerConfiguration();
+        return res.json(queueCreatorCodexDevelopment({
+          clientId,
+          operationId,
+          action: 'refine',
+          request: message,
+        }));
+      }
       startCreatorDevelopmentOperation(clientId, operationId, 'refine', operationPhase);
       operationStarted = true;
       const result = await runQueuedDevelopmentAgent({
