@@ -1236,7 +1236,11 @@ function CommentThread({
 }) {
   const resolvedTargetId = targetId || app.id;
   const comments = state.comments.filter(
-    (comment) => comment.target_type === targetType && comment.target_id === resolvedTargetId,
+    (comment) => (
+      comment.target_type === targetType
+      && comment.target_id === resolvedTargetId
+      && !comment.deleted_at
+    ),
   );
   const [content, setContent] = useState('');
   const [replyTo, setReplyTo] = useState<number | null>(null);
@@ -1251,7 +1255,11 @@ function CommentThread({
   const canComment = canParticipate && app.creator_code !== state.viewer?.code;
   const showBasket = canUseCreativeTools(state) && state.study.status === 'active';
 
-  const roots = comments.filter((comment) => !comment.parent_comment_id);
+  const visibleCommentIds = new Set(comments.map((comment) => Number(comment.id)));
+  const roots = comments.filter((comment) => (
+    !comment.parent_comment_id
+    || !visibleCommentIds.has(Number(comment.parent_comment_id))
+  ));
   const children = (id: number) => comments.filter((comment) => Number(comment.parent_comment_id) === Number(id));
 
   const submit = async () => {
@@ -1299,7 +1307,7 @@ function CommentThread({
 
   const removeComment = (comment: CommunityComment) => {
     const confirmed = window.confirm(
-      '确定删除这条评论吗？删除后不能恢复；如果它已有回复或被用于综合，系统会保留一个匿名内容占位以维持创意关系。',
+      '确定删除这条评论吗？删除后不能恢复，评论卡片会从页面中消失；系统仍会保留必要的引用关系和行为记录。',
     );
     if (!confirmed) return;
     if (editingCommentId === comment.id) {
@@ -1617,7 +1625,7 @@ function LegacyIdeaFlowBoard({
   const creativeToolsAvailable = canUseCreativeTools(state) && state.study.status === 'active';
   const isOwner = state.viewer?.role === 'creator' && state.viewer.code === app.creator_code;
   const targetSyntheses = state.syntheses
-    .filter((synthesis) => synthesis.target_app_id === app.id)
+    .filter((synthesis) => synthesis.target_app_id === app.id && !synthesis.deleted_at)
     .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at));
   const targetSynthesisIds = new Set(targetSyntheses.map((synthesis) => Number(synthesis.id)));
   const targetSources = state.synthesisSources.filter((source) => targetSynthesisIds.has(Number(source.synthesis_id)));
@@ -1643,7 +1651,7 @@ function LegacyIdeaFlowBoard({
   };
 
   const localComments = state.comments
-    .filter((comment) => comment.app_id === app.id)
+    .filter((comment) => comment.app_id === app.id && !comment.deleted_at)
     .map<IdeaFlowNode>((comment) => ({
       key: sourceKey('comment', comment.id),
       kind: 'comment',
@@ -2173,7 +2181,7 @@ function IdeaFlowBoard({
   ].filter(Boolean));
 
   const targetSyntheses = state.syntheses
-    .filter((synthesis) => synthesis.target_app_id === app.id)
+    .filter((synthesis) => synthesis.target_app_id === app.id && !synthesis.deleted_at)
     .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at));
   const viewerHasSubmittedCurrentSynthesis = Boolean(
     openLayer && targetSyntheses.some((synthesis) => (
@@ -2208,7 +2216,11 @@ function IdeaFlowBoard({
     state.basket.map((item) => sourceKey(item.source_type, Number(item.source_id))),
   );
   const localNormalComments = state.comments.filter(
-    (comment) => comment.app_id === app.id && comment.target_type === 'app',
+    (comment) => (
+      comment.app_id === app.id
+      && comment.target_type === 'app'
+      && !comment.deleted_at
+    ),
   );
   const localCommentIds = new Set(localNormalComments.map((comment) => Number(comment.id)));
   const childrenByParent = new Map<number, CommunityComment[]>();
@@ -2331,6 +2343,16 @@ function IdeaFlowBoard({
     });
   }
   const externalNodes = [...externalRecords.values()]
+    .filter((source) => {
+      if (source.source_type === 'comment') {
+        return !state.comments.find(
+          (item) => Number(item.id) === Number(source.source_id),
+        )?.deleted_at;
+      }
+      return !state.syntheses.find(
+        (item) => Number(item.id) === Number(source.source_id),
+      )?.deleted_at;
+    })
     .map<StagedFlowNode>((source) => {
       const sourceSynthesis = source.source_type === 'synthesis'
         ? state.syntheses.find((item) => Number(item.id) === Number(source.source_id))
@@ -2396,6 +2418,7 @@ function IdeaFlowBoard({
     .filter((comment) => (
       comment.target_type === 'synthesis'
       && targetSynthesisIds.has(Number(comment.target_id))
+      && !comment.deleted_at
     ))
     .forEach((comment) => {
       const synthesisId = Number(comment.target_id);
@@ -2410,9 +2433,7 @@ function IdeaFlowBoard({
     .filter((synthesis) => !synthesis.is_development_brief)
     .map<StagedFlowNode>((synthesis) => {
     const key = sourceKey('synthesis', Number(synthesis.id));
-    const discussionComments = synthesis.deleted_at
-      ? []
-      : synthesisDiscussions.get(Number(synthesis.id)) || [];
+    const discussionComments = synthesisDiscussions.get(Number(synthesis.id)) || [];
     const baseHeight = expandedKeySet.has(key)
       ? 270
       : isLongContent(synthesis.content)
@@ -2771,7 +2792,7 @@ function IdeaFlowBoard({
   };
   const removeFlowComment = (comment: CommunityComment) => {
     const confirmed = window.confirm(
-      '确定删除这条评论吗？删除后不能恢复；如果它已有回复或被用于综合，系统会保留一个内容占位以维持创意关系。',
+      '确定删除这条评论吗？删除后不能恢复，评论卡片会从画布中消失；系统仍会保留必要的引用关系和行为记录。',
     );
     if (!confirmed) return;
     void action(`flow-delete-${comment.id}`, async () => {
@@ -2802,7 +2823,7 @@ function IdeaFlowBoard({
   };
   const removeSynthesis = (synthesis: CommunitySynthesis) => {
     const confirmed = window.confirm(
-      '确定删除这条综合评论吗？删除后不能恢复；如果它已被下一轮综合或开发采用，系统会保留一个内容占位以维持创意关系。',
+      '确定删除这条综合评论吗？删除后不能恢复，综合评论卡片会从画布中消失；系统仍会保留必要的引用关系和行为记录。',
     );
     if (!confirmed) return;
     void action(`delete-synthesis-${synthesis.id}`, async () => {
