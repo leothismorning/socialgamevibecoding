@@ -1558,22 +1558,12 @@ function VersionLineage({
           const iteration = version.version_number - 1;
           const contributorCodes = contributorCodesForIteration(state, app.id, iteration);
           const base = versions.find((candidate) => Number(candidate.id) === Number(version.base_version_id));
-          const synthesis = state.syntheses.find(
-            (candidate) => Number(candidate.id) === Number(version.synthesis_id),
-          );
-          const comment = version.selected_source_type === 'comment'
-            ? state.comments.find(
-                (candidate) => Number(candidate.id) === Number(version.selected_source_id),
-              )
-            : undefined;
-          const selectedLabel = synthesis?.title || comment?.content;
           return (
             <div className="async-version-lineage-step" key={version.id}>
               <span className="async-lineage-arrow"><ArrowRight /></span>
               <article className="is-community">
                 <span>基于 {base?.kind === 'community' ? `社区版本 ${base.version_number - 1}` : '初始版本'}</span>
                 <strong>社区版本 {iteration}</strong>
-                <small>{selectedLabel ? `采用“${selectedLabel}”` : '外部开发版本'} · {formatDate(version.created_at)}</small>
                 <small className="async-version-contributors" title={contributorCodes.join('、')}>
                   累计贡献者：{contributorListLabel(contributorCodes)}
                 </small>
