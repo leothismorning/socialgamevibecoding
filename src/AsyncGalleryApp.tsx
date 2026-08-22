@@ -18,6 +18,7 @@ import {
   GitBranch,
   Heart,
   Lightbulb,
+  Languages,
   Link2,
   LoaderCircle,
   Lock,
@@ -50,6 +51,7 @@ import type {
   CreatorDevelopmentProgress,
 } from './communityGalleryTypes';
 import './asyncGallery.css';
+import { useAsyncGalleryLanguage } from './asyncGalleryI18n';
 
 const CLIENT_KEY = 'vibe-gallery-async-client-id';
 
@@ -4224,16 +4226,8 @@ function HostPanel({
     const activeDraft = app.draft_kind === 'community'
       && Number(app.draft_iteration_number) === iterationNumber;
 
-    if (job?.status === 'failed') {
-      return {
-        key: 'failed',
-        label: '失败',
-        detail: job.error || '开发任务失败，但没有返回具体原因。',
-        time: job.completed_at,
-        jobId: job.id,
-        restartable: true,
-      };
-    }
+    // 已发布版本是本轮流程的最终事实。历史任务即使随后被记录为失败，
+    // 也不应覆盖 Host 面板中的发布状态或计入失败汇总。
     if (publishedVersion) {
       return {
         key: 'completed',
@@ -4242,6 +4236,16 @@ function HostPanel({
         time: job?.completed_at || publishedVersion?.created_at,
         jobId: job?.id,
         restartable: false,
+      };
+    }
+    if (job?.status === 'failed') {
+      return {
+        key: 'failed',
+        label: '失败',
+        detail: job.error || '开发任务失败，但没有返回具体原因。',
+        time: job.completed_at,
+        jobId: job.id,
+        restartable: true,
       };
     }
     if (job?.status === 'completed') {
@@ -4704,9 +4708,13 @@ function HostPanel({
                     </label>
                     <strong>{app.creator_code} · {app.title}</strong>
                     <small className={`is-flow-${app.flow_stage}`}>{appFlowLabels[app.flow_stage]}</small>
-                    <div className="async-current-round-counts" aria-label="本轮互动数量">
-                      <span><MessageCircle /> 普通评论 <strong>{app.current_round_comment_count}</strong></span>
-                      <span><Lightbulb /> 综合评论 <strong>{app.current_round_synthesis_count}</strong></span>
+                    <div
+                      className="async-all-comment-counts"
+                      aria-label="全部轮次累计评论数量"
+                      title="显示该作品所有轮次的累计评论"
+                    >
+                      <span><MessageCircle /> 累计普通评论 <strong>{app.comment_count}</strong></span>
+                      <span><Lightbulb /> 累计综合评论 <strong>{app.synthesis_count}</strong></span>
                     </div>
                     <div className="async-published-code-downloads" aria-label="下载已发布作品代码">
                       <span><Download /> 已发布代码</span>
@@ -4922,6 +4930,7 @@ function FireworksCelebration({
 }
 
 export default function AsyncGalleryApp() {
+  const { locale, toggleLocale } = useAsyncGalleryLanguage();
   const [clientId] = useState(getClientId);
   const [state, setState] = useState<CommunityGalleryState | null>(null);
   const [busy, setBusy] = useState('');
@@ -5101,6 +5110,16 @@ export default function AsyncGalleryApp() {
           </button>
         </div>
         <div className="async-header-actions">
+          <button
+            type="button"
+            className="async-language-button"
+            onClick={toggleLocale}
+            aria-label={locale === 'en' ? 'Switch to Chinese' : 'Switch to English'}
+            title={locale === 'en' ? 'Switch to Chinese' : 'Switch to English'}
+          >
+            <Languages />
+            <span>{locale === 'en' ? '中文' : 'English'}</span>
+          </button>
           {canUseCreativeTools(state) && state.viewer?.role !== 'host' && (
             <button className="async-basket-button" onClick={() => setBasketOpen(true)}><ShoppingBasket /><span>收藏夹</span><strong>{state.basket.length}</strong></button>
           )}

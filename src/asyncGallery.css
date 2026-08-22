@@ -73,6 +73,7 @@
 .async-brand small { color: var(--muted); font-size: 14px; font-weight: 750; letter-spacing: .055em; }
 .async-header-actions { display: flex; align-items: center; gap: 9px; }
 .async-viewer,
+.async-language-button,
 .async-basket-button,
 .async-notification-button,
 .async-refresh {
@@ -86,6 +87,38 @@
 .async-viewer span { color: var(--muted); font-size: 14px; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
 .async-viewer strong { font-size: 14px; text-transform: capitalize; }
 .async-basket-button { display: flex; align-items: center; gap: 7px; padding: 0 12px; color: #5a3cc4 !important; cursor: pointer; }
+.async-language-button {
+  min-width: 104px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  color: #315fda !important;
+  font-size: 14px;
+  font-weight: 900;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.async-language-button:hover { border-color: #b9cafa; background: #f4f7ff; transform: translateY(-1px); }
+.async-language-button svg { width: 17px; height: 17px; flex: 0 0 auto; }
+.async-lang-en .async-gallery-shell { font-family: Inter, "SF Pro Display", system-ui, sans-serif; }
+.async-lang-en .async-gallery-shell button,
+.async-lang-en .async-gallery-shell strong,
+.async-lang-en .async-gallery-shell p,
+.async-lang-en .async-gallery-shell span,
+.async-lang-en .async-gallery-shell small,
+.async-lang-en .async-gallery-shell label,
+.async-lang-en .async-gallery-shell h1,
+.async-lang-en .async-gallery-shell h2,
+.async-lang-en .async-gallery-shell h3 { overflow-wrap: anywhere; }
+.async-lang-en .async-home-order-actions,
+.async-lang-en .async-app-flow-toolbar,
+.async-lang-en .async-studio > header,
+.async-lang-en .async-host-panel > header { flex-wrap: wrap; }
+.async-lang-en .async-flow-node > header > small,
+.async-lang-en .async-creator-progress > header p { white-space: normal; text-overflow: clip; }
 .async-basket-button svg { width: 17px; }
 .async-basket-button span { font-size: 14px; font-weight: 850; }
 .async-basket-button strong { min-width: 20px; height: 20px; display: grid; place-items: center; color: #fff; border-radius: 99px; background: var(--violet); font-size: 14px; }
@@ -1548,10 +1581,10 @@
 .async-development-app > small.is-flow-round_1, .async-development-app > small.is-flow-round_2 { color: #31634a; background: #e6f5ec; }
 .async-development-app > small.is-flow-development_1, .async-development-app > small.is-flow-development_2 { color: #8b5b13; background: #fff2d8; }
 .async-development-app > small.is-flow-completed { color: #fff; background: #557561; }
-.async-current-round-counts { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
-.async-current-round-counts > span { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; color: #67758a; border: 1px solid #e0e6ef; border-radius: 7px; background: #fff; font-size: 14px; font-weight: 800; }
-.async-current-round-counts svg { width: 10px; height: 10px; }
-.async-current-round-counts strong { color: #584595; font-size: 14px; }
+.async-all-comment-counts { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+.async-all-comment-counts > span { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; color: #67758a; border: 1px solid #e0e6ef; border-radius: 7px; background: #fff; font-size: 14px; font-weight: 800; }
+.async-all-comment-counts svg { width: 10px; height: 10px; }
+.async-all-comment-counts strong { color: #584595; font-size: 14px; }
 .async-published-code-downloads { display: grid; gap: 5px; margin-top: 4px; padding-top: 7px; border-top: 1px dashed #dce3ed; }
 .async-published-code-downloads > span { display: flex; align-items: center; gap: 4px; color: #53647b; font-size: 14px; font-weight: 900; }
 .async-published-code-downloads > span svg { width: 10px; height: 10px; }
@@ -1655,9 +1688,14 @@
   .async-brand small,
   .async-viewer span,
   .async-basket-button span { display: none; }
+  .async-language-button { width: 42px; min-width: 42px; height: 40px; padding: 0; }
+  .async-language-button span { display: none; }
   .async-brand > span { width: 38px; height: 38px; }
   .async-brand strong { font-size: 15px; }
   .async-viewer { min-width: 55px; padding: 0 9px; }
+  .async-viewer strong { white-space: nowrap; }
+  .async-lang-en .async-viewer { min-width: 62px; padding: 0 6px; }
+  .async-lang-en .async-viewer strong { font-size: 12px; }
   .async-basket-button { width: 44px; justify-content: center; padding: 0; }
   .async-basket-button strong { position: absolute; margin: -25px 0 0 25px; }
   .async-refresh { width: 40px; height: 40px; }
