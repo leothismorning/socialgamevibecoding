@@ -119,6 +119,33 @@
 .async-lang-en .async-host-panel > header { flex-wrap: wrap; }
 .async-lang-en .async-flow-node > header > small,
 .async-lang-en .async-creator-progress > header p { white-space: normal; text-overflow: clip; }
+.async-lang-en .async-card-body > footer { gap: 7px; }
+.async-lang-en .async-card-body > footer > div { flex: 0 0 auto; gap: 6px; }
+.async-lang-en .async-social-button {
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding-inline: 7px;
+  font-size: 13px;
+  line-height: 1;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: nowrap;
+}
+.async-lang-en .async-open-app {
+  min-width: 0;
+  margin-left: auto;
+  font-size: 13px;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.async-lang-en .async-flow-column-heading {
+  width: 320px !important;
+  height: 64px;
+  padding-block: 7px;
+}
+.async-lang-en .async-flow-column-heading > div { min-width: 0; }
+.async-lang-en .async-flow-column-heading strong { line-height: 1.25; }
+.async-lang-en .async-flow-column-heading small { font-size: 13px; line-height: 1.3; }
 .async-basket-button svg { width: 17px; }
 .async-basket-button span { font-size: 14px; font-weight: 850; }
 .async-basket-button strong { min-width: 20px; height: 20px; display: grid; place-items: center; color: #fff; border-radius: 99px; background: var(--violet); font-size: 14px; }
