@@ -271,6 +271,12 @@ export const communityGalleryApi = {
     + `?clientId=${encodeURIComponent(clientId)}`
     + `&isTest=${encodeURIComponent(String(isTest))}`
     + `&archiveName=${encodeURIComponent(archiveName)}`,
+  selectedArtifactsArchiveUrl: (
+    clientId: string,
+    appIds: string[],
+  ) => `/api/community-gallery/study/artifacts-all-versions`
+    + `?clientId=${encodeURIComponent(clientId)}`
+    + `&appIds=${encodeURIComponent(appIds.join(','))}`,
   previewUrl: (
     clientId: string,
     appId: string,

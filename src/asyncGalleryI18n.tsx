@@ -363,6 +363,9 @@ const exactTranslations: Record<string, string> = {
   '下载已发布作品代码': 'Download published app code',
   '已发布代码': 'Published code',
   '下载中…': 'Downloading…',
+  '下载（全部版本）': 'Download all versions',
+  '正在打包…': 'Creating ZIP…',
+  '把所选作品的全部已发布版本打包为 ZIP': 'Download all published versions of the selected apps as a ZIP',
   '不可撤销操作': 'Irreversible action',
   '确认清除测试角色数据': 'Confirm test-role data deletion',
   '关闭清除测试角色数据窗口': 'Close test-role deletion dialog',
@@ -473,6 +476,7 @@ const dynamicTranslations: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^确认删除“(.+)”吗？删除后需要重新创建并发布。$/, (_all, title) => `Delete “${title}”? You will need to recreate and publish it.`],
   [/^版本已经发布，但项目代码保存失败：(.+)$/, (_all, error) => `The version was published, but saving the project code failed: ${error}`],
   [/^作品代码下载失败：(.+)$/, (_all, error) => `App-code download failed: ${error}`],
+  [/^作品批量下载失败：(.+)$/, (_all, error) => `Batch app download failed: ${error}`],
   [/^下载 (C\d+) 的 V(\d+) HTML 代码$/, (_all, creator, version) => `Download ${creator} V${version} HTML`],
 ];
 

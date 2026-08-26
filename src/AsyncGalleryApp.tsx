@@ -4162,6 +4162,7 @@ function HostPanel({
   const [resetConfirmation, setResetConfirmation] = useState('');
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([]);
   const [downloadingVersionId, setDownloadingVersionId] = useState<number | null>(null);
+  const [downloadingSelectedArtifacts, setDownloadingSelectedArtifacts] = useState(false);
   const [creatorSortDirection, setCreatorSortDirection] = useState<'none' | 'asc' | 'desc'>('none');
   const [copiedCodexTaskId, setCopiedCodexTaskId] = useState('');
 
@@ -4400,6 +4401,20 @@ function HostPanel({
       setDownloadingVersionId(null);
     }
   };
+  const downloadSelectedArtifacts = async () => {
+    if (!selectedAppIds.length) return;
+    setDownloadingSelectedArtifacts(true);
+    try {
+      await downloadUrl(
+        communityGalleryApi.selectedArtifactsArchiveUrl(clientId, selectedAppIds),
+        'artifacts_all_versions.zip',
+      );
+    } catch (error) {
+      window.alert(`作品批量下载失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDownloadingSelectedArtifacts(false);
+    }
+  };
   return (
     <>
     <section className="async-host-panel">
@@ -4609,6 +4624,12 @@ function HostPanel({
               <strong>已选择 {selectedApps.length} 个</strong>
             </div>
             <div className="async-app-flow-actions">
+              <button
+                className="async-primary"
+                disabled={Boolean(busy) || downloadingSelectedArtifacts || selectedApps.length === 0}
+                title="把所选作品的全部已发布版本打包为 ZIP"
+                onClick={() => void downloadSelectedArtifacts()}
+              ><Download /> {downloadingSelectedArtifacts ? '正在打包…' : '下载（全部版本）'}</button>
               <button
                 disabled={Boolean(busy) || !selectedCan('development_1')}
                 onClick={() => action('develop-selected-round-1', () => enterSelectedDevelopment(1))}

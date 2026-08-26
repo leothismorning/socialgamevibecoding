@@ -29,6 +29,7 @@ import {
   getCodexDevelopmentTask,
   getCommunityPreview,
   getPublishedCommunityVersionDownload,
+  getSelectedPublishedArtifactsDownload,
   getCreatorDevelopmentProgress,
   getCreatorDraftContext,
   joinCommunityGallery,
@@ -71,7 +72,10 @@ import {
   withdrawSynthesisForVote,
   type CommunitySourceType,
 } from './communityGalleryDb.js';
-import { buildCommunityWorkspaceArchive } from './communityGalleryArchive.js';
+import {
+  buildCommunityWorkspaceArchive,
+  buildSelectedArtifactsArchive,
+} from './communityGalleryArchive.js';
 import {
   applyPreviewPerformanceGuard,
   type PreviewPerformanceMode,
@@ -515,6 +519,21 @@ export function registerCommunityGalleryRoutes(app: Express) {
       );
       res.setHeader('Content-Length', String(archive.buffer.length));
       res.send(archive.buffer);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.get('/api/community-gallery/study/artifacts-all-versions', async (req, res) => {
+    try {
+      const appIds = String(req.query.appIds || '').split(',').filter(Boolean);
+      const artifacts = getSelectedPublishedArtifactsDownload(clientIdFrom(req), appIds);
+      const buffer = await buildSelectedArtifactsArchive(artifacts);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', 'attachment; filename="artifacts_all_versions.zip"');
+      res.setHeader('Content-Length', String(buffer.length));
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(buffer);
     } catch (error) {
       sendError(res, error);
     }

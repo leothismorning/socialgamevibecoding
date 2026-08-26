@@ -1,5 +1,11 @@
 import JSZip from 'jszip';
 
+type PublishedArtifact = {
+  creator_code: string;
+  version_number: number;
+  code: string;
+};
+
 function safeFileSegment(value: string, fallback: string) {
   const cleaned = value
     .trim()
@@ -13,6 +19,21 @@ export function safeArchiveName(value: string) {
   const cleaned = value.trim().replace(/[^0-9_-]/g, '').slice(0, 32);
   if (/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/.test(cleaned)) return cleaned;
   return new Date().toISOString().replace(/\.\d{3}Z$/, '').replace('T', '_').replace(/:/g, '-');
+}
+
+export async function buildSelectedArtifactsArchive(artifacts: PublishedArtifact[]) {
+  const zip = new JSZip();
+  const folder = zip.folder('artifacts_all_versions')!;
+  artifacts.forEach((artifact) => {
+    const creatorCode = safeFileSegment(artifact.creator_code, 'creator').toLowerCase();
+    const displayVersion = Math.max(0, Number(artifact.version_number) - 1);
+    folder.file(`${creatorCode}_v${displayVersion}.html`, String(artifact.code));
+  });
+  return zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
 }
 
 export async function buildCommunityWorkspaceArchive(

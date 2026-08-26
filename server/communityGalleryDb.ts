@@ -5856,6 +5856,38 @@ export function getPublishedCommunityVersionDownload(
   return version;
 }
 
+export function getSelectedPublishedArtifactsDownload(
+  clientId: string,
+  appIds: string[],
+) {
+  const viewer = requireViewer(clientId, 'host');
+  const currentStudy = study();
+  const selectedIds = [...new Set(appIds.map(String).map((id) => id.trim()).filter(Boolean))];
+  if (!selectedIds.length) throw new Error('请至少选择一个要下载的作品。');
+  const placeholders = selectedIds.map(() => '?').join(',');
+  const artifacts = db.prepare(`
+    SELECT a.id AS app_id, a.creator_code, v.version_number, v.code
+    FROM vg_async_apps a
+    JOIN vg_async_versions v ON v.study_id = a.study_id AND v.app_id = a.id
+    WHERE a.study_id = ? AND a.status = 'published'
+      AND a.id IN (${placeholders})
+      AND TRIM(COALESCE(v.code, '')) <> ''
+    ORDER BY CAST(SUBSTR(a.creator_code, 2) AS INTEGER), v.version_number
+  `).all(currentStudy.id, ...selectedIds) as Array<{
+    app_id: string;
+    creator_code: string;
+    version_number: number;
+    code: string;
+  }>;
+  if (!artifacts.length) throw new Error('所选作品没有可下载的已发布版本。');
+  recordEvent(viewer.code, 'download_selected_app_versions', 'study', currentStudy.id, {
+    appIds: selectedIds,
+    appCount: new Set(artifacts.map((artifact) => artifact.app_id)).size,
+    versionCount: artifacts.length,
+  });
+  return artifacts;
+}
+
 export function getCommunityGalleryState(clientId = '') {
   const currentStudy = study();
   const regularWorkspace = workspaceState(currentStudy.id, 0);
