@@ -119,7 +119,6 @@
 .async-lang-en .async-host-panel > header { flex-wrap: wrap; }
 .async-lang-en .async-flow-node > header > small,
 .async-lang-en .async-creator-progress > header p { white-space: normal; text-overflow: clip; }
-.async-lang-en .async-gallery-item.is-paired { grid-column: 1 / -1; }
 .async-lang-en .async-card-body { gap: 13px; padding: 15px; }
 .async-lang-en .async-card-body p { -webkit-line-clamp: 3; }
 .async-lang-en .async-card-kicker-row { align-items: flex-start; flex-wrap: wrap; }
@@ -129,7 +128,13 @@
   text-overflow: clip;
   white-space: normal;
 }
-.async-lang-en .async-card-provenance { grid-template-columns: 20px minmax(0, 1fr); align-items: start; }
+.async-lang-en .async-card-provenance {
+  min-height: 92px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-content: center;
+  align-items: start;
+  padding-block: 13px;
+}
 .async-lang-en .async-card-provenance svg { grid-column: 1; grid-row: 1 / 3; }
 .async-lang-en .async-card-provenance span,
 .async-lang-en .async-card-provenance small { grid-column: 2; min-width: 0; line-height: 1.4; }

@@ -2110,7 +2110,7 @@ function IdeaFlowBoard({
   const englishFlowLayout = locale === 'en';
   const flowNodeWidth = englishFlowLayout ? 330 : FLOW_NODE_WIDTH;
   const flowColumnGap = englishFlowLayout ? 104 : FLOW_COLUMN_GAP;
-  const flowStatusRowHeight = englishFlowLayout ? 54 : FLOW_STATUS_ROW_HEIGHT;
+  const flowStatusRowHeight = englishFlowLayout ? 34 : FLOW_STATUS_ROW_HEIGHT;
   const [commentContent, setCommentContent] = useState('');
   const [commentComposerOpen, setCommentComposerOpen] = useState(false);
   const [replyingTo, setReplyingTo] = useState<CommunityComment | null>(null);
@@ -2245,7 +2245,7 @@ function IdeaFlowBoard({
     const expandable = isLongContent(comment.content);
     const expanded = expandable && expandedKeySet.has(key);
     const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id))
-      ? (englishFlowLayout ? 94 : 48)
+      ? (englishFlowLayout ? 52 : 48)
       : 0;
     const statusExtraHeight = (
       Number(developmentSelectedSourceKeys.has(key))
@@ -2272,17 +2272,17 @@ function IdeaFlowBoard({
       width: kind === 'reply' ? flowNodeWidth - 18 : flowNodeWidth,
       height: kind === 'reply'
         ? (expanded
-            ? (englishFlowLayout ? 234 : 190)
+            ? (englishFlowLayout ? 210 : 190)
             : expandable
-              ? (englishFlowLayout ? 180 : 146)
-              : (englishFlowLayout ? 144 : 112))
+              ? (englishFlowLayout ? 160 : 146)
+              : (englishFlowLayout ? 128 : 112))
           + wildcardExtraHeight
           + statusExtraHeight
         : (expanded
-            ? (englishFlowLayout ? 286 : 224)
+            ? (englishFlowLayout ? 250 : 224)
             : expandable
-              ? (englishFlowLayout ? 228 : 178)
-              : (englishFlowLayout ? 184 : FLOW_NODE_HEIGHT))
+              ? (englishFlowLayout ? 196 : 178)
+              : (englishFlowLayout ? 146 : FLOW_NODE_HEIGHT))
           + wildcardExtraHeight
           + statusExtraHeight,
       indent: kind === 'reply' ? 18 : 0,
@@ -2404,10 +2404,10 @@ function IdeaFlowBoard({
         expandable: sourceExpandable,
         width: flowNodeWidth,
         height: (sourceExpanded
-          ? (englishFlowLayout ? 330 : 274)
+          ? (englishFlowLayout ? 300 : 274)
           : sourceExpandable
-            ? (englishFlowLayout ? 272 : 218)
-            : (englishFlowLayout ? 232 : 186))
+            ? (englishFlowLayout ? 240 : 218)
+            : (englishFlowLayout ? 205 : 186))
           + (
             Number(developmentSelectedSourceKeys.has(key))
             + Number(sourceSynthesis
@@ -2446,10 +2446,10 @@ function IdeaFlowBoard({
     const key = sourceKey('synthesis', Number(synthesis.id));
     const discussionComments = synthesisDiscussions.get(Number(synthesis.id)) || [];
     const baseHeight = expandedKeySet.has(key)
-      ? (englishFlowLayout ? 330 : 270)
+      ? (englishFlowLayout ? 295 : 270)
       : isLongContent(synthesis.content)
-        ? (englishFlowLayout ? 264 : 206)
-        : (englishFlowLayout ? 218 : 170);
+        ? (englishFlowLayout ? 230 : 206)
+        : (englishFlowLayout ? 190 : 170);
     return {
       key,
       kind: 'synthesis',
