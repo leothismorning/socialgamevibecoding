@@ -1092,6 +1092,12 @@ function GalleryVersionCard({
     (item) => Number(item.id) === Number(app.initial_version_id),
   );
   const displayedVersion = isCommunity ? latestCommunityVersion : initialVersion;
+  const selectedSynthesis = state.syntheses.find(
+    (item) => Number(item.id) === Number(latestCommunityVersion?.synthesis_id),
+  );
+  const contributorCodes = isCommunity
+    ? contributorCodesForIteration(state, app.id, Number(app.community_version_count || 0))
+    : [];
   const canLike = state.viewer?.role !== 'host'
     && state.viewer?.code !== app.creator_code
     && state.study.status !== 'closed';
@@ -1149,6 +1155,15 @@ function GalleryVersionCard({
             ? latestCommunityVersion?.summary || '社区综合讨论后形成的最新可运行版本。'
             : app.brief || '一个由创作者自由创作的应用。'}</p>
         </div>
+        {isCommunity && (selectedSynthesis || contributorCodes.length > 0) && (
+          <div className="async-card-provenance">
+            <GitMerge />
+            <span>{selectedSynthesis
+              ? `最新社区版本来自“${selectedSynthesis.title}”`
+              : '最新社区版本由社区想法推动开发'}</span>
+            <small title={contributorCodes.join('、')}>累计贡献者：{contributorListLabel(contributorCodes)}</small>
+          </div>
+        )}
         <footer>
           <div>
             <button
