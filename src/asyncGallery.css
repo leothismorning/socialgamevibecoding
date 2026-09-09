@@ -534,10 +534,6 @@
 .async-feed-status.is-ready { color: #216b52; border-color: #cfe8dd; background: #edf9f4; }
 .async-card-body h2 { margin: 7px 0 4px; font-size: 16px; line-height: 1.28; letter-spacing: -.025em; }
 .async-card-body p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.52; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.async-card-provenance { display: grid; grid-template-columns: 24px 1fr; align-items: center; gap: 2px 8px; padding: 10px; color: #554281; border-radius: 11px; background: #f4f1ff; }
-.async-card-provenance svg { grid-row: 1 / 3; width: 17px; }
-.async-card-provenance span { font-size: 14px; font-weight: 850; }
-.async-card-provenance small { color: #7b6d9a; font-size: 14px; }
 .async-card-body > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 10px; border-top: 1px solid #edf1f5; }
 .async-card-body > footer > div { display: flex; align-items: center; gap: 9px; }
 .async-card-body > footer span { display: flex; align-items: center; gap: 4px; color: #6d7b90; font-size: 14px; font-weight: 850; }
