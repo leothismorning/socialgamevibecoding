@@ -119,26 +119,7 @@
 .async-lang-en .async-host-panel > header { flex-wrap: wrap; }
 .async-lang-en .async-flow-node > header > small,
 .async-lang-en .async-creator-progress > header p { white-space: normal; text-overflow: clip; }
-.async-lang-en .async-card-body { gap: 13px; padding: 15px; }
-.async-lang-en .async-card-body p { -webkit-line-clamp: 3; }
-.async-lang-en .async-card-kicker-row { align-items: flex-start; flex-wrap: wrap; }
-.async-lang-en .async-card-kicker-row .async-eyebrow {
-  flex: 1 1 180px;
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-}
-.async-lang-en .async-card-provenance {
-  min-height: 92px;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-content: center;
-  align-items: start;
-  padding-block: 13px;
-}
-.async-lang-en .async-card-provenance svg { grid-column: 1; grid-row: 1 / 3; }
-.async-lang-en .async-card-provenance span,
-.async-lang-en .async-card-provenance small { grid-column: 2; min-width: 0; line-height: 1.4; }
-.async-lang-en .async-card-body > footer { align-items: flex-start; flex-wrap: wrap; gap: 9px; }
+.async-lang-en .async-card-body > footer { gap: 7px; }
 .async-lang-en .async-card-body > footer > div { flex: 0 0 auto; gap: 6px; }
 .async-lang-en .async-social-button {
   flex: 0 0 auto;
@@ -151,34 +132,20 @@
   white-space: nowrap;
 }
 .async-lang-en .async-open-app {
-  flex: 1 1 175px;
-  min-width: 150px;
-  justify-content: flex-end;
+  min-width: 0;
   margin-left: auto;
   font-size: 13px;
   overflow-wrap: normal;
-  text-align: right;
   word-break: normal;
-  white-space: normal;
 }
 .async-lang-en .async-flow-column-heading {
+  width: 320px !important;
   height: 64px;
   padding-block: 7px;
 }
 .async-lang-en .async-flow-column-heading > div { min-width: 0; }
 .async-lang-en .async-flow-column-heading strong { line-height: 1.25; }
 .async-lang-en .async-flow-column-heading small { font-size: 13px; line-height: 1.3; }
-.async-lang-en .async-flow-node { padding: 14px; }
-.async-lang-en .async-flow-node > header { align-items: flex-start; }
-.async-lang-en .async-flow-node-type { min-width: 0; line-height: 1.25; }
-.async-lang-en .async-flow-node > header > small { flex: 0 0 86px; line-height: 1.3; text-align: right; }
-.async-lang-en .async-wildcard-card-note { line-height: 1.35; }
-.async-lang-en .async-flow-used,
-.async-lang-en .async-flow-selected,
-.async-lang-en .async-synthesis-score,
-.async-lang-en .async-synthesis-votes { line-height: 1.3; }
-.async-lang-en .async-flow-node-actions { flex-wrap: wrap; overflow-x: visible; }
-.async-lang-en .async-flow-node-actions button { font-size: 12px; }
 .async-basket-button svg { width: 17px; }
 .async-basket-button span { font-size: 14px; font-weight: 850; }
 .async-basket-button strong { min-width: 20px; height: 20px; display: grid; place-items: center; color: #fff; border-radius: 99px; background: var(--violet); font-size: 14px; }
