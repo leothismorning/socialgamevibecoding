@@ -2106,6 +2106,7 @@ function IdeaFlowBoard({
   openBasket: () => void;
   viewSources: (synthesis: CommunitySynthesis) => void;
 }) {
+  const { locale } = useAsyncGalleryLanguage();
   const [commentContent, setCommentContent] = useState('');
   const [commentComposerOpen, setCommentComposerOpen] = useState(false);
   const [replyingTo, setReplyingTo] = useState<CommunityComment | null>(null);
@@ -2239,11 +2240,14 @@ function IdeaFlowBoard({
     const key = sourceKey('comment', comment.id);
     const expandable = isLongContent(comment.content);
     const expanded = expandable && expandedKeySet.has(key);
-    const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id)) ? 48 : 0;
+    const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id))
+      ? locale === 'en' ? 76 : 48
+      : 0;
+    const statusRowHeight = locale === 'en' ? 50 : FLOW_STATUS_ROW_HEIGHT;
     const statusExtraHeight = (
       Number(developmentSelectedSourceKeys.has(key))
       + Number(synthesisAdoptedSourceKeys.has(key))
-    ) * FLOW_STATUS_ROW_HEIGHT;
+    ) * statusRowHeight;
     return {
       key,
       kind,
@@ -2394,7 +2398,7 @@ function IdeaFlowBoard({
             + Number(sourceSynthesis
               ? Number(sourceSynthesis.source_count || 0) > 0
               : synthesisAdoptedSourceKeys.has(key))
-          ) * FLOW_STATUS_ROW_HEIGHT,
+          ) * (locale === 'en' ? 50 : FLOW_STATUS_ROW_HEIGHT),
         indent: 0,
         comment: sourceComment,
         synthesis: sourceSynthesis,
@@ -2456,7 +2460,7 @@ function IdeaFlowBoard({
         + (
           Number(developmentSelectedSourceKeys.has(key))
           + Number(Number(synthesis.source_count || 0) > 0)
-        ) * FLOW_STATUS_ROW_HEIGHT,
+        ) * (locale === 'en' ? 50 : FLOW_STATUS_ROW_HEIGHT),
       indent: 0,
       synthesis,
       discussionComments,

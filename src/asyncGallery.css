@@ -726,7 +726,7 @@
 .async-lineage-arrow svg { width: 17px; }
 .async-version-lineage-step.is-pending article { color: #8793a3; border-style: dashed; background: #f5f7fa; box-shadow: none; }
 .async-flow-scroll {
-  max-height: 720px;
+  max-height: 840px;
   overflow: auto;
   background-color: #f5f7fa;
   scrollbar-color: #aebacf #edf1f6;
@@ -1813,7 +1813,7 @@
   .async-synthesis-basket-prompt > div small { text-align: left; }
   .async-flow-comment-composer { grid-template-columns: 1fr; padding: 13px; }
   .async-flow-comment-composer button { justify-self: stretch; justify-content: center; }
-  .async-flow-scroll { max-height: 620px; }
+  .async-flow-scroll { max-height: 700px; }
   .async-flow-legend { gap: 9px 12px; padding: 11px 14px; }
   .async-version-tabs { width: 100%; }
   .async-version-tabs button { flex: 1; }
