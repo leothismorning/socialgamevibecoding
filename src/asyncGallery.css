@@ -121,6 +121,27 @@
 .async-lang-en .async-creator-progress > header p { white-space: normal; text-overflow: clip; }
 .async-lang-en .async-card-body > footer { gap: 7px; }
 .async-lang-en .async-card-body > footer > div { flex: 0 0 auto; gap: 6px; }
+.async-lang-en .async-card-chrome {
+  height: auto;
+  min-height: 42px;
+  padding-block: 5px;
+}
+.async-lang-en .async-card-chrome > strong { min-width: 0; }
+.async-lang-en .async-card-chrome > div > span {
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+}
+.async-lang-en .async-card-kicker-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.async-lang-en .async-card-kicker-row .async-eyebrow {
+  flex: 1 1 170px;
+  white-space: normal;
+}
+.async-lang-en .async-card-body > footer { flex-wrap: wrap; }
+.async-lang-en .async-card-body > footer .async-open-app { margin-left: auto; }
 .async-lang-en .async-social-button {
   flex: 0 0 auto;
   min-width: max-content;
@@ -136,6 +157,19 @@
   margin-left: auto;
   font-size: 13px;
   overflow-wrap: normal;
+  word-break: normal;
+}
+.async-lang-en .async-card-provenance {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 4px 7px;
+}
+.async-lang-en .async-card-provenance svg { width: 15px; margin-top: 2px; }
+.async-lang-en .async-card-provenance span,
+.async-lang-en .async-card-provenance small {
+  min-width: 0;
+  line-height: 1.3;
+  overflow-wrap: break-word;
   word-break: normal;
 }
 .async-lang-en .async-flow-column-heading {

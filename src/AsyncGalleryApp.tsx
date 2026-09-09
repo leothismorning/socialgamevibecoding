@@ -5278,7 +5278,7 @@ export default function AsyncGalleryApp() {
                         <h2 id={`home-${section.key}-round-title`}>{section.title}</h2>
                         <p>{section.description}</p>
                       </div>
-                      <strong>{section.apps.length} 个作品</strong>
+                      <strong>{`${section.apps.length} 个作品`}</strong>
                     </header>
                     {section.apps.length > 0 ? (
                       <div className={`async-gallery-grid columns-${galleryColumnCount}`}>

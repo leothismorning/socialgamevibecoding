@@ -1,10 +1,12 @@
 import React from 'react';
+import { asyncGalleryResearchContentTranslations } from './asyncGalleryResearchContentTranslations';
 
 export type AsyncGalleryLocale = 'zh-CN' | 'en';
 
 const STORAGE_KEY = 'vibe-gallery-locale';
 
 const exactTranslations: Record<string, string> = {
+  ...asyncGalleryResearchContentTranslations,
   '暂无平台内贡献者': 'No contributors yet',
   '等待发布初始版本 V0': 'Waiting for initial version V0',
   '第一轮评论与综合进行中': 'Round 1 feedback and synthesis in progress',
@@ -124,7 +126,7 @@ const exactTranslations: Record<string, string> = {
   '等待社区版本': 'Waiting for community version',
   '社区综合讨论后形成的最新可运行版本。': 'Latest working version created from community ideas.',
   '一个由创作者自由创作的应用。': 'An independently created app.',
-  '最新社区版本由社区想法推动开发': 'Latest community version developed from community ideas',
+  '最新社区版本由社区想法推动开发': 'Latest version built from community ideas',
   '累计贡献者：': 'Contributors: ',
   '给当前版本点赞，可随时取消': 'Like this version; you can undo it anytime',
   '主持人不能点赞、不能点赞自己的作品，研究结束后内容只读': 'The Host cannot like apps; creators cannot like their own apps; closed studies are read-only',
@@ -430,6 +432,9 @@ const exactTranslations: Record<string, string> = {
   '切换为中文版': 'Switch to Chinese',
 };
 
+const normalize = (value: string) => value.replace(/\s+/g, ' ').trim();
+const translateKnownContent = (value: string) => exactTranslations[normalize(value)] || value;
+
 const dynamicTranslations: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^(.+) 等 (\d+) 人$/, (_all, visible, count) => `${visible} and ${count} people`],
   [/^社区版本 (\d+)$/, (_all, version) => `Community version ${version}`],
@@ -456,8 +461,11 @@ const dynamicTranslations: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^(\d+) \/ 3 个指定体验已完成$/, (_all, count) => `${count} of 3 assigned apps completed`],
   [/^账号 (\d+)$/, (_all, number) => `Account ${number}`],
   [/^回复 (C\d+)$/, (_all, code) => `Reply to ${code}`],
-  [/^打开“(.+)”(最新社区版本|原始版本)详情$/, (_all, title, version) => `Open ${title} · ${version === '最新社区版本' ? 'latest community version' : 'initial version'}`],
-  [/^(.+) · 社区版本 (\d+)$/, (_all, title, version) => `${title} · Community version ${version}`],
+  [/^打开“(.+)”(最新社区版本|原始版本)详情$/, (_all, title, version) => `Open ${translateKnownContent(title)} · ${version === '最新社区版本' ? 'latest community version' : 'initial version'}`],
+  [/^(.+) · 社区版本 (\d+)$/, (_all, title, version) => `${translateKnownContent(title)} · Community version ${version}`],
+  [/^(.+) 社区版本 (\d+)$/, (_all, title, version) => `${translateKnownContent(title)} · Community version ${version}`],
+  [/^(.+) 初始版本$/, (_all, title) => `${translateKnownContent(title)} · Initial version`],
+  [/^(C\d+) · 原创应用$/, (_all, creator) => `${creator} · Original app`],
   [/^社区版本 (\d+) 已采用$/, (_all, version) => `Adopted in community version ${version}`],
   [/^万能卡已为第 (\d+) 轮开发选定评论$/, (_all, round) => `Wildcard selected a comment for Round ${round}`],
   [/^上传 HTML 并发布 V(\d+)$/, (_all, version) => `Upload HTML and publish V${version}`],
@@ -469,8 +477,11 @@ const dynamicTranslations: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^社区版本 (\d+) 已发布$/, (_all, version) => `Community version ${version} published`],
   [/^已回传 (\d+)\/(\d+)$/, (_all, done, total) => `${done}/${total} returned`],
   [/^累计贡献者：(.*)$/, (_all, contributors) => `Contributors: ${contributors}`],
-  [/^最新社区版本来自“(.+)”$/, (_all, title) => `Latest community version developed from “${title}”`],
-  [/^采用“(.+)”$/, (_all, title) => `Adopted “${title}”`],
+  [/^最新社区版本来自“(.+)”$/, (_all, title) => `Latest version built from “${translateKnownContent(title)}”`],
+  [/^采用“(.+)”$/, (_all, title) => `Adopted “${translateKnownContent(title)}”`],
+  [/^(\d+) 个作品$/, (_all, count) => `${count} ${count === '1' ? 'app' : 'apps'}`],
+  [/^创作者上传 .+ 完成第 (\d+) 轮开发。$/, (_all, round) => `The creator uploaded a platform-compatible HTML file to complete Round ${round}.`],
+  [/^创作者重新上传 .+，替换社区版本 (\d+)。$/, (_all, version) => `The creator re-uploaded a platform-compatible HTML file to replace Community version ${version}.`],
   [/^给当前版本点赞，可随时取消$/, () => 'Like this version; you can undo it anytime'],
   [/^文件下载失败（(\d+)）。$/, (_all, status) => `File download failed (${status}).`],
   [/^确认删除“(.+)”吗？删除后需要重新创建并发布。$/, (_all, title) => `Delete “${title}”? You will need to recreate and publish it.`],
@@ -479,8 +490,6 @@ const dynamicTranslations: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^作品批量下载失败：(.+)$/, (_all, error) => `Batch app download failed: ${error}`],
   [/^下载 (C\d+) 的 V(\d+) HTML 代码$/, (_all, creator, version) => `Download ${creator} V${version} HTML`],
 ];
-
-const normalize = (value: string) => value.replace(/\s+/g, ' ').trim();
 
 function translateAsyncGalleryText(value: string) {
   const normalized = normalize(value);
