@@ -2106,6 +2106,11 @@ function IdeaFlowBoard({
   openBasket: () => void;
   viewSources: (synthesis: CommunitySynthesis) => void;
 }) {
+  const { locale } = useAsyncGalleryLanguage();
+  const englishFlowLayout = locale === 'en';
+  const flowNodeWidth = englishFlowLayout ? 330 : FLOW_NODE_WIDTH;
+  const flowColumnGap = englishFlowLayout ? 104 : FLOW_COLUMN_GAP;
+  const flowStatusRowHeight = englishFlowLayout ? 54 : FLOW_STATUS_ROW_HEIGHT;
   const [commentContent, setCommentContent] = useState('');
   const [commentComposerOpen, setCommentComposerOpen] = useState(false);
   const [replyingTo, setReplyingTo] = useState<CommunityComment | null>(null);
@@ -2239,11 +2244,13 @@ function IdeaFlowBoard({
     const key = sourceKey('comment', comment.id);
     const expandable = isLongContent(comment.content);
     const expanded = expandable && expandedKeySet.has(key);
-    const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id)) ? 48 : 0;
+    const wildcardExtraHeight = wildcardSourceIds.has(Number(comment.id))
+      ? (englishFlowLayout ? 94 : 48)
+      : 0;
     const statusExtraHeight = (
       Number(developmentSelectedSourceKeys.has(key))
       + Number(synthesisAdoptedSourceKeys.has(key))
-    ) * FLOW_STATUS_ROW_HEIGHT;
+    ) * flowStatusRowHeight;
     return {
       key,
       kind,
@@ -2262,12 +2269,20 @@ function IdeaFlowBoard({
       used: usedSourceKeys.has(key) || Boolean(comment.selected_for_iteration),
       inBasket: Boolean(comment.viewer_in_basket),
       expandable,
-      width: kind === 'reply' ? FLOW_NODE_WIDTH - 18 : FLOW_NODE_WIDTH,
+      width: kind === 'reply' ? flowNodeWidth - 18 : flowNodeWidth,
       height: kind === 'reply'
-        ? (expanded ? 190 : expandable ? 146 : 112)
+        ? (expanded
+            ? (englishFlowLayout ? 234 : 190)
+            : expandable
+              ? (englishFlowLayout ? 180 : 146)
+              : (englishFlowLayout ? 144 : 112))
           + wildcardExtraHeight
           + statusExtraHeight
-        : (expanded ? 224 : expandable ? 178 : FLOW_NODE_HEIGHT)
+        : (expanded
+            ? (englishFlowLayout ? 286 : 224)
+            : expandable
+              ? (englishFlowLayout ? 228 : 178)
+              : (englishFlowLayout ? 184 : FLOW_NODE_HEIGHT))
           + wildcardExtraHeight
           + statusExtraHeight,
       indent: kind === 'reply' ? 18 : 0,
@@ -2387,14 +2402,18 @@ function IdeaFlowBoard({
         used: usedSourceKeys.has(key),
         inBasket: basketKeys.has(key),
         expandable: sourceExpandable,
-        width: FLOW_NODE_WIDTH,
-        height: (sourceExpanded ? 274 : sourceExpandable ? 218 : 186)
+        width: flowNodeWidth,
+        height: (sourceExpanded
+          ? (englishFlowLayout ? 330 : 274)
+          : sourceExpandable
+            ? (englishFlowLayout ? 272 : 218)
+            : (englishFlowLayout ? 232 : 186))
           + (
             Number(developmentSelectedSourceKeys.has(key))
             + Number(sourceSynthesis
               ? Number(sourceSynthesis.source_count || 0) > 0
               : synthesisAdoptedSourceKeys.has(key))
-          ) * FLOW_STATUS_ROW_HEIGHT,
+          ) * flowStatusRowHeight,
         indent: 0,
         comment: sourceComment,
         synthesis: sourceSynthesis,
@@ -2427,10 +2446,10 @@ function IdeaFlowBoard({
     const key = sourceKey('synthesis', Number(synthesis.id));
     const discussionComments = synthesisDiscussions.get(Number(synthesis.id)) || [];
     const baseHeight = expandedKeySet.has(key)
-      ? 270
+      ? (englishFlowLayout ? 330 : 270)
       : isLongContent(synthesis.content)
-        ? 206
-        : 170;
+        ? (englishFlowLayout ? 264 : 206)
+        : (englishFlowLayout ? 218 : 170);
     return {
       key,
       kind: 'synthesis',
@@ -2446,7 +2465,7 @@ function IdeaFlowBoard({
       used: usedSourceKeys.has(key) || Boolean(synthesis.selected_for_iteration),
       inBasket: Boolean(synthesis.viewer_in_basket),
       expandable: isLongContent(synthesis.content),
-      width: FLOW_NODE_WIDTH,
+      width: flowNodeWidth,
       height: baseHeight
         + (discussionComments.length
           ? 38
@@ -2456,7 +2475,7 @@ function IdeaFlowBoard({
         + (
           Number(developmentSelectedSourceKeys.has(key))
           + Number(Number(synthesis.source_count || 0) > 0)
-        ) * FLOW_STATUS_ROW_HEIGHT,
+        ) * flowStatusRowHeight,
       indent: 0,
       synthesis,
       discussionComments,
@@ -2514,7 +2533,7 @@ function IdeaFlowBoard({
       const positioned = {
         ...node,
         x: FLOW_START_X
-          + column * (FLOW_NODE_WIDTH + FLOW_COLUMN_GAP)
+          + column * (flowNodeWidth + flowColumnGap)
           + node.indent,
         y,
       };
@@ -2546,8 +2565,8 @@ function IdeaFlowBoard({
     }>;
   const columnCount = columns.length;
   const canvasWidth = FLOW_START_X * 2
-    + columnCount * FLOW_NODE_WIDTH
-    + (columnCount - 1) * FLOW_COLUMN_GAP;
+    + columnCount * flowNodeWidth
+    + (columnCount - 1) * flowColumnGap;
   const currentCommentColumn: 0 | 2 = completedIterations >= 1 ? 2 : 0;
   const currentCommentColumnNodes = positionedNodes.filter(
     (node) => node.column === currentCommentColumn,
@@ -2916,12 +2935,12 @@ function IdeaFlowBoard({
           </svg>
 
           {columns.map(({ column, nodes }) => {
-            const x = FLOW_START_X + column * (FLOW_NODE_WIDTH + FLOW_COLUMN_GAP);
+            const x = FLOW_START_X + column * (flowNodeWidth + flowColumnGap);
             const layer = column === 1 ? 1 : column === 3 ? 2 : null;
             const layerIsOpen = layer && openLayer === layer;
             return (
               <div key={column}>
-                <div className="async-flow-column-heading" style={{ left: x, width: FLOW_NODE_WIDTH }}>
+                <div className="async-flow-column-heading" style={{ left: x, width: flowNodeWidth }}>
                   <span>{String(column + 1).padStart(2, '0')}</span>
                   <div>
                     <strong>{column === 0
