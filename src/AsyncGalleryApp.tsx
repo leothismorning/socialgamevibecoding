@@ -805,7 +805,6 @@ function InitialCreatorStudio({
         <div>
           <span className="async-eyebrow">创作 · 初始版本</span>
           <h2>先完成你的独立作品</h2>
-          <p>可以提交给 Codex 生成新草稿，也可以上传之前保存的 HTML 恢复项目。只有你确认满意并主动发布后，作品才会出现在首页。</p>
         </div>
         <span className="async-step-chip">第 1 / 4 步 · 创作</span>
       </header>
@@ -5204,9 +5203,6 @@ export default function AsyncGalleryApp() {
               <div>
                 <span className="async-eyebrow">{state.study.status === 'setup' ? '创作准备阶段' : '社区共创进行中'}</span>
                 <h1>{state.viewer.role === 'host' ? '两个社区的作品进度' : '发现作品，加入正在发生的创作'}</h1>
-                <p>{state.study.status === 'setup'
-                  ? '初始应用可以陆续发布；主持人点击开始后，大家才能发表评论和进行综合。'
-                  : '先体验指定应用，也可以自由探索其他作品。普通讨论保持自然，综合创意由用户主动创建。'}</p>
               </div>
               <div className="async-home-order-actions">
                   {([
