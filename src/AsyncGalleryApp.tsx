@@ -2864,7 +2864,7 @@ function IdeaFlowBoard({
           )}
           {isOwner && ownWildcard && (
             <div className="async-wildcard-status">
-              <span><Check /> 万能卡已为第 {ownWildcard.iteration_number} 轮开发选定评论</span>
+              <span><Check /> {`万能卡已为第 ${ownWildcard.iteration_number} 轮开发选定评论`}</span>
               {canCancelWildcard && (
                 <button
                   disabled={Boolean(busy)}
