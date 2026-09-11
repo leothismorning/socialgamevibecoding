@@ -889,7 +889,8 @@
 .async-flow-node h3 { flex: 0 0 auto; overflow: hidden; margin: 8px 0 0; font-size: 14px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .async-flow-node > p { flex: 0 0 auto; display: -webkit-box; overflow: hidden; margin: 8px 0 0; color: #495a72; font-size: 14px; line-height: 1.48; overflow-wrap: anywhere; white-space: pre-line; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .async-flow-node.has-expandable-content > p { min-height: 2.96em; -webkit-line-clamp: 2; }
-.async-flow-node.is-content-expanded > p { display: block; min-height: 0; max-height: 112px; overflow-y: auto; padding-right: 4px; -webkit-line-clamp: unset; scrollbar-width: thin; }
+.async-flow-node.is-content-expanded > p { display: block; min-height: 0; max-height: none; overflow: visible; padding-right: 0; -webkit-line-clamp: unset; }
+.async-flow-node.is-content-expanded > footer { margin-top: 8px; }
 .async-flow-node > .async-flow-content-toggle { min-height: 18px; flex: 0 0 auto; align-self: flex-start; display: flex; align-items: center; gap: 3px; margin-top: 5px; padding: 3px 6px; color: #5b4a9f; border: 1px solid #ddd6f3; border-radius: 6px; background: #f7f4ff; font-size: 14px; font-weight: 900; line-height: 1.25; cursor: pointer; }
 .async-flow-node > .async-flow-content-toggle svg { width: 10px; height: 10px; }
 .async-synthesis-discussion-preview {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -2123,9 +2123,11 @@ function IdeaFlowBoard({
   const [departingKeys, setDepartingKeys] = useState<string[]>([]);
   const [synthesisPrompt, setSynthesisPrompt] = useState('');
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [expandedNodeHeights, setExpandedNodeHeights] = useState<Record<string, number>>({});
   const [likedBurstKeys, playLikedBurst] = useTimedBurst();
   const selectionAnimationTimers = useRef<number[]>([]);
   const synthesisBasketRef = useRef<HTMLElement | null>(null);
+  const flowCanvasRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => () => {
     selectionAnimationTimers.current.forEach((timer) => window.clearTimeout(timer));
@@ -2141,10 +2143,41 @@ function IdeaFlowBoard({
     return () => window.cancelAnimationFrame(frame);
   }, [selectionLayer, developmentSelectionIteration]);
 
+  useLayoutEffect(() => {
+    const canvas = flowCanvasRef.current;
+    if (!canvas) return undefined;
+
+    const expandedNodes = () => Array.from(
+      canvas.querySelectorAll<HTMLElement>('[data-flow-node-key].is-content-expanded'),
+    );
+    const measureExpandedNodes = () => {
+      const next: Record<string, number> = {};
+      expandedNodes().forEach((element) => {
+        const key = element.dataset.flowNodeKey;
+        if (key) next[key] = Math.ceil(element.getBoundingClientRect().height);
+      });
+      setExpandedNodeHeights((current) => {
+        const currentKeys = Object.keys(current);
+        const nextKeys = Object.keys(next);
+        const unchanged = currentKeys.length === nextKeys.length
+          && nextKeys.every((key) => current[key] === next[key]);
+        return unchanged ? current : next;
+      });
+    };
+
+    measureExpandedNodes();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measureExpandedNodes);
+    expandedNodes().forEach((element) => observer.observe(element));
+    return () => observer.disconnect();
+  }, [app.id, expandedKeys, locale, state.comments, state.syntheses]);
+
   const sourceKey = (type: CommunitySourceType, id: number) => `${type}:${id}`;
   const expandedKeySet = new Set(expandedKeys);
   const isLongContent = (content: string) => (
-    content.length > 46 || content.split(/\r?\n/).length > 2
+    content.length > 46
+    || (locale === 'en' && content.length > 32)
+    || content.split(/\r?\n/).length > 2
   );
   const canParticipate = Boolean(
     state.viewer && state.viewer.role !== 'host'
@@ -2266,11 +2299,11 @@ function IdeaFlowBoard({
       inBasket: Boolean(comment.viewer_in_basket),
       expandable,
       width: kind === 'reply' ? FLOW_NODE_WIDTH - 18 : FLOW_NODE_WIDTH,
-      height: kind === 'reply'
-        ? (expanded ? 190 : expandable ? 146 : 112)
-          + wildcardExtraHeight
-          + statusExtraHeight
-        : (expanded ? 224 : expandable ? 178 : FLOW_NODE_HEIGHT)
+      height: expanded
+        ? expandedNodeHeights[key] ?? (
+            (kind === 'reply' ? 190 : 224) + wildcardExtraHeight + statusExtraHeight
+          )
+        : (kind === 'reply' ? (expandable ? 146 : 112) : (expandable ? 178 : FLOW_NODE_HEIGHT))
           + wildcardExtraHeight
           + statusExtraHeight,
       indent: kind === 'reply' ? 18 : 0,
@@ -2391,13 +2424,15 @@ function IdeaFlowBoard({
         inBasket: basketKeys.has(key),
         expandable: sourceExpandable,
         width: FLOW_NODE_WIDTH,
-        height: (sourceExpanded ? 274 : sourceExpandable ? 218 : 186)
-          + (
-            Number(developmentSelectedSourceKeys.has(key))
-            + Number(sourceSynthesis
-              ? Number(sourceSynthesis.source_count || 0) > 0
-              : synthesisAdoptedSourceKeys.has(key))
-          ) * (locale === 'en' ? 50 : FLOW_STATUS_ROW_HEIGHT),
+        height: sourceExpanded && expandedNodeHeights[key]
+          ? expandedNodeHeights[key]
+          : (sourceExpanded ? 274 : sourceExpandable ? 218 : 186)
+            + (
+              Number(developmentSelectedSourceKeys.has(key))
+              + Number(sourceSynthesis
+                ? Number(sourceSynthesis.source_count || 0) > 0
+                : synthesisAdoptedSourceKeys.has(key))
+            ) * (locale === 'en' ? 50 : FLOW_STATUS_ROW_HEIGHT),
         indent: 0,
         comment: sourceComment,
         synthesis: sourceSynthesis,
@@ -2450,16 +2485,18 @@ function IdeaFlowBoard({
       inBasket: Boolean(synthesis.viewer_in_basket),
       expandable: isLongContent(synthesis.content),
       width: FLOW_NODE_WIDTH,
-      height: baseHeight
-        + (discussionComments.length
-          ? 38
-            + Math.min(2, discussionComments.length) * 12
-            + (discussionComments.length > 2 ? 12 : 0)
-          : 0)
-        + (
-          Number(developmentSelectedSourceKeys.has(key))
-          + Number(Number(synthesis.source_count || 0) > 0)
-        ) * (locale === 'en' ? 50 : FLOW_STATUS_ROW_HEIGHT),
+      height: expandedKeySet.has(key) && expandedNodeHeights[key]
+        ? expandedNodeHeights[key]
+        : baseHeight
+          + (discussionComments.length
+            ? 38
+              + Math.min(2, discussionComments.length) * 12
+              + (discussionComments.length > 2 ? 12 : 0)
+            : 0)
+          + (
+            Number(developmentSelectedSourceKeys.has(key))
+            + Number(Number(synthesis.source_count || 0) > 0)
+          ) * (locale === 'en' ? 50 : FLOW_STATUS_ROW_HEIGHT),
       indent: 0,
       synthesis,
       discussionComments,
@@ -2900,7 +2937,7 @@ function IdeaFlowBoard({
       )}
 
       <div className="async-flow-scroll">
-        <div className="async-flow-canvas" style={{ width: canvasWidth, height: canvasHeight }}>
+        <div ref={flowCanvasRef} className="async-flow-canvas" style={{ width: canvasWidth, height: canvasHeight }}>
           <svg className="async-flow-edges" width={canvasWidth} height={canvasHeight} aria-hidden="true">
             {edges.map((edge) => {
               const active = focusedNode === edge.source.key || focusedNode === edge.target.key;
@@ -3058,6 +3095,7 @@ function IdeaFlowBoard({
             return (
               <article
                 key={node.key}
+                data-flow-node-key={node.key}
                 data-source-type={node.sourceType}
                 data-source-id={node.sourceId}
                 tabIndex={selectable ? 0 : undefined}
@@ -3075,7 +3113,12 @@ function IdeaFlowBoard({
                   node.comment?.deleted_at || node.synthesis?.deleted_at ? 'is-deleted' : '',
                   focusedNode && focusedNode !== node.key ? 'is-dimmed' : '',
                 ].filter(Boolean).join(' ')}
-                style={{ left: node.x, top: node.y, width: node.width, height: node.height }}
+                style={{
+                  left: node.x,
+                  top: node.y,
+                  width: node.width,
+                  height: contentExpanded ? 'auto' : node.height,
+                }}
                 onClick={() => selectSource(node)}
                 onKeyDown={(event) => {
                   if (!selectable || (event.key !== 'Enter' && event.key !== ' ')) return;

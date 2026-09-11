@@ -75,6 +75,7 @@ export const asyncGalleryResearchContentTranslations: Record<string, string> = {
   '感觉可以增添番茄钟+与猫猫的互动，感觉现在的互动形式比较单调': 'Add a Pomodoro timer and more varied interactions with the cat.',
   '感觉底下四个页面有一点复杂，如果能够全部集中在一个页面，既可…': 'The four sections feel complex; consolidate them into one page…',
   '可以让小精灵记录下之前的作息，进行到点的提示，比如前一天难入…': 'Let the companion track sleep routines and provide timely reminders…',
+  '首先针对这个小精灵是否能在收到小精灵这个反馈之后有一个成长性的…': 'Let the companion visibly grow after feedback, like a Tamagotchi-style virtual pet, with time-aware prompts and reminders…',
   '这像是一个宣传ppt': 'This feels more like a promotional slide deck.',
   '可以根据色系增设选项，比如冷调，暖调，黑白灰这样的，增加直观…': 'Add intuitive palette categories such as cool, warm, and grayscale…',
   '感觉 这个太多了 有没有ai一健识别啊': 'There are too many steps. Could AI recognize items with one click?',
@@ -110,4 +111,13 @@ export const asyncGalleryResearchContentTranslations: Record<string, string> = {
   '想法很有创意，是我喜欢的应用，满足我赛博求佛的需求，但是声音…': 'Creative and appealing, but improve the wooden-fish sound and tapping animation…',
   '可添加功能清零功德 可以更个性化，选择不同的背景和木鱼样式 功德加一是否可以作为弹出式的，更生动一些': 'Add a merit reset, personalized backgrounds and wooden-fish styles, and a lively “Merit +1” pop-up.',
   '可添加功能清零功德 可以更个性化，选择不同的背景和木鱼样式 功德加一是否可以作为弹出式的，更生动一些 声音可以更加佛系': 'Add a merit reset, personalized backgrounds and wooden-fish styles, a lively “Merit +1” pop-up, and a calmer sound.',
+
+  // All currently active comments for C09 (T9 Sleep Guardian).
+  '首先针对这个小精灵是否能在收到小精灵这个反馈之后有一个成长性的 比较大明显的变化比如像拓麻歌子云养宠物这些 ，第二整个主题能否结合时间有一个提示或者提醒变化': 'Could the little companion visibly grow and change after receiving feedback, like a Tamagotchi-style virtual pet? Could the overall experience also provide prompts or reminders that change with the time of day?',
+  '最好是能根据网页本身的计时自动变化切换其实对使用有一定的门槛 我的小精灵是否能有命名权，或者有装扮': 'It would be best if the experience switched automatically based on its own timer, since manual switching creates a barrier to use. Could I also name or dress up my companion?',
+  '按钮点击之后没有明显交互效果 希望能在主页面的上方标注这个作品的功能是什么': 'The buttons do not provide clear feedback when clicked. Please explain what the app does at the top of the main page.',
+  '里面的小人形象设计不够美观，我希望他更可爱更温馨，对我能够起到疗愈的作用。生成的安慰的话语最好是温馨疗愈的语音。': 'The character design is not appealing enough. I would like it to feel cuter and warmer so it can be comforting, and the reassuring messages would be even better as warm, soothing audio.',
+  '可以让小精灵记录下之前的作息，进行到点的提示，比如前一天难入睡，就让第二天白天提示多做点运动之类的': 'Let the companion remember previous sleep patterns and send timely suggestions—for example, if I had trouble falling asleep the night before, remind me to exercise more during the next day.',
+  '可不可以有个地方让小精灵提示我午睡和晚上睡觉，因为现在的一半电子产品都不会记录午睡效果，然后午睡和晚睡的小精灵会以两种不同形态展示': 'Could the companion remind me about both naps and nighttime sleep? Many devices do not track nap quality, and the companion could appear in two different forms for naps and nighttime sleep.',
+  '可以让小精灵记录下之前的作息，进行到点的提示，比如前一天难入睡，就让第二天白天提示多做点运动之类的 最好是能根据网页本身的计时自动变化切换其实对使用有一定的门槛 我的小精灵是否能有命名权，或者有装扮': 'Let the companion remember previous sleep patterns and provide timely suggestions. It should switch automatically based on its own timer, and users should be able to name or dress up their companion.',
 };
